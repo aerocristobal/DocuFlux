@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /mnt/c/Users/chris/onedrive/documents/github/pandoc-web diff web/templates/status.html)",
+      "Bash(git -C /mnt/c/Users/chris/onedrive/documents/github/pandoc-web show:*)"
+    ]
+  }
+}

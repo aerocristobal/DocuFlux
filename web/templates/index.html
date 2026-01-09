@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pandoc Online Converter</title>
+
+    <!-- Preconnect to CDN for faster asset loading -->
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+
+    <!-- USWDS CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/css/uswds.min.css">
+    <!-- USWDS Init (deferred for non-blocking load) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/js/uswds-init.min.js" defer></script>
+    
+    <style>
+        /* Custom overrides if necessary, but trying to stick to USWDS utility classes */
+        .site-title { font-weight: bold; font-size: 1.5rem; }
+        .spinner-small { width: 1rem; height: 1rem; border-width: 0.15em; display: inline-block; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spinner .75s linear infinite; }
+        @keyframes spinner { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <a class="usa-skipnav" href="#main-content">Skip to main content</a>
+
+    <!-- Header -->
+    <div class="usa-overlay"></div>
+    <header class="usa-header usa-header--basic">
+        <div class="usa-nav-container">
+            <div class="usa-navbar">
+                <div class="usa-logo" id="basic-logo">
+                    <em class="usa-logo__text">
+                        <a href="/" title="Home" aria-label="Home">Pandoc Web Service</a>
+                    </em>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main id="main-content">
+        <div class="grid-container margin-top-4">
+            <div class="grid-row grid-gap">
+                <!-- Conversion Form Section -->
+                <div class="tablet:grid-col-4">
+                    <div class="bg-base-lightest padding-3 radius-lg margin-bottom-4">
+                        <h2 class="usa-heading-md margin-top-0">New Conversion</h2>
+                        
+                        <div id="alert-area"></div>
+
+                        <form id="convert-form" class="usa-form" style="max-width: none;" enctype="multipart/form-data">
+                            <label class="usa-label" for="file">Select Document</label>
+                            <input class="usa-input" id="file" name="file" type="file" required>
+
+                            <div id="format-warning" class="usa-alert usa-alert--warning margin-top-2 display-none">
+                                <div class="usa-alert__body">
+                                    <h4 class="usa-alert__heading">Warning</h4>
+                                    <p class="usa-alert__text" id="format-warning-text"></p>
+                                </div>
+                            </div>
+
+                            <label class="usa-label" for="from_format">From Format</label>
+                            <select class="usa-select" id="from_format" name="from_format" required>
+                                <option value="" selected disabled>- Select format -</option>
+                                {% for fmt in formats %}
+                                <option value="{{ fmt.key }}">{{ fmt.name }}</option>
+                                {% endfor %}
+                            </select>
+
+                            <label class="usa-label" for="to_format">To Format</label>
+                            <select class="usa-select" id="to_format" name="to_format" disabled required>
+                                <option value="" selected disabled>- Select source first -</option>
+                            </select>
+
+                            <div class="margin-top-3">
+                                <button type="submit" id="convert-btn" class="usa-button" disabled>Convert Now</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Job List Section -->
+                <div class="tablet:grid-col-8">
+                    <h2 class="usa-heading-md margin-top-0">My Conversions</h2>
+                    <div class="usa-table-container">
+                        <table class="usa-table usa-table--striped usa-table--compact width-full">
+                            <thead>
+                                <tr>
+                                    <th scope="col">File</th>
+                                    <th scope="col">Conversion</th>
+                                    <th scope="col">Status</th>
+                                    <th scope="col">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jobs-table-body" class="font-sans-xs">
+                                <!-- Jobs populated via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="no-jobs-msg" class="usa-alert usa-alert--info usa-alert--slim margin-top-2 display-none">
+                        <div class="usa-alert__body">
+                            <p class="usa-alert__text">No conversions found.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- USWDS JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/js/uswds.min.js"></script>
+    
+    <script>
+        const formats = {{ formats|tojson }};
+        const fromSelect = document.getElementById('from_format');
+        const toSelect = document.getElementById('to_format');
+        const convertBtn = document.getElementById('convert-btn');
+        const formatWarning = document.getElementById('format-warning');
+        const formatWarningText = document.getElementById('format-warning-text');
+        const convertForm = document.getElementById('convert-form');
+        const alertArea = document.getElementById('alert-area');
+        const jobsTableBody = document.getElementById('jobs-table-body');
+        const noJobsMsg = document.getElementById('no-jobs-msg');
+
+        // --- Polling Configuration ---
+        const POLL_INTERVAL_ACTIVE = 5000;   // 5 seconds when active jobs
+        const POLL_INTERVAL_IDLE = 15000;    // 15 seconds when all complete
+        let pollInterval = null;
+        let fetchController = null;
+        let alertTimeout = null;
+        let lastJobsState = [];
+
+        // --- Format Selection Logic ---
+        fromSelect.addEventListener('change', function() {
+            const selectedKey = this.value;
+            const selectedFormat = formats.find(f => f.key === selectedKey);
+
+            // Reset UI
+            formatWarning.classList.add('display-none');
+            convertBtn.disabled = false;
+            toSelect.disabled = false;
+            toSelect.innerHTML = '<option value="" selected disabled>- Select target format -</option>';
+
+            if (selectedFormat.direction === 'Output Only') {
+                formatWarningText.innerText = `${selectedFormat.name} is only available as an output format and cannot be used as a source.`;
+                formatWarning.classList.remove('display-none');
+                convertBtn.disabled = true;
+                toSelect.disabled = true;
+                return;
+            }
+
+            // Populate target formats
+            formats.forEach(f => {
+                if (f.key !== selectedKey) {
+                    const option = document.createElement('option');
+                    option.value = f.key;
+                    option.text = f.name;
+                    toSelect.appendChild(option);
+                }
+            });
+        });
+
+        // --- Form Submission ---
+        convertForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+
+            convertBtn.disabled = true;
+            convertBtn.innerHTML = '<span class="spinner-small"></span> Uploading...';
+
+            try {
+                const response = await fetch('/convert', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showAlert('success', 'Conversion started successfully!');
+                    convertForm.reset();
+                    toSelect.innerHTML = '<option value="" selected disabled>- Select source first -</option>';
+                    toSelect.disabled = true;
+                    // Restart polling with active interval
+                    startPolling(true);
+                } else {
+                    showAlert('error', data.error || 'An error occurred.');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('error', 'Failed to submit conversion request.');
+            } finally {
+                convertBtn.disabled = false;
+                convertBtn.innerText = 'Convert Now';
+            }
+        });
+
+        function showAlert(type, message) {
+            // Clear any existing timeout
+            if (alertTimeout) clearTimeout(alertTimeout);
+
+            const title = type === 'error' ? 'Error' : 'Success';
+            alertArea.innerHTML = `
+                <div class="usa-alert usa-alert--${type} margin-bottom-2">
+                    <div class="usa-alert__body">
+                        <h4 class="usa-alert__heading">${title}</h4>
+                        <p class="usa-alert__text">${message}</p>
+                    </div>
+                </div>
+            `;
+            alertTimeout = setTimeout(() => {
+                alertArea.innerHTML = '';
+                alertTimeout = null;
+            }, 5000);
+        }
+
+        // --- Smart Polling with Visibility API ---
+        function startPolling(hasActiveJobs = false) {
+            stopPolling();
+            const interval = hasActiveJobs ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE;
+            fetchJobs();
+            pollInterval = setInterval(fetchJobs, interval);
+        }
+
+        function stopPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
+        // Pause polling when tab is hidden
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopPolling();
+            } else {
+                const hasActive = lastJobsState.some(j => j.status === 'PENDING' || j.status === 'PROCESSING' || j.status === 'STARTED');
+                startPolling(hasActive);
+            }
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            stopPolling();
+            if (fetchController) fetchController.abort();
+        });
+
+        // --- Job Fetching with Request Deduplication ---
+        async function fetchJobs() {
+            // Abort any in-flight request
+            if (fetchController) fetchController.abort();
+            fetchController = new AbortController();
+
+            try {
+                const response = await fetch('/api/jobs', { signal: fetchController.signal });
+                const jobs = await response.json();
+                lastJobsState = jobs;
+                renderJobs(jobs);
+
+                // Adjust polling interval based on job states
+                const hasActiveJobs = jobs.some(j => j.status === 'PENDING' || j.status === 'PROCESSING' || j.status === 'STARTED');
+                if (pollInterval) {
+                    const currentInterval = hasActiveJobs ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE;
+                    // Only restart if interval needs to change
+                    if ((hasActiveJobs && pollInterval._idleTimeout !== POLL_INTERVAL_ACTIVE) ||
+                        (!hasActiveJobs && pollInterval._idleTimeout !== POLL_INTERVAL_IDLE)) {
+                        startPolling(hasActiveJobs);
+                    }
+                }
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    console.error('Error fetching jobs:', error);
+                }
+            } finally {
+                fetchController = null;
+            }
+        }
+
+        // --- Event Delegation for Job Actions ---
+        jobsTableBody.addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-action]');
+            if (!btn) return;
+
+            const action = btn.dataset.action;
+            const jobId = btn.dataset.jobId;
+
+            if (action === 'cancel') {
+                if (!confirm('Are you sure you want to cancel this job?')) return;
+                try {
+                    await fetch(`/api/cancel/${jobId}`, { method: 'POST' });
+                    fetchJobs();
+                } catch (error) {
+                    console.error('Error canceling job:', error);
+                }
+            } else if (action === 'retry') {
+                try {
+                    const response = await fetch(`/api/retry/${jobId}`, { method: 'POST' });
+                    if (response.ok) {
+                        startPolling(true);
+                    } else {
+                        showAlert('error', 'Failed to retry job.');
+                    }
+                } catch (error) {
+                    console.error('Error retrying job:', error);
+                }
+            }
+        });
+
+        function renderJobs(jobs) {
+            if (jobs.length === 0) {
+                jobsTableBody.innerHTML = '';
+                noJobsMsg.classList.remove('display-none');
+                return;
+            }
+            noJobsMsg.classList.add('display-none');
+
+            // Use array map + join for efficient string building
+            const rows = jobs.map(job => {
+                let statusTag = '';
+                let actionBtn = '';
+
+                switch(job.status) {
+                    case 'PENDING':
+                    case 'STARTED':
+                    case 'PROCESSING':
+                        statusTag = '<span class="usa-tag usa-tag--yellow">In Progress</span>';
+                        actionBtn = `<button class="usa-button usa-button--secondary usa-button--small" data-action="cancel" data-job-id="${job.id}">Cancel</button>`;
+                        break;
+                    case 'SUCCESS':
+                        statusTag = '<span class="usa-tag usa-tag--green">Completed</span>';
+                        actionBtn = `<a href="${job.download_url}" class="usa-button usa-button--small">Download</a>`;
+                        break;
+                    case 'FAILURE':
+                        statusTag = '<span class="usa-tag usa-tag--red">Failed</span>';
+                        actionBtn = `<button class="usa-button usa-button--outline usa-button--small" data-action="retry" data-job-id="${job.id}">Retry</button>`;
+                        break;
+                    case 'REVOKED':
+                        statusTag = '<span class="usa-tag">Cancelled</span>';
+                        actionBtn = `<button class="usa-button usa-button--outline usa-button--small" data-action="retry" data-job-id="${job.id}">Retry</button>`;
+                        break;
+                    default:
+                        statusTag = `<span class="usa-tag">${job.status}</span>`;
+                }
+
+                const errorHtml = job.result ? `<div class="font-sans-3xs text-secondary margin-top-05">${job.result.substring(0, 100)}${job.result.length > 100 ? '...' : ''}</div>` : '';
+
+                return `
+                    <tr data-job-id="${job.id}">
+                        <th scope="row" style="word-break: break-all; max-width: 200px;">${job.filename}</th>
+                        <td class="text-no-wrap">${job.from} &rarr; ${job.to}</td>
+                        <td>${statusTag}${errorHtml}</td>
+                        <td>${actionBtn}</td>
+                    </tr>
+                `;
+            });
+
+            jobsTableBody.innerHTML = rows.join('');
+        }
+
+        // Initialize polling
+        startPolling(false);
+
+    </script>
+</body>
+</html>
