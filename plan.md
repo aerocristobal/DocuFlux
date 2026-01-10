@@ -146,10 +146,10 @@ Single-page application in `web/templates/index.html`:
 - [x] Refine inputs and buttons to match the aesthetic.
 
 ## Phase 8: Final Verification
-- [ ] Test Markdown to PDF (LaTeX).
-- [ ] Test Word to PDF.
-- [ ] Test HTML to EPUB.
-- [ ] Verify cleanup script deletes files according to retention policies.
+- [x] Test Markdown to PDF (LaTeX).
+- [x] Test Word to PDF.
+- [x] Test HTML to EPUB.
+- [x] Verify cleanup script deletes files according to retention policies.
 
 ## Phase 9: AI-Powered PDF Conversion (Marker)
 - [x] Add `marker-api` service to `docker-compose.yml`.

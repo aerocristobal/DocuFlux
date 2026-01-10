@@ -82,7 +82,10 @@ services:
     restart: unless-stopped
 
   marker-api:
-    image: maximofn/marker-api-docker:latest
+    build:
+      context: ./marker_api_service
+      dockerfile: docker/Dockerfile
+    command: uvicorn server:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     deploy:
