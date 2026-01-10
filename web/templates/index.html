@@ -600,17 +600,6 @@
             }
         });
 
-        // Global download handler to avoid event delegation issues with Web Components
-        window.downloadJob = function(jobId) {
-            const url = `/download/${jobId}`;
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = ''; 
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        };
-
         function renderJobs(jobs) {
             if (jobs.length === 0) {
                 jobsTableBody.innerHTML = '';
@@ -632,11 +621,13 @@
                         break;
                     case 'SUCCESS':
                         statusBadge = `<span class="status-badge status-success">Completed</span>`;
-                        // Direct onclick handler for reliability
-                        actionBtn = `<md-filled-button onclick="downloadJob('${job.id}')">
-                                        Download
-                                        <md-icon slot="icon">download</md-icon>
-                                     </md-filled-button>`;
+                        // Standard anchor wrapper for robust download behavior
+                        actionBtn = `<a href="/download/${job.id}" download style="text-decoration: none; display: inline-block;">
+                                        <md-filled-button>
+                                            Download
+                                            <md-icon slot="icon">download</md-icon>
+                                        </md-filled-button>
+                                     </a>`;
                         break;
                     case 'FAILURE':
                         statusBadge = `<span class="status-badge status-error">Failed</span>`;
