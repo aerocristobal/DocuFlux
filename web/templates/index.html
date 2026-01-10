@@ -597,11 +597,19 @@
                     await fetch(`/api/retry/${jobId}`, { method: 'POST' });
                     startPolling(true);
                 } catch(e) { console.error(e); }
-            } else if (action === 'download') {
-                // It's a link wrapped in a button or just window.location
-                window.location.href = `/download/${jobId}`;
             }
         });
+
+        // Global download handler to avoid event delegation issues with Web Components
+        window.downloadJob = function(jobId) {
+            const url = `/download/${jobId}`;
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = ''; 
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        };
 
         function renderJobs(jobs) {
             if (jobs.length === 0) {
@@ -624,7 +632,8 @@
                         break;
                     case 'SUCCESS':
                         statusBadge = `<span class="status-badge status-success">Completed</span>`;
-                        actionBtn = `<md-filled-button data-action="download" data-job-id="${job.id}">
+                        // Direct onclick handler for reliability
+                        actionBtn = `<md-filled-button onclick="downloadJob('${job.id}')">
                                         Download
                                         <md-icon slot="icon">download</md-icon>
                                      </md-filled-button>`;
