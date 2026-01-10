@@ -1,77 +1,89 @@
-# Pandoc Web
+# DocuFlux
 
-A powerful, containerized web interface for converting documents between various formats using [Pandoc](https://pandoc.org/). This application provides a user-friendly frontend to upload files, select conversion formats, and process them asynchronously.
+DocuFlux is a modern, containerized document conversion service that bridges the gap between traditional document formats and modern AI-ready workflows. It combines the versatility of **Pandoc** with the power of **AI-driven PDF analysis (Marker)** to provide high-fidelity conversions for everyone.
 
 ## Features
 
--   **Wide Format Support**: Convert between Markdown, HTML, Microsoft Word (`.docx`), PowerPoint (`.pptx`), LaTeX, PDF, EPUB, and many more.
--   **Asynchronous Processing**: Handles large files and complex conversions in the background using Celery workers.
--   **Job Management**: Track job status (Queued, Processing, Success, Failed) in real-time.
--   **Automatic Cleanup**: Automatically removes uploaded and generated files after 24 hours to manage storage.
--   **Dockerized**: Easy to deploy with Docker Compose.
+-   **🎨 Modern Material Design UI**: Built with Google's Material Design 3, featuring automatic dark mode synchronization and manual theme overrides.
+-   **🤖 AI-Powered PDF Conversion**: Utilizes the **Marker** engine (deep learning) to convert PDFs into clean, structured Markdown, preserving tables, equations, and layout better than traditional tools.
+-   **⚡ Intelligent Ingestion**: Drag-and-drop interface with automatic format detection and smart defaulting (e.g., auto-selecting AI mode for PDFs).
+-   **🔄 Wide Format Support**:
+    -   **Inputs**: Markdown, HTML, Docx, LaTeX, Epub, ODT, BibTeX, Wiki formats, and more.
+    -   **Outputs**: PDF (via LaTeX), Docx, Epub, HTML, Markdown, etc.
+-   **🔒 Ephemeral & Secure**: Strict data retention policy. Output files are automatically deleted after **1 hour** (or 10 minutes if downloaded), ensuring privacy.
+-   **🚀 High Performance**: Asynchronous task processing with Celery & Redis, supporting concurrent conversions and heavy workloads.
 
-## Supported Formats
+## Tech Stack
 
-The application supports a wide range of formats including:
--   **Markdown**: Pandoc Markdown, GitHub Flavored Markdown
--   **Web**: HTML5, Jupyter Notebook
--   **Office**: Microsoft Word (`docx`), PowerPoint (`pptx` - output only), OpenOffice/LibreOffice (`odt`), RTF
--   **E-Books**: EPUB (v2, v3)
--   **Technical**: LaTeX, PDF (via LaTeX), AsciiDoc, reStructuredText, BibTeX
--   **Wiki**: MediaWiki, Jira Wiki
+-   **Frontend**: HTML5, JavaScript, [Material Web Components](https://github.com/material-components/material-web) (@material/web).
+-   **Backend**: Python 3.11, Flask.
+-   **Task Queue**: Celery with Redis Broker.
+-   **Conversion Engines**:
+    -   [Pandoc](https://pandoc.org/) (Universal converter)
+    -   [Marker](https://github.com/VikParuchuri/marker) (AI PDF processing)
+-   **Infrastructure**: Docker, Docker Compose, NVIDIA Container Toolkit.
 
 ## Prerequisites
 
--   Docker
--   Docker Compose
+-   **Docker** & **Docker Compose**
+-   **(Optional) NVIDIA GPU**: For optimal performance with the AI PDF converter, an NVIDIA GPU and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) are recommended. The system falls back to CPU but will be significantly slower for PDF processing.
 
 ## Installation & Usage
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/yourusername/pandoc-web.git
-    cd pandoc-web
+    git clone https://github.com/yourusername/docuflux.git
+    cd docuflux
     ```
 
-2.  **Start the application:**
+2.  **Start the services:**
     ```bash
-    docker-compose up --build -d
+    docker-compose up -d --build
     ```
+    *Note: The `marker-api` service downloads large AI models (~3GB) on the first build/run. Please be patient.*
 
-3.  **Access the web interface:**
+3.  **Access the interface:**
     Open your browser and navigate to `http://localhost:5000`.
 
 ## Architecture
 
-The project is built using a microservices architecture:
+The system follows a microservices pattern orchestrated by Docker Compose:
 
--   **Web Service (`web/`)**: A Flask application that serves the UI, handles file uploads, and manages job queues.
--   **Worker Service (`worker/`)**: A Celery worker that executes the actual Pandoc conversion tasks.
--   **Redis**: Acts as the message broker and result backend for Celery.
--   **Celery Beat**: Schedules periodic tasks, such as cleaning up old files.
+| Service | Description |
+| :--- | :--- |
+| **`web`** | Flask frontend. Handles uploads, serves the UI, and dispatches jobs. |
+| **`worker`** | Celery worker. Executes standard Pandoc conversions and coordinates with the AI service. |
+| **`marker-api`** | Specialized FastAPI service hosting the PyTorch models for AI PDF extraction. |
+| **`redis`** | Message broker for the task queue and ephemeral metadata store. |
+| **`beat`** | Scheduler for periodic cleanup tasks. |
 
-## Configuration
+## Data Retention Policy
 
--   **Environment Variables**:
-    -   `CELERY_BROKER_URL`: URL for the Celery broker (default: `redis://redis:6379/0`).
-    -   `CELERY_RESULT_BACKEND`: URL for the Celery result backend (default: `redis://redis:6379/0`).
-    -   `SECRET_KEY`: Flask secret key for session management.
+To maintain a clean and secure environment, DocuFlux enforces the following automated cleanup rules:
+-   **Completed (Downloaded)**: Deleted **10 minutes** after download.
+-   **Completed (Not Downloaded)**: Deleted **1 hour** after creation.
+-   **Failed Jobs**: Deleted **5 minutes** after failure.
 
 ## Development
 
-The project structure is as follows:
-
+### Project Structure
 ```
-pandoc-web/
-├── docker-compose.yml   # Docker Compose configuration
-├── web/                 # Web application code
-│   ├── app.py           # Flask app entry point
-│   ├── templates/       # HTML templates
-│   └── Dockerfile       # Web service Dockerfile
-├── worker/              # Worker application code
-│   ├── tasks.py         # Celery tasks
-│   └── Dockerfile       # Worker service Dockerfile
-└── data/                # Shared volume for file storage
+docuflux/
+├── docker-compose.yml      # Orchestration config
+├── web/                    # Flask Frontend
+│   ├── app.py
+│   └── templates/          # Material Design templates
+├── worker/                 # Celery Worker
+│   └── tasks.py            # Conversion logic
+├── marker_api_service/     # AI Engine (Submodule)
+├── data/                   # Shared volume (Ignored)
+└── tests/                  # Verification scripts
+```
+
+### Verification
+To verify the system functionality:
+```bash
+python3 tests/verify_phase8.py
 ```
 
 ## License
