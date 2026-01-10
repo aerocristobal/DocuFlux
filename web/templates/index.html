@@ -27,7 +27,7 @@
 
     <style>
         :root {
-            /* Material 3 Token Simulation (Light Theme) */
+            /* Material 3 Token Simulation (Light Theme - Default) */
             --md-sys-color-primary: #00044b;
             --md-sys-color-on-primary: #ffffff;
             --md-sys-color-primary-container: #dfe0ff;
@@ -45,10 +45,36 @@
             --md-sys-color-surface-variant: #e1e2ec;
             --md-sys-color-on-surface-variant: #44474f;
             --md-sys-color-outline: #74777f;
+            --md-sys-color-inverse-on-surface: #f2f0f4;
+            --md-sys-color-inverse-surface: #2f3033;
             
             font-family: 'Roboto', sans-serif;
             background-color: var(--md-sys-color-background);
             color: var(--md-sys-color-on-background);
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        /* Dark Theme Tokens */
+        body.dark-theme {
+            --md-sys-color-primary: #bcc2ff;
+            --md-sys-color-on-primary: #001a41;
+            --md-sys-color-primary-container: #002e69;
+            --md-sys-color-on-primary-container: #dfe0ff;
+            --md-sys-color-secondary: #bfc6dc;
+            --md-sys-color-secondary-container: #3f4759;
+            --md-sys-color-tertiary: #dfbbde;
+            --md-sys-color-tertiary-container: #583e5a;
+            --md-sys-color-error: #ffb4ab;
+            --md-sys-color-error-container: #93000a;
+            --md-sys-color-background: #1a1b1e;
+            --md-sys-color-on-background: #e3e2e6;
+            --md-sys-color-surface: #1a1b1e;
+            --md-sys-color-on-surface: #e3e2e6;
+            --md-sys-color-surface-variant: #44474f;
+            --md-sys-color-on-surface-variant: #c4c6d0;
+            --md-sys-color-outline: #8e9099;
+            --md-sys-color-inverse-on-surface: #1a1b1e;
+            --md-sys-color-inverse-surface: #e3e2e6;
         }
 
         body {
@@ -250,6 +276,28 @@
             <md-icon>description</md-icon>
             Pandoc Web Service
         </a>
+        <div style="flex: 1;"></div>
+        
+        <span style="position: relative;">
+            <md-icon-button id="theme-toggle">
+                <md-icon>brightness_auto</md-icon>
+            </md-icon-button>
+            
+            <md-menu id="theme-menu" anchor="theme-toggle">
+                <md-menu-item data-theme="system">
+                    <div slot="headline">Sync with System</div>
+                    <md-icon slot="start">brightness_auto</md-icon>
+                </md-menu-item>
+                <md-menu-item data-theme="light">
+                    <div slot="headline">Light Mode</div>
+                    <md-icon slot="start">light_mode</md-icon>
+                </md-menu-item>
+                <md-menu-item data-theme="dark">
+                    <div slot="headline">Dark Mode</div>
+                    <md-icon slot="start">dark_mode</md-icon>
+                </md-menu-item>
+            </md-menu>
+        </span>
     </header>
 
     <main>
@@ -663,6 +711,67 @@
         }
         
         startPolling(false);
+
+        // --- Theme Customization ---
+        const themeToggle = document.getElementById('theme-toggle');
+        const themeMenu = document.getElementById('theme-menu');
+        const themeMenuItems = themeMenu.querySelectorAll('md-menu-item');
+        
+        themeToggle.addEventListener('click', () => {
+            themeMenu.open = !themeMenu.open;
+        });
+
+        themeMenuItems.forEach(item => {
+            item.addEventListener('close-menu', () => {
+                const theme = item.getAttribute('data-theme');
+                setTheme(theme);
+            });
+        });
+
+        function getSavedTheme() {
+            return localStorage.getItem('theme') || 'system';
+        }
+
+        function setTheme(theme) {
+            if (theme === 'system') {
+                localStorage.removeItem('theme');
+            } else {
+                localStorage.setItem('theme', theme);
+            }
+            applyTheme(theme);
+        }
+
+        function applyTheme(theme) {
+            let effectiveTheme = theme;
+            const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+            if (theme === 'system') {
+                effectiveTheme = systemDark ? 'dark' : 'light';
+            }
+
+            if (effectiveTheme === 'dark') {
+                document.body.classList.add('dark-theme');
+            } else {
+                document.body.classList.remove('dark-theme');
+            }
+
+            // Update Icon
+            const icon = themeToggle.querySelector('md-icon');
+            if (theme === 'system') icon.textContent = 'brightness_auto';
+            else if (theme === 'light') icon.textContent = 'light_mode';
+            else if (theme === 'dark') icon.textContent = 'dark_mode';
+        }
+
+        // System preference listener
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+            if (getSavedTheme() === 'system') {
+                applyTheme('system');
+            }
+        });
+
+        // Initialize
+        applyTheme(getSavedTheme());
+
     </script>
 </body>
 </html>
