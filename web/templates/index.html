@@ -303,7 +303,7 @@
 
             // Populate target formats
             formats.forEach(f => {
-                if (f.key !== selectedKey) {
+                if (f.key !== selectedKey && f.direction !== 'Input Only') {
                     const option = document.createElement('option');
                     option.value = f.key;
                     option.text = f.name;

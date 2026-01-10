@@ -3,6 +3,7 @@ import subprocess
 import time
 import shutil
 import redis
+import requests
 from celery import Celery
 from celery.schedules import crontab
 
@@ -80,6 +81,67 @@ def convert_document(job_id, input_path, output_path, from_format, to_format):
         print(f"Pandoc error for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500]})
         raise Exception(f"Pandoc failed: {error_msg}")
+    except Exception as e:
+        print(f"Unexpected error for job {job_id}: {str(e)}")
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500]})
+        raise
+
+@celery.task(
+    name='tasks.convert_with_marker',
+    time_limit=1200,          # Marker is slower (GPU/CPU heavy) - 20 mins
+    soft_time_limit=1140,     # 19 mins
+    acks_late=True,
+    reject_on_worker_lost=True
+)
+def convert_with_marker(job_id, input_path, output_path, from_format, to_format):
+    print(f"Starting Marker conversion for job {job_id}")
+    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time())})
+    
+    if not os.path.exists(input_path):
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Marker API URL
+    marker_url = os.environ.get('MARKER_API_URL', 'http://marker-api:8000/convert')
+    
+    try:
+        with open(input_path, 'rb') as f:
+            files = {'file': (os.path.basename(input_path), f, 'application/pdf')}
+            # Note: Marker might accept other params like 'langs'
+            response = requests.post(marker_url, files=files, timeout=1200)
+            
+        if response.status_code != 200:
+            error_msg = f"Marker API failed with status {response.status_code}: {response.text[:200]}"
+            raise Exception(error_msg)
+            
+        # Handle Response
+        # Assumption: Returns JSON with 'markdown' field or raw text
+        content_type = response.headers.get('Content-Type', '')
+        
+        if 'application/json' in content_type:
+            data = response.json()
+            # Try to find the markdown content
+            markdown_content = data.get('markdown') or data.get('text') or data.get('content')
+            if not markdown_content:
+                 raise Exception("No markdown content found in Marker API response")
+        else:
+            # Assume raw text
+            markdown_content = response.text
+            
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+            
+        print(f"Marker conversion successful: {output_path}")
+        update_job_metadata(job_id, {'status': 'SUCCESS', 'completed_at': str(time.time())})
+        return {"status": "success", "output_file": os.path.basename(output_path)}
+
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Marker API connection error: {str(e)}"
+        print(f"Marker error for job {job_id}: {error_msg}")
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg[:500]})
+        raise Exception(error_msg)
     except Exception as e:
         print(f"Unexpected error for job {job_id}: {str(e)}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500]})

@@ -46,6 +46,7 @@ FORMATS = [
     {'name': 'EPUB (v2)', 'key': 'epub2', 'direction': 'Both', 'extension': '.epub', 'category': 'E-Books'},
     {'name': 'LaTeX', 'key': 'latex', 'direction': 'Both', 'extension': '.tex', 'category': 'Technical'},
     {'name': 'PDF (via LaTeX)', 'key': 'pdf', 'direction': 'Output Only', 'extension': '.pdf', 'category': 'Technical'},
+    {'name': 'PDF (High Accuracy)', 'key': 'pdf_marker', 'direction': 'Input Only', 'extension': '.pdf', 'category': 'Technical'},
     {'name': 'AsciiDoc', 'key': 'asciidoc', 'direction': 'Both', 'extension': '.adoc', 'category': 'Technical'},
     {'name': 'reStructuredText', 'key': 'rst', 'direction': 'Both', 'extension': '.rst', 'category': 'Technical'},
     {'name': 'BibTeX (Bibliography)', 'key': 'bibtex', 'direction': 'Both', 'extension': '.bib', 'category': 'Technical'},
@@ -122,7 +123,8 @@ def convert():
     })
 
     # Queue the task
-    task = celery.send_task('tasks.convert_document', args=[
+    task_name = 'tasks.convert_with_marker' if from_format == 'pdf_marker' else 'tasks.convert_document'
+    task = celery.send_task(task_name, args=[
         job_id, input_path, output_path, from_format, to_format
     ], task_id=job_id)
     
@@ -236,7 +238,8 @@ def retry_job(job_id):
     })
     
     # Queue task with NEW paths
-    celery.send_task('tasks.convert_document', args=[
+    task_name = 'tasks.convert_with_marker' if job_data['from'] == 'pdf_marker' else 'tasks.convert_document'
+    celery.send_task(task_name, args=[
         new_job_id, new_input_path, new_output_path, job_data['from'], job_data['to']
     ], task_id=new_job_id)
     

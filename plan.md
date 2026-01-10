@@ -151,6 +151,13 @@ Single-page application in `web/templates/index.html`:
 - [ ] Test HTML to EPUB.
 - [ ] Verify cleanup script deletes files according to retention policies.
 
+## Phase 9: AI-Powered PDF Conversion (Marker)
+- [x] Add `marker-api` service to `docker-compose.yml`.
+- [x] Add "PDF (High Accuracy)" (`pdf_marker`) to `FORMATS` in `web/app.py`.
+- [x] Create `convert_with_marker` task in `worker/tasks.py`.
+- [x] Route `pdf_marker` jobs to the new task in `web/app.py`.
+- [x] Implement API client in worker to communicate with `marker-api`.
+
 ---
 
 ## Technical Reference

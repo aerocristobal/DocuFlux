@@ -81,6 +81,17 @@ services:
           memory: 256M
     restart: unless-stopped
 
+  marker-api:
+    image: maximofn/marker-api-docker:latest
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    restart: unless-stopped
+
 volumes:
   redis-data:
   beat-data:
