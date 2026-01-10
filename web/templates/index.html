@@ -163,6 +163,39 @@
         .usa-table--striped tbody tr:nth-child(odd) th {
             background-color: rgba(255, 255, 255, 0.3) !important;
         }
+        
+        /* Drag and Drop Zone */
+        .drop-zone {
+            border: 2px dashed var(--glass-border);
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.2s ease;
+            background-color: rgba(255, 255, 255, 0.2);
+            cursor: pointer;
+            position: relative;
+        }
+
+        .drop-zone:hover, .drop-zone--dragover {
+            background-color: rgba(255, 255, 255, 0.4);
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.1);
+        }
+        
+        .drop-zone input[type="file"] {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .drop-zone__prompt {
+            pointer-events: none;
+            color: var(--text-color);
+        }
 
         /* Utility */
         .site-title { font-weight: bold; font-size: 1.5rem; }
@@ -199,8 +232,12 @@
                         <div id="alert-area"></div>
 
                         <form id="convert-form" class="usa-form" style="max-width: none;" enctype="multipart/form-data">
-                            <label class="usa-label" for="file">Select Document</label>
-                            <input class="usa-input" id="file" name="file" type="file" required>
+                            
+                            <!-- Drag & Drop Zone -->
+                            <div class="drop-zone margin-bottom-3" id="drop-zone">
+                                <span class="drop-zone__prompt" id="drop-zone-prompt">Drag & Drop file here or click to select</span>
+                                <input class="usa-input" id="file" name="file" type="file" required>
+                            </div>
 
                             <div id="format-warning" class="usa-alert usa-alert--warning margin-top-2 display-none">
                                 <div class="usa-alert__body">
@@ -273,6 +310,75 @@
         const alertArea = document.getElementById('alert-area');
         const jobsTableBody = document.getElementById('jobs-table-body');
         const noJobsMsg = document.getElementById('no-jobs-msg');
+        
+        // --- Drag & Drop / Auto-Detection ---
+        const dropZone = document.getElementById('drop-zone');
+        const dropZonePrompt = document.getElementById('drop-zone-prompt');
+        const fileInput = document.getElementById('file');
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drop-zone--dragover');
+        });
+
+        ['dragleave', 'dragend'].forEach(type => {
+            dropZone.addEventListener(type, () => {
+                dropZone.classList.remove('drop-zone--dragover');
+            });
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drop-zone--dragover');
+            
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                handleFileSelect(fileInput.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                handleFileSelect(fileInput.files[0]);
+            }
+        });
+
+        function handleFileSelect(file) {
+            // Update UI prompt
+            dropZonePrompt.textContent = `Selected: ${file.name}`;
+            
+            // Auto-detect format
+            const filename = file.name.toLowerCase();
+            const extension = '.' + filename.split('.').pop();
+            
+            let matchedFormat = null;
+
+            // Special preference for PDF -> High Accuracy
+            if (extension === '.pdf') {
+                matchedFormat = formats.find(f => f.key === 'pdf_marker');
+            } else {
+                matchedFormat = formats.find(f => f.extension === extension && f.direction !== 'Output Only');
+                
+                // Fallback for markdown variants if generic .md
+                if (!matchedFormat && (extension === '.md' || extension === '.markdown')) {
+                    matchedFormat = formats.find(f => f.key === 'markdown');
+                }
+            }
+
+            if (matchedFormat) {
+                fromSelect.value = matchedFormat.key;
+                // Trigger change event to update target options
+                fromSelect.dispatchEvent(new Event('change'));
+                
+                // Visual feedback (optional flash/highlight on select)
+                fromSelect.style.borderColor = 'var(--primary-color)';
+                setTimeout(() => { fromSelect.style.borderColor = ''; }, 1000);
+            } else {
+                // Unknown format - reset or notify?
+                // For now, keep current selection or reset if invalid
+                // Maybe show a small hint?
+            }
+        }
 
         // --- Polling Configuration ---
         const POLL_INTERVAL_ACTIVE = 5000;   // 5 seconds when active jobs

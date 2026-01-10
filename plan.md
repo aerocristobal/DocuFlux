@@ -158,6 +158,13 @@ Single-page application in `web/templates/index.html`:
 - [x] Route `pdf_marker` jobs to the new task in `web/app.py`.
 - [x] Implement API client in worker to communicate with `marker-api`.
 
+## Phase 10: Intelligent File Ingestion
+- [x] Implement Drag and Drop zone on the UI.
+- [x] Implement auto-detection logic in JavaScript (based on file extension).
+- [x] Automatically select "From Format" when a file is chosen/dropped.
+- [x] Allow manual override of the format selection.
+- [x] Add visual feedback (highlighting) for drag operations.
+
 ---
 
 ## Technical Reference
