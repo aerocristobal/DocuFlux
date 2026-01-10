@@ -13,7 +13,7 @@
 
 ### 2. "Server storage is full" (Error 507)
 **Symptom**: Uploads fail immediately with a 507 error.
-**Cause**: The volume mounted at `/app/data` has less than 500MB free.
+**Cause**: The volume mounted for data storage (default `data/`) has less than 500MB free.
 **Solutions**:
 - Prune old docker data: `docker system prune`.
 - Check host disk space: `df -h`.

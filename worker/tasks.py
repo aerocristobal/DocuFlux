@@ -4,8 +4,17 @@ import time
 import shutil
 import redis
 import requests
+import logging
+import sys
 from celery import Celery
 from celery.schedules import crontab
+
+# Configure Structured Logging
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
+root_logger = logging.getLogger()
+root_logger.addHandler(handler)
+root_logger.setLevel(logging.INFO)
 
 # Metadata Redis client (DB 1) with connection pooling
 redis_client = redis.Redis.from_url(
@@ -33,7 +42,7 @@ def update_job_metadata(job_id, updates):
     try:
         redis_client.hset(key, mapping=updates)
     except Exception as e:
-        print(f"Error updating metadata for {job_id}: {e}")
+        logging.error(f"Error updating metadata for {job_id}: {e}")
 
 
 def get_job_metadata(job_id):
@@ -49,7 +58,7 @@ def get_job_metadata(job_id):
     reject_on_worker_lost=True
 )
 def convert_document(job_id, input_path, output_path, from_format, to_format):
-    print(f"Starting conversion for job {job_id}: {from_format} -> {to_format}")
+    logging.info(f"Starting conversion for job {job_id}: {from_format} -> {to_format}")
     update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time())})
     
     if not os.path.exists(input_path):
@@ -68,21 +77,21 @@ def convert_document(job_id, input_path, output_path, from_format, to_format):
     
     try:
         process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
-        print(f"Conversion successful: {output_path}")
+        logging.info(f"Conversion successful: {output_path}")
         update_job_metadata(job_id, {'status': 'SUCCESS', 'completed_at': str(time.time())})
         return {"status": "success", "output_file": os.path.basename(output_path)}
     except subprocess.TimeoutExpired:
         error_msg = "Conversion timed out after 500 seconds"
-        print(f"Timeout for job {job_id}: {error_msg}")
+        logging.error(f"Timeout for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg})
         raise Exception(error_msg)
     except subprocess.CalledProcessError as e:
         error_msg = e.stderr or e.stdout or "Unknown error"
-        print(f"Pandoc error for job {job_id}: {error_msg}")
+        logging.error(f"Pandoc error for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500]})
         raise Exception(f"Pandoc failed: {error_msg}")
     except Exception as e:
-        print(f"Unexpected error for job {job_id}: {str(e)}")
+        logging.error(f"Unexpected error for job {job_id}: {str(e)}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500]})
         raise
 
@@ -96,7 +105,7 @@ def convert_document(job_id, input_path, output_path, from_format, to_format):
     max_retries=10            # Retry for ~5 minutes (10 * 30s)
 )
 def convert_with_marker(self, job_id, input_path, output_path, from_format, to_format):
-    print(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1})")
+    logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1})")
     update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time())})
     
     if not os.path.exists(input_path):
@@ -118,7 +127,7 @@ def convert_with_marker(self, job_id, input_path, output_path, from_format, to_f
             error_msg = f"Marker API failed with status {response.status_code}: {response.text[:200]}"
             # If 503 Service Unavailable, we could retry too
             if response.status_code == 503:
-                print(f"Marker API busy (503), retrying job {job_id}...")
+                logging.info(f"Marker API busy (503), retrying job {job_id}...")
                 raise requests.exceptions.RequestException("Service Unavailable")
             raise Exception(error_msg)
             
@@ -137,7 +146,7 @@ def convert_with_marker(self, job_id, input_path, output_path, from_format, to_f
                 markdown_content = data.get('markdown') or data.get('text') or data.get('content')
                 
             if not markdown_content:
-                 print(f"Marker response data: {data}") # Log for debugging
+                 logging.debug(f"Marker response data: {data}")
                  raise Exception("No markdown content found in Marker API response")
         else:
             # Assume raw text
@@ -146,12 +155,12 @@ def convert_with_marker(self, job_id, input_path, output_path, from_format, to_f
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(markdown_content)
             
-        print(f"Marker conversion successful: {output_path}")
+        logging.info(f"Marker conversion successful: {output_path}")
         update_job_metadata(job_id, {'status': 'SUCCESS', 'completed_at': str(time.time())})
         return {"status": "success", "output_file": os.path.basename(output_path)}
 
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-        print(f"Marker API unavailable (Connection/Timeout), retrying job {job_id} in 30s... Error: {e}")
+        logging.warning(f"Marker API unavailable (Connection/Timeout), retrying job {job_id} in 30s... Error: {e}")
         try:
             # Update metadata to let user know we are waiting
             update_job_metadata(job_id, {'status': 'PROCESSING', 'error': f"Waiting for AI Service (Attempt {self.request.retries + 1})..."})
@@ -172,11 +181,11 @@ def convert_with_marker(self, job_id, input_path, output_path, from_format, to_f
                 pass
 
         error_msg = f"Marker API connection error: {str(e)}"
-        print(f"Marker error for job {job_id}: {error_msg}")
+        logging.error(f"Marker error for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg[:500]})
         raise Exception(error_msg)
     except Exception as e:
-        print(f"Unexpected error for job {job_id}: {str(e)}")
+        logging.error(f"Unexpected error for job {job_id}: {str(e)}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500]})
         raise
 
@@ -190,8 +199,8 @@ def cleanup_old_files():
     RETENTION_FAILURE = 300              # 5 minutes
     RETENTION_ORPHAN = 3600              # 1 hour (fallback)
     
-    upload_dir = '/app/data/uploads'
-    output_dir = '/app/data/outputs'
+    upload_dir = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
+    output_dir = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
     
     # Collect all job IDs currently on disk
     job_ids = set()
@@ -200,58 +209,14 @@ def cleanup_old_files():
     if os.path.exists(output_dir):
         job_ids.update(os.listdir(output_dir))
     
-    print(f"Running cleanup. Found {len(job_ids)} jobs on disk.")
+    logging.info(f"Running cleanup. Found {len(job_ids)} jobs on disk.")
 
     for job_id in job_ids:
-        # Fetch metadata using Redis Hash
-        key = f"job:{job_id}"
-        meta = get_job_metadata(job_id)
-
-        should_delete = False
-        reason = ""
-
-        if meta:
-            status = meta.get('status')
-            completed_at = float(meta.get('completed_at', 0)) if meta.get('completed_at') else None
-            downloaded_at = float(meta.get('downloaded_at', 0)) if meta.get('downloaded_at') else None
-            started_at = float(meta.get('started_at', 0)) if meta.get('started_at') else None
-
-            # Check policies
-            if status == 'FAILURE':
-                if completed_at and now > completed_at + RETENTION_FAILURE:
-                    should_delete = True
-                    reason = "Failed job expired (5m)"
-
-            elif status == 'SUCCESS':
-                if downloaded_at:
-                    if now > downloaded_at + RETENTION_SUCCESS_DOWNLOADED:
-                        should_delete = True
-                        reason = "Downloaded job expired (10m)"
-                elif completed_at:
-                    if now > completed_at + RETENTION_SUCCESS_NO_DOWNLOAD:
-                        should_delete = True
-                        reason = "Completed job (not downloaded) expired (1h)"
-
-            # Safety net for stuck PROCESSING jobs (e.g. worker crash)
-            # If started > 2 hours ago and no completion
-            if not completed_at and started_at and now > started_at + 7200:
-                should_delete = True
-                reason = "Stale processing job (2h)"
-        
-        else:
-            # Orphaned (No metadata) - use file mtime fallback
-            check_path = os.path.join(upload_dir, job_id)
-            if not os.path.exists(check_path):
-                 check_path = os.path.join(output_dir, job_id)
-            
-            if os.path.exists(check_path):
-                 mtime = os.path.getmtime(check_path)
-                 if now > mtime + RETENTION_ORPHAN:
-                     should_delete = True
+...
                      reason = "Orphaned job expired (1h fallback)"
 
         if should_delete:
-            print(f"Deleting job {job_id}. Reason: {reason}")
+            logging.info(f"Deleting job {job_id}. Reason: {reason}")
             # Delete directories
             for base in [upload_dir, output_dir]:
                 p = os.path.join(base, job_id)
@@ -259,6 +224,6 @@ def cleanup_old_files():
                     try:
                         shutil.rmtree(p)
                     except Exception as e:
-                        print(f"Error deleting {p}: {e}")
+                        logging.error(f"Error deleting {p}: {e}")
             # Delete metadata
             redis_client.delete(key)

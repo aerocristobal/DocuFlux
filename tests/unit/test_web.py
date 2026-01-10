@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 def test_index(client):
     response = client.get('/')
     assert response.status_code == 200
-    assert b"Pandoc Web" in response.data or b"format" in response.data
+    assert b"DocuFlux" in response.data or b"format" in response.data
 
 def test_service_status(client):
     with patch('requests.get') as mock_get:
@@ -156,8 +156,8 @@ def test_retry_job(mock_celery, mock_redis, mock_copy, mock_exists, client):
             'from': 'markdown',
             'to': 'html',
             'created_at': '2024-01-01T12:00:00+00:00',
-            'input_path': '/app/data/uploads/job1/test.md',
-            'output_path': '/app/data/outputs/job1/test.html'
+            'input_path': 'data/uploads/job1/test.md',
+            'output_path': 'data/outputs/job1/test.html'
         }]
 
     with patch('os.makedirs'):

@@ -1,4 +1,4 @@
-# Pandoc Web Conversion Service - Implementation Plan
+# DocuFlux - Implementation Plan
 
 ## Architecture Overview
 This project implements a containerized document conversion service using a Task Queue pattern.
@@ -31,43 +31,35 @@ This project implements a containerized document conversion service using a Task
 
 #### UI & UX Enhancements
 1. **Material Design Migration**: Replaced USWDS/Liquid Glass with **Material Web Components (M3)**.
-2. **Branding**: Updated primary color to `#00044b` (Deep Blue).
+2. **Branding**: Updated project name to **DocuFlux**. Reverted to **Material 3 Baseline** colors (Purple).
 3. **History Management**: Implemented automatic session history cleanup for jobs older than **60 minutes**.
 4. **Time Zone Support**: Switched to ISO 8601 UTC timestamps on the backend, with client-side localization using the browser's locale.
 5. **Intelligent Ingestion**: Added drag-and-drop zone with automatic extension detection and AI-engine defaulting for PDFs.
 
-#### Verification State
-- **Automated Tests**: All core conversion flows (Markdown->PDF, Markdown->Docx, HTML->EPUB) and AI flow (PDF->Markdown) verified and passing.
-- **Submodule Management**: `marker_api_service` integrated as a local build context for reliable patching.
-
-### Performance Optimizations (Previous)
-- Redis Hash (`HSET`/`HGETALL`) for atomic job tracking.
-- N+1 Query fix using Redis pipelines in `/api/jobs`.
-- Smart polling with Visibility API (pauses when tab is hidden).
-
 #### UI Architecture (Current)
 Single-page application in `web/templates/index.html`:
-- **Left column**: Material 3 Card with Drag & Drop zone and format selectors.
-- **Right column**: Material 3 Job table with real-time status and action buttons.
-- **Components**: `md-filled-select`, `md-filled-button`, `md-linear-progress`, `md-icon`.
+- **Left column**: Material 3 Surface Card with Drag & Drop zone and format selectors.
+- **Right column**: Material 3 Surface Card with `md-list` for job tracking.
+- **Components**: `md-filled-select` (refined for dark mode legibility), `md-filled-button`, `md-linear-progress`, `md-icon`, `md-list`, `md-assist-chip`, `md-dialog`.
+- **Interactions**: Material 3 Dialogs for confirmations, adaptive polling, and theme persistence.
 
 ### Security Hardening (Current Session)
 1. **File Size Limit**: Configured `MAX_CONTENT_LENGTH` to 100MB in Flask app.
 2. **MIME Type Validation**: Integrated `python-magic` to strictly validate file types against a whitelist, preventing extension spoofing.
-3. **Dependencies**: Added `python-magic` and `libmagic1` to the web service.
+3. **Security Headers**: Added CSP, X-Content-Type-Options, X-Frame-Options, and Referrer-Policy. Patched CSP to allow `data:` fonts and `cdn.jsdelivr.net` for Material Web components.
 
 ### UX & Observability (Current Session)
 1. **Service Status Monitoring**: Added real-time checks for `marker-api` availability and server disk space. The UI warns users if the AI service is down or storage is low.
-2. **Disk Space Pre-Check**: Implemented a 500MB free space safety check before accepting uploads (Error 507).
-3. **Manual Job Deletion**: Added a "Trash" action to the job list, allowing users to remove jobs and associated files immediately.
-4. **Smart Format Hints**: Updated UI to dynamically filter target formats and warn about service availability.
-5. **Resilient AI Queueing**: Implemented automatic retry logic (exponential backoff) for AI conversion jobs. If `marker-api` is unavailable, jobs are now queued and retried instead of failing immediately.
+2. **Structured Logging**: Implemented JSON-formatted logging for better observability.
+3. **Disk Space Pre-Check**: Implemented a 500MB free space safety check before accepting uploads (Error 507).
+4. **Manual Job Deletion**: Added a "Trash" action to the job list, allowing users to remove jobs and associated files immediately.
+5. **Smart Format Hints**: Updated UI to dynamically filter target formats and warn about service availability.
+6. **Resilient AI Queueing**: Implemented automatic retry logic (exponential backoff) for AI conversion jobs. If `marker-api` is unavailable, jobs are now queued and retried instead of failing immediately.
 
-### Documentation (Current Session)
-Comprehensive documentation created in `docs/`:
-- **API**: `openapi.yaml` spec for all endpoints.
-- **Operations**: `DEPLOYMENT.md` and `TROUBLESHOOTING.md`.
-- **Features**: `FORMATS.md` matrix and `AI_INTEGRATION.md` architecture details.
+### Verification State
+- **Automated Tests**: All core conversion flows (Markdown->PDF, Markdown->Docx, HTML->EPUB) and AI flow (PDF->Markdown) verified and passing.
+- **Submodule Management**: `marker_api_service` integrated as a local build context for reliable patching.
+- **Documentation**: Comprehensive guides in `docs/` updated.
 
 ---
 
@@ -142,7 +134,7 @@ Comprehensive documentation created in `docs/`:
 - [x] 11.1 Implement file size limits (100MB max upload).
 - [x] 11.2 Add MIME type validation (whitelist approach, not extension-only).
 - [ ] 11.3 Add rate limiting on `/convert` endpoint (Flask-Limiter).
-- [ ] 11.4 Review and add security headers (CSP, X-Frame-Options, etc.).
+- [x] 11.4 Add security headers (CSP, X-Frame-Options, etc.).
 - [ ] 11.5 Audit Redis key patterns for injection risks.
 - [x] 11.6 Externalize `SECRET_KEY` with documented env var requirement.
 - [ ] 11.7 Review Gunicorn/FastAPI middleware for production-grade security headers.
@@ -157,7 +149,7 @@ Comprehensive documentation created in `docs/`:
 - [x] 12.6 Add GitHub Actions CI/CD pipeline for automated testing.
 
 ## Epic 13: Observability & Monitoring
-- [ ] 13.1 Implement structured logging (JSON format for parsing).
+- [x] 13.1 Implement structured logging (JSON format for parsing).
 - [ ] 13.2 Add health checks for Worker and Beat services in `docker-compose.yml`.
 - [ ] 13.3 Add Prometheus metrics endpoint (conversion counts, durations, queue depth).
 - [ ] 13.4 Create Grafana dashboard template.
@@ -204,8 +196,8 @@ Comprehensive documentation created in `docs/`:
 | Docker Config | `docker-compose.yml` |
 
 ### Storage Paths (Inside Containers)
-- **Input Storage**: `/app/data/uploads/<job_id>/<filename>`
-- **Output Storage**: `/app/data/outputs/<job_id>/<filename>`
+- **Input Storage**: `data/uploads/<job_id>/<filename>` (Relative to app root)
+- **Output Storage**: `data/outputs/<job_id>/<filename>` (Relative to app root)
 
 ### Redis Keys
 - **Celery Broker/Backend**: DB 0
@@ -247,6 +239,6 @@ HSET job:<job_id>
 | GET | `/api/status/services` | Check status of dependent services (Marker API, Disk Space) |
 
 ## Next Steps for Future Sessions
-1. **Testing Framework (Epic 12)**: This is the highest priority debt. The project relies on manual verification scripts (`tests/verify_phase8.py`). We need to set up `pytest` and write proper unit tests for `app.py` and `tasks.py`.
-2. **Security Headers (Epic 11.4)**: Add headers like CSP, X-Content-Type-Options, etc., possibly using a library like `flask-talisman` or just setting them in the response.
-3. **Observability (Epic 13)**: Adding structured logging would be a quick win for debugging in production.
+1. **Rate Limiting (Epic 11.3)**: Implement `Flask-Limiter` to protect the `/convert` endpoint from abuse.
+2. **WebSocket Support (Epic 16.2)**: Consider moving from polling to WebSockets for real-time updates.
+3. **Metrics (Epic 13.3)**: Implement Prometheus metrics for better operational insights.

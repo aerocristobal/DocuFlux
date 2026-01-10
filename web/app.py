@@ -5,15 +5,24 @@ import redis
 import shutil
 import magic
 import requests
+import logging
+import sys
 from flask import Flask, render_template, request, send_from_directory, jsonify, session
 from celery import Celery
 from datetime import datetime, timezone, timedelta
 
+# Configure Structured Logging
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
+root_logger = logging.getLogger()
+root_logger.addHandler(handler)
+root_logger.setLevel(logging.INFO)
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key') # Needed for session
 
-UPLOAD_FOLDER = '/app/data/uploads'
-OUTPUT_FOLDER = '/app/data/outputs'
+UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
+OUTPUT_FOLDER = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -28,6 +37,24 @@ MIN_FREE_SPACE = 500 * 1024 * 1024
 @app.errorhandler(413)
 def request_entity_too_large(error):
     return jsonify({'error': 'File too large. Maximum size is 100MB.'}), 413
+
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to every response."""
+    # CSP: Allow Material Web (esm.run, jsdelivr), Google Fonts, and inline scripts/styles
+    csp = (
+        "default-src 'self' https://esm.run https://fonts.googleapis.com https://fonts.gstatic.com; "
+        "script-src 'self' 'unsafe-inline' https://esm.run https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "img-src 'self' data:; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "connect-src 'self' https://esm.run https://cdn.jsdelivr.net;"
+    )
+    response.headers['Content-Security-Policy'] = csp
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 # Metadata Redis client (DB 1) with connection pooling
 redis_client = redis.Redis.from_url(
@@ -105,7 +132,7 @@ def update_job_metadata(job_id, updates):
     try:
         redis_client.hset(key, mapping=updates)
     except Exception as e:
-        print(f"Error updating metadata for {job_id}: {e}")
+        logging.error(f"Error updating metadata for {job_id}: {e}")
 
 @app.route('/')
 def index():
@@ -165,11 +192,11 @@ def convert():
                 is_valid = True
             
             if not is_valid:
-                print(f"MIME check failed. Detected: {file_mime}, Allowed: {allowed_mimes}") # Logging
+                logging.warning(f"MIME check failed. Detected: {file_mime}, Allowed: {allowed_mimes}")
                 return jsonify({'error': f"Invalid file content. Detected: {file_mime}. Please ensure the file matches the selected format."}), 400
                 
         except Exception as e:
-            print(f"MIME detection error: {e}")
+            logging.error(f"MIME detection error: {e}")
             # If magic fails, fall back to extension check (which passed) or block?
             # Safe to block if we want strict security.
             return jsonify({'error': "Could not validate file type."}), 500
@@ -306,7 +333,7 @@ def delete_job(job_id):
         if os.path.exists(output_job_dir):
             shutil.rmtree(output_job_dir)
     except Exception as e:
-        print(f"Error deleting files for {job_id}: {e}")
+        logging.error(f"Error deleting files for {job_id}: {e}")
 
     # Remove metadata
     redis_client.delete(f"job:{job_id}")

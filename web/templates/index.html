@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pandoc Online Converter</title>
+    <title>DocuFlux | Document Converter</title>
 
     <!-- Fonts: Roboto and Material Symbols -->
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
@@ -27,54 +27,74 @@
 
     <style>
         :root {
-            /* Material 3 Token Simulation (Light Theme - Default) */
-            --md-sys-color-primary: #00044b;
+            /* Material 3 Baseline Colors (Light Theme) */
+            --md-sys-color-primary: #6750a4;
             --md-sys-color-on-primary: #ffffff;
-            --md-sys-color-primary-container: #dfe0ff;
-            --md-sys-color-on-primary-container: #000030;
-            --md-sys-color-secondary: #575e71;
-            --md-sys-color-secondary-container: #dbe2f9;
-            --md-sys-color-tertiary: #715573;
-            --md-sys-color-tertiary-container: #fbd7fc;
-            --md-sys-color-error: #ba1a1a;
-            --md-sys-color-error-container: #ffdad6;
-            --md-sys-color-background: #fdfbff;
-            --md-sys-color-on-background: #1a1b1e;
-            --md-sys-color-surface: #fdfbff;
-            --md-sys-color-on-surface: #1a1b1e;
-            --md-sys-color-surface-variant: #e1e2ec;
-            --md-sys-color-on-surface-variant: #44474f;
-            --md-sys-color-outline: #74777f;
-            --md-sys-color-inverse-on-surface: #f2f0f4;
-            --md-sys-color-inverse-surface: #2f3033;
+            --md-sys-color-primary-container: #eaddff;
+            --md-sys-color-on-primary-container: #21005d;
+            --md-sys-color-secondary: #625b71;
+            --md-sys-color-on-secondary: #ffffff;
+            --md-sys-color-secondary-container: #e8def8;
+            --md-sys-color-on-secondary-container: #1d192b;
+            --md-sys-color-tertiary: #7d5260;
+            --md-sys-color-on-tertiary: #ffffff;
+            --md-sys-color-tertiary-container: #ffd8e4;
+            --md-sys-color-on-tertiary-container: #31111d;
+            --md-sys-color-error: #b3261e;
+            --md-sys-color-on-error: #ffffff;
+            --md-sys-color-error-container: #f9dedc;
+            --md-sys-color-on-error-container: #410e0b;
+            --md-sys-color-outline: #79747e;
+            --md-sys-color-outline-variant: #cac4d0;
+            --md-sys-color-background: #fef7ff;
+            --md-sys-color-on-background: #1d1b20;
+            --md-sys-color-surface: #fef7ff;
+            --md-sys-color-on-surface: #1d1b20;
+            --md-sys-color-surface-variant: #e7e0ec;
+            --md-sys-color-on-surface-variant: #49454f;
+            --md-sys-color-surface-container: #f3edf7;
+            --md-sys-color-surface-container-highest: #e6e0e9;
+            --md-sys-color-inverse-surface: #322f35;
+            --md-sys-color-inverse-on-surface: #f5eff7;
             
             font-family: 'Roboto', sans-serif;
-            background-color: var(--md-sys-color-background);
-            color: var(--md-sys-color-on-background);
-            transition: background-color 0.3s, color 0.3s;
         }
 
         /* Dark Theme Tokens */
-        body.dark-theme {
-            --md-sys-color-primary: #bcc2ff;
-            --md-sys-color-on-primary: #001a41;
-            --md-sys-color-primary-container: #002e69;
-            --md-sys-color-on-primary-container: #dfe0ff;
-            --md-sys-color-secondary: #bfc6dc;
-            --md-sys-color-secondary-container: #3f4759;
-            --md-sys-color-tertiary: #dfbbde;
-            --md-sys-color-tertiary-container: #583e5a;
-            --md-sys-color-error: #ffb4ab;
-            --md-sys-color-error-container: #93000a;
-            --md-sys-color-background: #1a1b1e;
-            --md-sys-color-on-background: #e3e2e6;
-            --md-sys-color-surface: #1a1b1e;
-            --md-sys-color-on-surface: #e3e2e6;
-            --md-sys-color-surface-variant: #44474f;
-            --md-sys-color-on-surface-variant: #c4c6d0;
-            --md-sys-color-outline: #8e9099;
-            --md-sys-color-inverse-on-surface: #1a1b1e;
-            --md-sys-color-inverse-surface: #e3e2e6;
+        .dark-theme {
+            --md-sys-color-primary: #d0bcff;
+            --md-sys-color-on-primary: #381e72;
+            --md-sys-color-primary-container: #4f378b;
+            --md-sys-color-on-primary-container: #eaddff;
+            --md-sys-color-secondary: #ccc2dc;
+            --md-sys-color-on-secondary: #332d41;
+            --md-sys-color-secondary-container: #4a4458;
+            --md-sys-color-on-secondary-container: #e8def8;
+            --md-sys-color-tertiary: #efb8c8;
+            --md-sys-color-on-tertiary: #492532;
+            --md-sys-color-tertiary-container: #633b48;
+            --md-sys-color-on-tertiary-container: #ffd8e4;
+            --md-sys-color-error: #f2b8b5;
+            --md-sys-color-on-error: #601410;
+            --md-sys-color-error-container: #8c1d18;
+            --md-sys-color-on-error-container: #f9dedc;
+            --md-sys-color-outline: #938f99;
+            --md-sys-color-outline-variant: #49454f;
+            --md-sys-color-background: #141218;
+            --md-sys-color-on-background: #e6e1e5;
+            --md-sys-color-surface: #141218;
+            --md-sys-color-on-surface: #e6e1e5;
+            --md-sys-color-surface-variant: #49454f;
+            --md-sys-color-on-surface-variant: #cac4d0;
+            --md-sys-color-surface-container: #211f26;
+            --md-sys-color-surface-container-highest: #36343b;
+            --md-sys-color-inverse-surface: #e6e1e5;
+            --md-sys-color-inverse-on-surface: #313033;
+        }
+
+        html {
+            background-color: var(--md-sys-color-background);
+            color: var(--md-sys-color-on-background);
         }
 
         body {
@@ -83,77 +103,35 @@
             display: flex;
             flex-direction: column;
             min-height: 100vh;
-        }
-
-        /* Top App Bar */
-        header {
-            background-color: var(--md-sys-color-surface);
-            color: var(--md-sys-color-on-surface);
-            padding: 0 16px;
-            height: 64px;
-            display: flex;
-            align-items: center;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-
-        .logo {
-            font-size: 22px;
-            font-weight: 400; /* Regular for Material */
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            text-decoration: none;
+            background-color: inherit;
             color: inherit;
+            transition: background-color 0.3s, color 0.3s;
         }
 
-        /* Layout */
-        main {
-            flex: 1;
-            padding: 24px;
-            max-width: 1200px;
-            margin: 0 auto;
-            width: 100%;
-            box-sizing: border-box;
-        }
-
-        .grid-layout {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 24px;
-        }
-
-        @media (min-width: 768px) {
-            .grid-layout {
-                grid-template-columns: 350px 1fr;
-            }
-        }
-
-        /* Cards/Surfaces */
+        /* Header / App Bar */
+...
+        /* Surface/Card Style */
         .surface-card {
             background-color: var(--md-sys-color-surface);
-            border-radius: 12px;
+            color: var(--md-sys-color-on-surface);
+            border-radius: 16px;
             padding: 24px;
-            box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px 0 rgba(0,0,0,0.06);
-            /* Simulating md-elevation-1 */
-            border: 1px solid var(--md-sys-color-surface-variant);
+            border: 1px solid var(--md-sys-color-outline);
+            display: flex;
+            flex-direction: column;
         }
 
-        h2 {
+        .section-title {
             margin-top: 0;
             margin-bottom: 24px;
-            font-size: 1.375rem;
-            font-weight: 500;
             color: var(--md-sys-color-on-surface);
         }
 
         /* Drag and Drop Zone */
         .drop-zone {
             border: 2px dashed var(--md-sys-color-outline);
-            border-radius: 8px;
-            padding: 32px 16px;
+            border-radius: 12px;
+            padding: 40px 16px;
             text-align: center;
             background-color: var(--md-sys-color-surface-variant);
             color: var(--md-sys-color-on-surface-variant);
@@ -183,66 +161,53 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
             pointer-events: none;
         }
 
         /* Form Elements */
         .form-group {
-            margin-bottom: 16px;
-            display: flex;
-            flex-direction: column;
+            margin-bottom: 20px;
         }
 
         md-filled-select, md-filled-button, md-outlined-button {
             width: 100%;
-            margin-bottom: 8px;
         }
 
-        /* Table Styles */
-        .table-container {
-            overflow-x: auto;
+        md-filled-select {
+            --md-filled-select-container-color: var(--md-sys-color-surface-container-highest);
+            --md-filled-select-text-color: var(--md-sys-color-on-surface);
+            --md-filled-select-label-text-color: var(--md-sys-color-on-surface-variant);
+            /* Menu colors for the dropdown */
+            --md-menu-container-color: var(--md-sys-color-surface-container);
         }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.875rem;
+        md-select-option {
+            --md-menu-item-label-text-color: var(--md-sys-color-on-surface);
+            --md-menu-item-supporting-text-color: var(--md-sys-color-on-surface-variant);
         }
 
-        th {
-            text-align: left;
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--md-sys-color-outline);
-            color: var(--md-sys-color-on-surface-variant);
-            font-weight: 500;
+        /* Component Token Overrides */
+        md-divider {
+            --md-divider-color: var(--md-sys-color-outline-variant);
         }
 
-        td {
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--md-sys-color-surface-variant);
-            color: var(--md-sys-color-on-surface);
+        md-menu {
+            --md-menu-container-color: var(--md-sys-color-surface-container);
         }
 
-        tr:last-child td {
-            border-bottom: none;
+        md-menu-item {
+            --md-menu-item-label-text-color: var(--md-sys-color-on-surface);
+            --md-menu-item-supporting-text-color: var(--md-sys-color-on-surface-variant);
         }
-        
-        /* Status Badges */
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 500;
-        }
-        
-        .status-success { background: #e6f4ea; color: #137333; }
-        .status-pending { background: #fef7e0; color: #b06000; }
-        .status-error { background: #fce8e6; color: #c5221f; }
 
-        /* Alerts */
+        md-dialog {
+            --md-dialog-container-color: var(--md-sys-color-surface-container);
+            --md-dialog-headline-color: var(--md-sys-color-on-surface);
+            --md-dialog-supporting-text-color: var(--md-sys-color-on-surface-variant);
+        }
+
+        /* Alerts & Chips */
         .alert-area {
             margin-bottom: 16px;
         }
@@ -250,10 +215,11 @@
         .alert-card {
             padding: 12px 16px;
             border-radius: 8px;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
             display: flex;
             align-items: center;
             gap: 12px;
+            font-size: 0.875rem;
         }
         
         .alert-error {
@@ -265,16 +231,46 @@
             background-color: var(--md-sys-color-primary-container);
             color: var(--md-sys-color-on-primary-container);
         }
-        
-        .hidden { display: none; }
+
+        /* Job List Styles */
+        md-list {
+            border-radius: 12px;
+            background-color: transparent;
+        }
+
+        .job-item {
+            --md-list-item-container-color: transparent;
+            --md-list-item-label-text-color: var(--md-sys-color-on-surface);
+            --md-list-item-supporting-text-color: var(--md-sys-color-on-surface-variant);
+            border-radius: 8px;
+            margin-bottom: 4px;
+        }
+
+        .status-chip {
+            --md-assist-chip-container-shape: 8px;
+            --md-assist-chip-label-text-size: 0.75rem;
+            height: 28px;
+        }
+
+        .hidden { display: none !important; }
+
+        /* Animation for list items */
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
 </head>
 <body>
 
     <header>
-        <a href="/" class="logo">
+        <a href="/" class="logo md-typescale-title-large">
             <md-icon>description</md-icon>
-            Pandoc Web Service
+            DocuFlux
         </a>
         <div style="flex: 1;"></div>
         
@@ -305,7 +301,7 @@
             <!-- Left Column: Upload -->
             <section>
                 <div class="surface-card">
-                    <h2>New Conversion</h2>
+                    <h2 class="section-title md-typescale-title-medium">New Conversion</h2>
                     
                     <div id="alert-area" class="alert-area"></div>
 
@@ -313,8 +309,9 @@
                         <!-- Drop Zone -->
                         <div class="drop-zone" id="drop-zone">
                             <div class="drop-zone-content">
-                                <md-icon style="font-size: 40px;">cloud_upload</md-icon>
-                                <span id="drop-zone-prompt">Drag file here or click</span>
+                                <md-icon style="font-size: 48px;">cloud_upload</md-icon>
+                                <span id="drop-zone-prompt" class="md-typescale-body-large">Drag file here or click</span>
+                                <span class="md-typescale-body-small" style="opacity: 0.7;">Max 100MB</span>
                             </div>
                             <input type="file" id="file" name="file" required>
                         </div>
@@ -323,11 +320,12 @@
                         <div class="form-group">
                             <md-filled-select label="From Format" id="from_format" name="from_format" required>
                                 <md-select-option value="" disabled selected>
-                                    <div slot="headline">Select format</div>
+                                    <div slot="headline">Select source format</div>
                                 </md-select-option>
                                 {% for fmt in formats %}
                                 <md-select-option value="{{ fmt.key }}">
                                     <div slot="headline">{{ fmt.name }}</div>
+                                    <div slot="supporting-text">{{ fmt.category }}</div>
                                 </md-select-option>
                                 {% endfor %}
                             </md-filled-select>
@@ -341,8 +339,10 @@
                             </md-filled-select>
                         </div>
 
-                        <!-- Progress Bar (Hidden by default) -->
-                        <md-linear-progress id="progress-bar" indeterminate class="hidden" style="width: 100%; margin-bottom: 16px;"></md-linear-progress>
+                        <!-- Progress Bar -->
+                        <div style="height: 4px; margin-bottom: 16px;">
+                            <md-linear-progress id="progress-bar" indeterminate class="hidden"></md-linear-progress>
+                        </div>
 
                         <!-- Actions -->
                         <md-filled-button type="submit" id="convert-btn">
@@ -351,7 +351,7 @@
                         </md-filled-button>
                     </form>
                     
-                    <div id="format-warning" class="alert-card alert-error hidden" style="margin-top: 16px;">
+                    <div id="format-warning" class="alert-card alert-error hidden" style="margin-top: 20px;">
                         <md-icon>warning</md-icon>
                         <span id="format-warning-text"></span>
                     </div>
@@ -361,32 +361,33 @@
             <!-- Right Column: Jobs -->
             <section>
                 <div class="surface-card" style="min-height: 500px;">
-                    <h2>My Conversions</h2>
+                    <h2 class="section-title md-typescale-title-medium">My Conversions</h2>
                     
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>File</th>
-                                    <th>Conversion</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="jobs-table-body">
-                                <!-- Populated by JS -->
-                            </tbody>
-                        </table>
-                    </div>
+                    <md-list id="jobs-list">
+                        <!-- Populated by JS -->
+                    </md-list>
                     
-                    <div id="no-jobs-msg" style="text-align: center; padding: 24px; color: var(--md-sys-color-secondary);" class="hidden">
-                        <md-icon style="font-size: 48px; opacity: 0.5; margin-bottom: 8px;">inbox</md-icon>
-                        <div>No conversions found</div>
+                    <div id="no-jobs-msg" style="text-align: center; padding: 48px; color: var(--md-sys-color-on-surface-variant);" class="hidden">
+                        <md-icon style="font-size: 64px; opacity: 0.3; margin-bottom: 16px;">inbox_customize</md-icon>
+                        <div class="md-typescale-body-large">No conversions found</div>
+                        <div class="md-typescale-body-small" style="opacity: 0.7;">Upload a file to get started</div>
                     </div>
                 </div>
             </section>
         </div>
     </main>
+
+    <!-- Dialogs -->
+    <md-dialog id="action-dialog">
+        <div slot="headline" id="dialog-headline">Confirm Action</div>
+        <form slot="content" id="dialog-content" method="dialog">
+            <div id="dialog-body">Are you sure?</div>
+        </form>
+        <div slot="actions">
+            <md-text-button form="dialog-content" value="cancel">Cancel</md-text-button>
+            <md-text-button form="dialog-content" value="confirm">Confirm</md-text-button>
+        </div>
+    </md-dialog>
 
     <script>
         const formats = {{ formats|tojson }};
@@ -398,11 +399,33 @@
         const formatWarningText = document.getElementById('format-warning-text');
         const convertForm = document.getElementById('convert-form');
         const alertArea = document.getElementById('alert-area');
-        const jobsTableBody = document.getElementById('jobs-table-body');
+        const jobsList = document.getElementById('jobs-list');
         const noJobsMsg = document.getElementById('no-jobs-msg');
         
+        // Dialog handling
+        const actionDialog = document.getElementById('action-dialog');
+        const dialogHeadline = document.getElementById('dialog-headline');
+        const dialogBody = document.getElementById('dialog-body');
+        let dialogResolve = null;
+
+        async function confirmAction(title, body) {
+            dialogHeadline.textContent = title;
+            dialogBody.textContent = body;
+            actionDialog.show();
+            return new Promise((resolve) => {
+                dialogResolve = resolve;
+            });
+        }
+
+        actionDialog.addEventListener('close', () => {
+            if (dialogResolve) {
+                dialogResolve(actionDialog.returnValue === 'confirm');
+                dialogResolve = null;
+            }
+        });
+
         // --- Service Status & Logic ---
-        let markerApiAvailable = true; // Default assume yes until checked
+        let markerApiAvailable = true; 
         let diskSpaceLow = false;
 
         async function checkServices() {
@@ -416,18 +439,14 @@
                 if (diskSpaceLow) {
                     showAlert('error', 'Server storage is low. Conversion may be unavailable.');
                 }
-                
-                // Re-evaluate format selection based on availability
                 updateTargetOptions(fromSelect.value);
-                
             } catch (e) {
                 console.warn('Service status check failed', e);
             }
         }
         
-        // Check on load and periodically
         checkServices();
-        setInterval(checkServices, 60000); // Check every minute
+        setInterval(checkServices, 60000);
 
         // --- Drag & Drop / Auto-Detection ---
         const dropZone = document.getElementById('drop-zone');
@@ -448,7 +467,6 @@
         dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
             dropZone.classList.remove('drop-zone--dragover');
-            
             if (e.dataTransfer.files.length) {
                 fileInput.files = e.dataTransfer.files;
                 handleFileSelect(fileInput.files[0]);
@@ -462,18 +480,12 @@
         });
 
         function handleFileSelect(file) {
-            dropZonePrompt.textContent = `Selected: ${file.name}`;
-            
+            dropZonePrompt.textContent = file.name;
             const filename = file.name.toLowerCase();
             const extension = '.' + filename.split('.').pop();
             
             let matchedFormat = null;
             if (extension === '.pdf') {
-                // Prefer Marker if available, otherwise standard PDF (which is usually output only, so actually we don't have a standard PDF input?)
-                // Actually app.py FORMATS says PDF (via LaTeX) is Output Only.
-                // PDF (High Accuracy) is Input Only.
-                // So if Marker is down, we have no PDF input? Or we fallback?
-                // For now, select it, but updateTargetOptions will handle the warning if unavailable.
                 matchedFormat = formats.find(f => f.key === 'pdf_marker');
             } else {
                 matchedFormat = formats.find(f => f.extension === extension && f.direction !== 'Output Only');
@@ -495,18 +507,14 @@
 
         function updateTargetOptions(selectedKey) {
             const selectedFormat = formats.find(f => f.key === selectedKey);
-            
-            // Reset UI
             formatWarning.classList.add('hidden');
             convertBtn.disabled = false;
             toSelect.disabled = false;
             
-            // Clear existing options
             while (toSelect.firstChild) {
                 toSelect.removeChild(toSelect.firstChild);
             }
 
-            // Add placeholder
             const placeholder = document.createElement('md-select-option');
             placeholder.value = "";
             placeholder.disabled = true;
@@ -516,11 +524,9 @@
 
             if (!selectedFormat) return;
 
-            // Service Availability Checks
             if (selectedKey === 'pdf_marker' && !markerApiAvailable) {
-                formatWarningText.innerText = "AI Service is currently unavailable. Your job will be queued and processed automatically when the service returns.";
+                formatWarningText.innerText = "AI Service is currently unavailable. Your job will be queued and processed automatically when it returns.";
                 formatWarning.classList.remove('hidden');
-                // We allow submission now (Epic 16.7)
             }
 
             if (selectedFormat.direction === 'Output Only') {
@@ -531,26 +537,19 @@
                 return;
             }
 
-            // Compatibility Hints (Epic 15.4)
-            // Filter "To" options based on logic.
-            // For now, we generally allow most things, but we should filter "Input Only" from "To".
-            // And maybe specific logic if needed.
-            
             formats.forEach(f => {
                 if (f.key !== selectedKey && f.direction !== 'Input Only') {
                     const opt = document.createElement('md-select-option');
                     opt.value = f.key;
-                    opt.innerHTML = `<div slot="headline">${f.name}</div>`;
+                    opt.innerHTML = `<div slot="headline">${f.name}</div><div slot="supporting-text">${f.category}</div>`;
                     toSelect.appendChild(opt);
                 }
             });
         }
 
-
         // --- Form Submission ---
         convertForm.addEventListener('submit', async function(e) {
             e.preventDefault();
-            
             const file = fileInput.files[0];
             const fromVal = fromSelect.value;
             const toVal = toSelect.value;
@@ -577,19 +576,16 @@
 
                 if (response.ok) {
                     showAlert('success', 'Conversion started successfully!');
-                    // Reset form
                     fileInput.value = '';
                     dropZonePrompt.textContent = "Drag file here or click";
                     fromSelect.value = '';
                     toSelect.value = '';
                     toSelect.disabled = true;
-                    
-                    startPolling(true);
+                    fetchJobs();
                 } else {
                     showAlert('error', data.error || 'An error occurred.');
                 }
             } catch (error) {
-                console.error('Error:', error);
                 showAlert('error', 'Failed to submit conversion request.');
             } finally {
                 convertBtn.disabled = false;
@@ -597,235 +593,148 @@
             }
         });
 
+        let alertTimeout = null;
         function showAlert(type, message) {
             if (alertTimeout) clearTimeout(alertTimeout);
-            
             alertArea.innerHTML = '';
             const card = document.createElement('div');
-            card.className = `alert-card ${type === 'error' ? 'alert-error' : 'alert-success'}`;
+            card.className = `alert-card ${type === 'error' ? 'alert-error' : 'alert-success'} fade-in`;
             card.innerHTML = `
                 <md-icon>${type === 'error' ? 'error' : 'check_circle'}</md-icon>
                 <span>${message}</span>
             `;
             alertArea.appendChild(card);
-
-            alertTimeout = setTimeout(() => {
-                alertArea.innerHTML = '';
-                alertTimeout = null;
-            }, 5000);
+            alertTimeout = setTimeout(() => { alertArea.innerHTML = ''; }, 5000);
         }
 
-        // --- Polling (Simplified for brevity, logic remains similar) ---
-        const POLL_INTERVAL_ACTIVE = 5000;
-        const POLL_INTERVAL_IDLE = 15000;
+        // --- Polling ---
         let pollInterval = null;
-        let fetchController = null;
-        let alertTimeout = null;
-
-        function startPolling(hasActiveJobs = false) {
-            stopPolling();
-            const interval = hasActiveJobs ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE;
-            fetchJobs();
-            pollInterval = setInterval(fetchJobs, interval);
-        }
-
-        function stopPolling() {
-            if (pollInterval) {
-                clearInterval(pollInterval);
-                pollInterval = null;
-            }
+        function startPolling(active) {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(fetchJobs, active ? 5000 : 15000);
         }
         
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) stopPolling();
-            else fetchJobs(); // Resume check
-        });
-
         async function fetchJobs() {
-            if (fetchController) fetchController.abort();
-            fetchController = new AbortController();
-
             try {
-                const response = await fetch('/api/jobs', { signal: fetchController.signal });
+                const response = await fetch('/api/jobs');
                 const jobs = await response.json();
                 renderJobs(jobs);
-                
                 const hasActive = jobs.some(j => ['PENDING', 'PROCESSING', 'STARTED'].includes(j.status));
-                
-                // Adjust poll rate if state changed
-                if (hasActive && (!pollInterval || pollInterval._idleTimeout !== POLL_INTERVAL_ACTIVE)) {
-                    startPolling(true);
-                } else if (!hasActive && pollInterval && pollInterval._idleTimeout !== POLL_INTERVAL_IDLE) {
-                    startPolling(false);
-                }
-                
+                startPolling(hasActive);
             } catch (error) {
-                if (error.name !== 'AbortError') console.error('Error fetching jobs:', error);
+                console.error('Error fetching jobs:', error);
             }
         }
-
-        // --- Event Delegation for Job Actions ---
-        jobsTableBody.addEventListener('click', async (e) => {
-            // Traverse up to find button or anchor
-            const btn = e.target.closest('md-filled-button, md-outlined-button, md-icon-button'); 
-            if (!btn) return;
-            
-            const action = btn.dataset.action;
-            const jobId = btn.dataset.jobId;
-            
-            if (action === 'cancel') {
-                if (!confirm('Cancel this job?')) return;
-                try {
-                    await fetch(`/api/cancel/${jobId}`, { method: 'POST' });
-                    fetchJobs();
-                } catch(e) { console.error(e); }
-            } else if (action === 'retry') {
-                try {
-                    await fetch(`/api/retry/${jobId}`, { method: 'POST' });
-                    startPolling(true);
-                } catch(e) { console.error(e); }
-            } else if (action === 'delete') {
-                if (!confirm('Delete this job? This cannot be undone.')) return;
-                try {
-                    await fetch(`/api/delete/${jobId}`, { method: 'POST' });
-                    fetchJobs();
-                } catch(e) { console.error(e); }
-            }
-        });
 
         function renderJobs(jobs) {
             if (jobs.length === 0) {
-                jobsTableBody.innerHTML = '';
+                jobsList.innerHTML = '';
                 noJobsMsg.classList.remove('hidden');
                 return;
             }
             noJobsMsg.classList.add('hidden');
 
-            const rows = jobs.map(job => {
-                let statusBadge = '';
-                let actionBtn = '';
-                let deleteBtn = `<md-icon-button data-action="delete" data-job-id="${job.id}" title="Delete Job">
-                                    <md-icon>delete</md-icon>
-                                 </md-icon-button>`;
+            const currentIds = Array.from(jobsList.children).map(li => li.dataset.id);
+            const newIds = jobs.map(j => j.id);
 
-                switch(job.status) {
-                    case 'PENDING':
-                    case 'STARTED':
-                    case 'PROCESSING':
-                        statusBadge = `<span class="status-badge status-pending">In Progress</span>`;
-                        actionBtn = `<md-outlined-button data-action="cancel" data-job-id="${job.id}">Cancel</md-outlined-button>`;
-                        deleteBtn = ''; // Can't delete while active
-                        break;
-                    case 'SUCCESS':
-                        statusBadge = `<span class="status-badge status-success">Completed</span>`;
-                        // Standard anchor wrapper for robust download behavior
-                        actionBtn = `<a href="/download/${job.id}" download style="text-decoration: none; display: inline-block;">
-                                        <md-filled-button>
-                                            Download
-                                            <md-icon slot="icon">download</md-icon>
-                                        </md-filled-button>
-                                     </a>`;
-                        break;
-                    case 'FAILURE':
-                        statusBadge = `<span class="status-badge status-error">Failed</span>`;
-                        actionBtn = `<md-outlined-button data-action="retry" data-job-id="${job.id}">Retry</md-outlined-button>`;
-                        break;
-                    case 'REVOKED':
-                        statusBadge = `<span class="status-badge">Cancelled</span>`;
-                        actionBtn = `<md-outlined-button data-action="retry" data-job-id="${job.id}">Retry</md-outlined-button>`;
-                        break;
-                    default:
-                        statusBadge = job.status;
+            // Simple diffing to avoid re-rendering everything
+            jobsList.innerHTML = jobs.map(job => {
+                const isNew = !currentIds.includes(job.id);
+                const timeStr = new Date(job.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                
+                let statusIcon = 'pending';
+                let statusLabel = 'In Progress';
+                let statusColor = 'secondary';
+                let actionSlot = '';
+
+                if (job.status === 'SUCCESS') {
+                    statusIcon = 'check_circle';
+                    statusLabel = 'Completed';
+                    statusColor = 'primary';
+                    actionSlot = `<a href="/download/${job.id}" download slot="end">
+                                    <md-icon-button><md-icon>download</md-icon></md-icon-button>
+                                  </a>`;
+                } else if (job.status === 'FAILURE') {
+                    statusIcon = 'error';
+                    statusLabel = 'Failed';
+                    statusColor = 'error';
+                    actionSlot = `<md-icon-button slot="end" onclick="handleRetry('${job.id}')"><md-icon>replay</md-icon></md-icon-button>`;
+                } else if (job.status === 'REVOKED') {
+                    statusIcon = 'cancel';
+                    statusLabel = 'Cancelled';
+                    statusColor = 'outline';
+                    actionSlot = `<md-icon-button slot="end" onclick="handleRetry('${job.id}')"><md-icon>replay</md-icon></md-icon-button>`;
+                } else {
+                    actionSlot = `<md-icon-button slot="end" onclick="handleCancel('${job.id}')"><md-icon>close</md-icon></md-icon-button>`;
                 }
 
-                const errorMsg = job.result ? `<div style="font-size:12px; color:var(--md-sys-color-error); margin-top:4px;">${job.result.substring(0,60)}...</div>` : '';
+                const deleteBtn = `<md-icon-button slot="end" onclick="handleDelete('${job.id}')"><md-icon>delete</md-icon></md-icon-button>`;
 
                 return `
-                    <tr>
-                        <td>
-                            <div style="font-weight:500;">${job.filename}</div>
-                            <div style="font-size:12px; color:var(--md-sys-color-secondary);">${new Date(job.created_at).toLocaleTimeString()}</div>
-                        </td>
-                        <td>${job.from} &rarr; ${job.to}</td>
-                        <td>
-                            ${statusBadge}
-                            ${errorMsg}
-                        </td>
-                        <td>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                ${actionBtn}
-                                ${deleteBtn}
-                            </div>
-                        </td>
-                    </tr>
+                    <md-list-item data-id="${job.id}" class="job-item ${isNew ? 'fade-in' : ''}">
+                        <md-icon slot="start" style="color: var(--md-sys-color-${statusColor});">${statusIcon}</md-icon>
+                        <div slot="headline">${job.filename}</div>
+                        <div slot="supporting-text">${job.from} &rarr; ${job.to} • ${timeStr}</div>
+                        <div slot="trailing-supporting-text">
+                            <md-assist-chip label="${statusLabel}" class="status-chip"></md-assist-chip>
+                        </div>
+                        ${actionSlot}
+                        ${job.status !== 'PENDING' && job.status !== 'PROCESSING' ? deleteBtn : ''}
+                    </md-list-item>
+                    <md-divider></md-divider>
                 `;
-            });
-
-            jobsTableBody.innerHTML = rows.join('');
+            }).join('');
         }
-        
-        startPolling(false);
 
-        // --- Theme Customization ---
+        async function handleCancel(id) {
+            if (await confirmAction('Cancel Conversion', 'Stop processing this document?')) {
+                await fetch(`/api/cancel/${id}`, { method: 'POST' });
+                fetchJobs();
+            }
+        }
+
+        async function handleDelete(id) {
+            if (await confirmAction('Delete Record', 'Permanently remove this conversion and its files?')) {
+                await fetch(`/api/delete/${id}`, { method: 'POST' });
+                fetchJobs();
+            }
+        }
+
+        async function handleRetry(id) {
+            await fetch(`/api/retry/${id}`, { method: 'POST' });
+            fetchJobs();
+            showAlert('success', 'Retry job queued.');
+        }
+
+        // --- Theme ---
         const themeToggle = document.getElementById('theme-toggle');
         const themeMenu = document.getElementById('theme-menu');
-        const themeMenuItems = themeMenu.querySelectorAll('md-menu-item');
         
-        themeToggle.addEventListener('click', () => {
-            themeMenu.open = !themeMenu.open;
+        themeToggle.addEventListener('click', () => { themeMenu.open = !themeMenu.open; });
+        themeMenu.addEventListener('close-menu', (e) => {
+            const theme = e.target.getAttribute('data-theme');
+            if (theme) setTheme(theme);
         });
-
-        themeMenuItems.forEach(item => {
-            item.addEventListener('close-menu', () => {
-                const theme = item.getAttribute('data-theme');
-                setTheme(theme);
-            });
-        });
-
-        function getSavedTheme() {
-            return localStorage.getItem('theme') || 'system';
-        }
 
         function setTheme(theme) {
-            if (theme === 'system') {
-                localStorage.removeItem('theme');
-            } else {
-                localStorage.setItem('theme', theme);
-            }
+            if (theme === 'system') localStorage.removeItem('theme');
+            else localStorage.setItem('theme', theme);
             applyTheme(theme);
         }
 
         function applyTheme(theme) {
             let effectiveTheme = theme;
-            const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-            if (theme === 'system') {
-                effectiveTheme = systemDark ? 'dark' : 'light';
-            }
-
-            if (effectiveTheme === 'dark') {
-                document.body.classList.add('dark-theme');
-            } else {
-                document.body.classList.remove('dark-theme');
-            }
-
-            // Update Icon
+            if (theme === 'system') effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            document.documentElement.classList.toggle('dark-theme', effectiveTheme === 'dark');
             const icon = themeToggle.querySelector('md-icon');
-            if (theme === 'system') icon.textContent = 'brightness_auto';
-            else if (theme === 'light') icon.textContent = 'light_mode';
-            else if (theme === 'dark') icon.textContent = 'dark_mode';
+            icon.textContent = theme === 'system' ? 'brightness_auto' : (theme === 'dark' ? 'dark_mode' : 'light_mode');
         }
 
-        // System preference listener
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-            if (getSavedTheme() === 'system') {
-                applyTheme('system');
-            }
-        });
-
-        // Initialize
-        applyTheme(getSavedTheme());
-
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (!localStorage.getItem('theme')) applyTheme('system'); });
+        applyTheme(localStorage.getItem('theme') || 'system');
+        
+        fetchJobs();
+        startPolling(false);
     </script>
 </body>
 </html>
