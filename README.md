@@ -64,6 +64,13 @@ To maintain a clean and secure environment, DocuFlux enforces the following auto
 -   **Completed (Not Downloaded)**: Deleted **1 hour** after creation.
 -   **Failed Jobs**: Deleted **5 minutes** after failure.
 
+## Documentation
+- [Deployment Guide](docs/DEPLOYMENT.md)
+- [API Reference (OpenAPI)](docs/openapi.yaml)
+- [Supported Formats](docs/FORMATS.md)
+- [AI Integration](docs/AI_INTEGRATION.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+
 ## Development
 
 ### Project Structure
