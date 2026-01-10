@@ -44,9 +44,10 @@ Single-page application in `web/templates/index.html`:
 - **Interactions**: Material 3 Dialogs for confirmations, adaptive polling, and theme persistence.
 
 ### Security Hardening (Current Session)
-1. **File Size Limit**: Configured `MAX_CONTENT_LENGTH` to 100MB in Flask app.
-2. **MIME Type Validation**: Integrated `python-magic` to strictly validate file types against a whitelist, preventing extension spoofing.
+...
 3. **Security Headers**: Added CSP, X-Content-Type-Options, X-Frame-Options, and Referrer-Policy. Patched CSP to allow `data:` fonts and `cdn.jsdelivr.net` for Material Web components.
+4. **CI/CD Fixes**: Resolved submodule configuration error by adding `.gitmodules` and enabling recursive submodule checkout in GitHub Actions.
+4. **CI/CD Fixes**: Resolved submodule configuration error by adding `.gitmodules` and enabling recursive submodule checkout in GitHub Actions.
 
 ### UX & Observability (Current Session)
 1. **Service Status Monitoring**: Added real-time checks for `marker-api` availability and server disk space. The UI warns users if the AI service is down or storage is low.
