@@ -8,6 +8,7 @@ import requests
 import logging
 import sys
 from flask import Flask, render_template, request, send_from_directory, jsonify, session
+from werkzeug.utils import secure_filename
 from celery import Celery
 from datetime import datetime, timezone, timedelta
 
@@ -205,7 +206,11 @@ def convert():
     job_dir = os.path.join(app.config['UPLOAD_FOLDER'], job_id)
     os.makedirs(job_dir, exist_ok=True)
     
-    input_filename = file.filename
+    input_filename = secure_filename(file.filename)
+    if not input_filename:
+        # Fallback for filenames that secure_filename might strip completely
+        input_filename = f"file_{job_id}"
+        
     input_path = os.path.join(job_dir, input_filename)
     file.save(input_path)
     
@@ -304,8 +309,17 @@ def list_jobs():
     jobs_data.sort(key=lambda x: x['created_at'], reverse=True)
     return jsonify(jobs_data)
 
+def is_valid_uuid(val):
+    try:
+        uuid.UUID(str(val))
+        return True
+    except ValueError:
+        return False
+
 @app.route('/api/cancel/<job_id>', methods=['POST'])
 def cancel_job(job_id):
+    if not is_valid_uuid(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
     celery.control.revoke(job_id, terminate=True)
     
     # Update status to REVOKED in Redis
@@ -315,6 +329,8 @@ def cancel_job(job_id):
 
 @app.route('/api/delete/<job_id>', methods=['POST'])
 def delete_job(job_id):
+    if not is_valid_uuid(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
     if 'jobs' not in session:
         return jsonify({'error': 'Job not found'}), 404
         
@@ -342,6 +358,8 @@ def delete_job(job_id):
 
 @app.route('/api/retry/<job_id>', methods=['POST'])
 def retry_job(job_id):
+    if not is_valid_uuid(job_id):
+        return jsonify({'error': 'Invalid job ID'}), 400
     if 'jobs' not in session:
         return jsonify({'error': 'Job not found'}), 404
     
@@ -407,6 +425,8 @@ def retry_job(job_id):
 
 @app.route('/download/<job_id>')
 def download_file(job_id):
+    if not is_valid_uuid(job_id):
+        return "Invalid job ID", 400
     job_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
     
     # Security/Existence check

@@ -45,8 +45,7 @@ Single-page application in `web/templates/index.html`:
 
 ### Security Hardening (Current Session)
 ...
-3. **Security Headers**: Added CSP, X-Content-Type-Options, X-Frame-Options, and Referrer-Policy. Patched CSP to allow `data:` fonts and `cdn.jsdelivr.net` for Material Web components.
-4. **CI/CD Fixes**: Resolved submodule configuration error by adding `.gitmodules` and enabling recursive submodule checkout in GitHub Actions.
+4. **CI/CD Fixes**: Resolved submodule configuration error and fixed test collection failures by adding `pythonpath` to `pytest.ini`, creating `__init__.py` files, and moving module imports into test fixtures to ensure proper environment initialization.
 4. **CI/CD Fixes**: Resolved submodule configuration error by adding `.gitmodules` and enabling recursive submodule checkout in GitHub Actions.
 
 ### UX & Observability (Current Session)

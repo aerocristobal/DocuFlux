@@ -4,18 +4,21 @@ import os
 import time
 import requests
 
-# We need to import tasks after conftest sets up the path and env vars
-from tasks import convert_document, convert_with_marker, cleanup_old_files
+# Fixture to provide tasks module
+@pytest.fixture
+def tasks():
+    import tasks
+    return tasks
 
 @patch('tasks.redis_client')
 @patch('subprocess.run')
 @patch('os.makedirs')
 @patch('os.path.exists')
-def test_convert_document_success(mock_exists, mock_makedirs, mock_run, mock_redis):
+def test_convert_document_success(mock_exists, mock_makedirs, mock_run, mock_redis, tasks):
     mock_exists.return_value = True
     mock_run.return_value = MagicMock(returncode=0, stdout="done", stderr="")
     
-    result = convert_document(
+    result = tasks.convert_document(
         job_id='job1',
         input_path='/in/test.md',
         output_path='/out/test.html',
@@ -35,11 +38,11 @@ def test_convert_document_success(mock_exists, mock_makedirs, mock_run, mock_red
 
 @patch('tasks.redis_client')
 @patch('os.path.exists')
-def test_convert_document_missing_file(mock_exists, mock_redis):
+def test_convert_document_missing_file(mock_exists, mock_redis, tasks):
     mock_exists.return_value = False
     
     with pytest.raises(FileNotFoundError):
-        convert_document(
+        tasks.convert_document(
             job_id='job1',
             input_path='/in/missing.md',
             output_path='/out/test.html',
@@ -53,7 +56,7 @@ def test_convert_document_missing_file(mock_exists, mock_redis):
 @patch('requests.post')
 @patch('os.makedirs')
 @patch('os.path.exists')
-def test_convert_with_marker_success(mock_exists, mock_makedirs, mock_post, mock_redis):
+def test_convert_with_marker_success(mock_exists, mock_makedirs, mock_post, mock_redis, tasks):
     mock_exists.return_value = True
     
     # Mock successful response
@@ -65,35 +68,10 @@ def test_convert_with_marker_success(mock_exists, mock_makedirs, mock_post, mock
     
     # Mock open for input and output
     with patch('builtins.open', mock_open(read_data=b"pdf content")) as m_open:
-        # We need to handle the fact that it opens input (rb) and output (w)
-        # mock_open is tricky with multiple files.
-        # Let's simplify and just assume it works or use side_effect if needed.
-        
-        # We need to mock the self argument since it's a bound task
         mock_self = MagicMock()
         mock_self.request.retries = 0
         
-        # Call the task function directly (bypassing celery wrapper if possible, 
-        # but since we imported the decorated task, we should use .run or call it if eager)
-        # 'convert_with_marker' is a celery Task object.
-        # We can call the underlying function via .run provided we pass self.
-        
-        # Wait, Celery tasks when called directly in tests acts like the function if not bound?
-        # But this is bound.
-        # Better to use the Task class's run method or invoke it.
-        # Or simpler: access the wrapped function?
-        
-        # In recent celery, calling the task object directly invokes the task.
-        # But if it uses `self`, we might run into issues if we don't mock the context.
-        # Let's try calling it. If it fails due to missing self, we patch it.
-        
-        # Actually, for bound tasks, calling them directly injects a mock self? No.
-        # Let's use `.run()` explicitly which requires explicit arguments including self? No, `run` is the method.
-        # The logic is inside `convert_with_marker`.
-        
-        # Let's mock the task object logic by patching the `requests` call which is the main thing.
-        
-        result = convert_with_marker.run(
+        result = tasks.convert_with_marker.run(
             mock_self,
             job_id='job_ai',
             input_path='/in/test.pdf',
@@ -109,7 +87,7 @@ def test_convert_with_marker_success(mock_exists, mock_makedirs, mock_post, mock
 @patch('tasks.redis_client')
 @patch('requests.post')
 @patch('os.path.exists')
-def test_convert_with_marker_api_error(mock_exists, mock_post, mock_redis):
+def test_convert_with_marker_api_error(mock_exists, mock_post, mock_redis, tasks):
     mock_exists.return_value = True
     
     mock_response = MagicMock()
@@ -121,7 +99,7 @@ def test_convert_with_marker_api_error(mock_exists, mock_post, mock_redis):
     mock_self.request.retries = 0
     
     with pytest.raises(Exception, match="Marker API failed"):
-        convert_with_marker.run(
+        tasks.convert_with_marker.run(
             mock_self,
             'job_fail',
             '/in/test.pdf',
@@ -134,7 +112,7 @@ def test_convert_with_marker_api_error(mock_exists, mock_post, mock_redis):
 @patch('shutil.rmtree')
 @patch('os.listdir')
 @patch('os.path.exists')
-def test_cleanup_old_files(mock_exists, mock_listdir, mock_rmtree, mock_redis):
+def test_cleanup_old_files(mock_exists, mock_listdir, mock_rmtree, mock_redis, tasks):
     mock_exists.return_value = True
     mock_listdir.return_value = ['job_old', 'job_fresh']
     
@@ -144,26 +122,17 @@ def test_cleanup_old_files(mock_exists, mock_listdir, mock_rmtree, mock_redis):
             return {'status': 'SUCCESS', 'completed_at': str(time.time() - 4000)} # > 1h
         return {'status': 'SUCCESS', 'completed_at': str(time.time())}
     
-    # We need to patch get_job_metadata or redis_client.hgetall
-    # The task calls get_job_metadata which calls hgetall
     mock_redis.hgetall.side_effect = lambda k: get_meta(k) if 'job:' in k else {}
     
     # Mock time
     with patch('time.time') as mock_time:
         mock_time.return_value = 1000000
-        # Setup timestamps relative to this
-        # job_old: completed at 1000000 - 4000 = 996000
-        
-        # Adjust side effect to use the mock time logic or just fixed values
         mock_redis.hgetall.side_effect = None
         mock_redis.hgetall.side_effect = [
              {'status': 'SUCCESS', 'completed_at': str(1000000 - 4000)}, # job_old
              {'status': 'SUCCESS', 'completed_at': str(1000000 - 100)}   # job_fresh
         ]
         
-        cleanup_old_files()
+        tasks.cleanup_old_files()
         
-        # Should delete job_old but not job_fresh
-        assert mock_rmtree.call_count >= 1 # upload and output dirs
-        # verify we called delete for job_old
-        # Ideally check args, but call_count is a good start
+        assert mock_rmtree.call_count >= 1
