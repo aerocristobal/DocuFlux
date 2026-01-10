@@ -1,7 +1,13 @@
 import pytest
 import json
 import io
+import uuid
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
+
+@pytest.fixture
+def valid_job_id():
+    return str(uuid.uuid4())
 
 def test_index(client):
     response = client.get('/')
@@ -73,7 +79,7 @@ def test_convert_success(mock_celery, mock_redis, mock_disk, mock_magic, client)
     
     # Verify celery task was called
     mock_celery.send_task.assert_called_once()
-    args = mock_celery.send_task.call_args
+    args, kwargs = mock_celery.send_task.call_args
     assert args[0] == 'tasks.convert_document'
 
 @patch('app.check_disk_space')
@@ -91,17 +97,18 @@ def test_list_jobs_empty(client):
     assert response.json == []
 
 @patch('app.redis_client')
-def test_list_jobs_with_data(mock_redis, client):
-    # Setup session
+def test_list_jobs_with_data(mock_redis, client, valid_job_id):
+    # Setup session with a recent timestamp
+    now_iso = datetime.now(timezone.utc).isoformat()
     with client.session_transaction() as sess:
         sess['jobs'] = [{
-            'id': 'job1',
+            'id': valid_job_id,
             'filename': 'test.md',
             'from': 'markdown',
             'to': 'html',
-            'created_at': '2024-01-01T12:00:00+00:00',
-            'input_path': '/tmp/in',
-            'output_path': '/tmp/out'
+            'created_at': now_iso,
+            'input_path': 'data/uploads/test.md',
+            'output_path': 'data/outputs/test.html'
         }]
     
     # Setup Redis pipeline mock
@@ -116,23 +123,23 @@ def test_list_jobs_with_data(mock_redis, client):
     assert response.status_code == 200
     assert len(response.json) == 1
     assert response.json[0]['status'] == 'SUCCESS'
-    assert response.json[0]['download_url'] == '/download/job1'
+    assert response.json[0]['download_url'] == f'/download/{valid_job_id}'
 
 @patch('app.celery')
 @patch('app.redis_client')
-def test_cancel_job(mock_redis, mock_celery, client):
-    response = client.post('/api/cancel/job1')
+def test_cancel_job(mock_redis, mock_celery, client, valid_job_id):
+    response = client.post(f'/api/cancel/{valid_job_id}')
     assert response.status_code == 200
-    mock_celery.control.revoke.assert_called_with('job1', terminate=True)
+    mock_celery.control.revoke.assert_called_with(valid_job_id, terminate=True)
     mock_redis.hset.assert_called()
 
 @patch('shutil.rmtree')
 @patch('app.redis_client')
-def test_delete_job(mock_redis, mock_rmtree, client):
+def test_delete_job(mock_redis, mock_rmtree, client, valid_job_id):
     with client.session_transaction() as sess:
-        sess['jobs'] = [{'id': 'job1'}]
+        sess['jobs'] = [{'id': valid_job_id}]
         
-    response = client.post('/api/delete/job1')
+    response = client.post(f'/api/delete/{valid_job_id}')
     assert response.status_code == 200
     assert response.json['status'] == 'deleted'
     
@@ -140,28 +147,29 @@ def test_delete_job(mock_redis, mock_rmtree, client):
     with client.session_transaction() as sess:
         assert len(sess['jobs']) == 0
         
-    mock_redis.delete.assert_called_with('job:job1')
+    mock_redis.delete.assert_called_with(f'job:{valid_job_id}')
 
 @patch('os.path.exists')
 @patch('shutil.copy2')
 @patch('app.redis_client')
 @patch('app.celery')
-def test_retry_job(mock_celery, mock_redis, mock_copy, mock_exists, client):
+def test_retry_job(mock_celery, mock_redis, mock_copy, mock_exists, client, valid_job_id):
     mock_exists.return_value = True # input file exists
     
+    now_iso = datetime.now(timezone.utc).isoformat()
     with client.session_transaction() as sess:
         sess['jobs'] = [{
-            'id': 'job1',
+            'id': valid_job_id,
             'filename': 'test.md',
             'from': 'markdown',
             'to': 'html',
-            'created_at': '2024-01-01T12:00:00+00:00',
-            'input_path': 'data/uploads/job1/test.md',
-            'output_path': 'data/outputs/job1/test.html'
+            'created_at': now_iso,
+            'input_path': f'data/uploads/{valid_job_id}/test.md',
+            'output_path': f'data/outputs/{valid_job_id}/test.html'
         }]
 
     with patch('os.makedirs'):
-        response = client.post('/api/retry/job1')
+        response = client.post(f'/api/retry/{valid_job_id}')
     
     assert response.status_code == 200
     assert response.json['status'] == 'retried'

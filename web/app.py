@@ -234,7 +234,7 @@ def convert():
     # Queue the task
     task_name = 'tasks.convert_with_marker' if from_format == 'pdf_marker' else 'tasks.convert_document'
     task = celery.send_task(task_name, args=[
-        job_id, input_path, output_path, from_format, to_format
+        job_id, input_filename, output_filename, from_format, to_format
     ], task_id=job_id)
     
     # Store job in session
@@ -406,7 +406,7 @@ def retry_job(job_id):
     # Queue task with NEW paths
     task_name = 'tasks.convert_with_marker' if job_data['from'] == 'pdf_marker' else 'tasks.convert_document'
     celery.send_task(task_name, args=[
-        new_job_id, new_input_path, new_output_path, job_data['from'], job_data['to']
+        new_job_id, input_filename, output_filename, job_data['from'], job_data['to']
     ], task_id=new_job_id)
     
     # Add new job to session

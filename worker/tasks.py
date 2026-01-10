@@ -16,6 +16,17 @@ root_logger = logging.getLogger()
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 
+UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
+OUTPUT_FOLDER = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
+
+def is_valid_uuid(val):
+    try:
+        import uuid
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, ImportError):
+        return False
+
 # Metadata Redis client (DB 1) with connection pooling
 redis_client = redis.Redis.from_url(
     os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1'),
@@ -57,7 +68,14 @@ def get_job_metadata(job_id):
     acks_late=True,           # Re-queue if worker dies
     reject_on_worker_lost=True
 )
-def convert_document(job_id, input_path, output_path, from_format, to_format):
+def convert_document(job_id, input_filename, output_filename, from_format, to_format):
+    if not is_valid_uuid(job_id):
+        logging.error(f"Invalid job_id received: {job_id}")
+        return {"status": "error", "message": "Invalid job ID"}
+
+    input_path = os.path.join(UPLOAD_FOLDER, job_id, input_filename)
+    output_path = os.path.join(OUTPUT_FOLDER, job_id, output_filename)
+
     logging.info(f"Starting conversion for job {job_id}: {from_format} -> {to_format}")
     update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time())})
     
@@ -104,7 +122,14 @@ def convert_document(job_id, input_path, output_path, from_format, to_format):
     reject_on_worker_lost=True,
     max_retries=10            # Retry for ~5 minutes (10 * 30s)
 )
-def convert_with_marker(self, job_id, input_path, output_path, from_format, to_format):
+def convert_with_marker(self, job_id, input_filename, output_filename, from_format, to_format):
+    if not is_valid_uuid(job_id):
+        logging.error(f"Invalid job_id received: {job_id}")
+        return {"status": "error", "message": "Invalid job ID"}
+
+    input_path = os.path.join(UPLOAD_FOLDER, job_id, input_filename)
+    output_path = os.path.join(OUTPUT_FOLDER, job_id, output_filename)
+
     logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1})")
     update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time())})
     
@@ -212,6 +237,11 @@ def cleanup_old_files():
     logging.info(f"Running cleanup. Found {len(job_ids)} jobs on disk.")
 
     for job_id in job_ids:
+        # Security: Only process directories that look like UUIDs
+        if not is_valid_uuid(job_id):
+            logging.debug(f"Skipping non-UUID directory during cleanup: {job_id}")
+            continue
+
         # Fetch metadata using Redis Hash
         key = f"job:{job_id}"
         meta = get_job_metadata(job_id)

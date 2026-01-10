@@ -47,7 +47,8 @@ Single-page application in `web/templates/index.html`:
 ...
 4. **CI/CD Fixes**: Resolved submodule configuration error and fixed test collection failures by adding `pythonpath` to `pytest.ini`, creating `__init__.py` files, and moving module imports into test fixtures to ensure proper environment initialization.
 5. **Security Remediations**: 
-    - Fixed path traversal vulnerability by sanitizing filenames and validating Job UUIDs.
+    - Hardened against path traversal by sanitizing filenames with `secure_filename` and strictly validating Job UUIDs in both web routes and worker tasks.
+    - Improved worker security by reconstructing paths internally using validated Job IDs rather than accepting full paths from the web service.
     - Disabled Flask debug mode by default to prevent info exposure and RCE risks.
 4. **CI/CD Fixes**: Resolved submodule configuration error by adding `.gitmodules` and enabling recursive submodule checkout in GitHub Actions.
 
