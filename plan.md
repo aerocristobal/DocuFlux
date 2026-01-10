@@ -47,8 +47,11 @@ Single-page application in `web/templates/index.html`:
 ...
 4. **CI/CD Fixes**: Resolved submodule configuration error and fixed test collection failures by adding `pythonpath` to `pytest.ini`, creating `__init__.py` files, and moving module imports into test fixtures to ensure proper environment initialization.
 5. **Security Remediations**: 
-    - Hardened against path traversal by sanitizing filenames with `secure_filename` and strictly validating Job UUIDs in both web routes and worker tasks.
-    - Improved worker security by reconstructing paths internally using validated Job IDs rather than accepting full paths from the web service.
+    - Hardened against path traversal by sanitizing filenames with `secure_filename` and strictly validating Job UUIDs.
+    - Implemented **CSRF protection** using `Flask-WTF` and updated frontend to handle tokens.
+    - Added **Rate Limiting** via `Flask-Limiter` to mitigate brute-force and DoS risks.
+    - Hardened session cookies (`HttpOnly`, `Secure`, `SameSite`) and enabled **HSTS**.
+    - Fixed **Cross-site Scripting (XSS)** vulnerabilities in the frontend by escaping all user-controlled data before rendering.
     - Disabled Flask debug mode by default to prevent info exposure and RCE risks.
 4. **CI/CD Fixes**: Resolved submodule configuration error by adding `.gitmodules` and enabling recursive submodule checkout in GitHub Actions.
 
@@ -137,11 +140,11 @@ Single-page application in `web/templates/index.html`:
 ## Epic 11: Security Hardening
 - [x] 11.1 Implement file size limits (100MB max upload).
 - [x] 11.2 Add MIME type validation (whitelist approach, not extension-only).
-- [ ] 11.3 Add rate limiting on `/convert` endpoint (Flask-Limiter).
-- [x] 11.4 Add security headers (CSP, X-Frame-Options, etc.).
-- [ ] 11.5 Audit Redis key patterns for injection risks.
+- [x] 11.3 Add rate limiting on `/convert` endpoint (Flask-Limiter).
+- [x] 11.4 Add security headers (CSP, X-Frame-Options, HSTS, etc.).
+- [x] 11.5 Audit Redis key patterns for injection risks.
 - [x] 11.6 Externalize `SECRET_KEY` with documented env var requirement.
-- [ ] 11.7 Review Gunicorn/FastAPI middleware for production-grade security headers.
+- [x] 11.7 Review Gunicorn/FastAPI middleware for production-grade security headers.
 - [ ] 11.8 Add GitHub ruleset to protect branch from forced push.
 
 ## Epic 12: Test Infrastructure

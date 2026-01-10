@@ -10,17 +10,40 @@ import sys
 from flask import Flask, render_template, request, send_from_directory, jsonify, session
 from werkzeug.utils import secure_filename
 from celery import Celery
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect
 from datetime import datetime, timezone, timedelta
 
 # Configure Structured Logging
 handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
+handler.setFormatter(logging.Formatter('{"time": "% (asctime)s", "level": "% (levelname)s", "module": "% (module)s", "message": "% (message)s"}'))
 root_logger = logging.getLogger()
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key') # Needed for session
+
+# Security Hardening for Cookies
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+if os.environ.get('FLASK_DEBUG', 'false').lower() != 'true':
+    app.config['SESSION_COOKIE_SECURE'] = True
+
+# Rate Limiting Configuration
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["500 per day", "100 per hour"],
+    storage_uri=os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1'),
+    strategy="fixed-window",
+)
+
+# CSRF Protection
+csrf = CSRFProtect(app)
 
 UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
 OUTPUT_FOLDER = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
@@ -55,7 +78,16 @@ def add_security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    
+    # HSTS (1 year) - Only if not in debug mode
+    if not app.debug:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+        
     return response
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify({"error": "Rate limit exceeded", "message": str(e.description)}), 429
 
 # Metadata Redis client (DB 1) with connection pooling
 redis_client = redis.Redis.from_url(

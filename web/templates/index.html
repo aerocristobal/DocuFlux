@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>DocuFlux | Document Converter</title>
 
     <!-- Fonts: Roboto and Material Symbols -->
@@ -391,6 +392,15 @@
 
     <script>
         const formats = {{ formats|tojson }};
+        const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         const fromSelect = document.getElementById('from_format');
         const toSelect = document.getElementById('to_format');
         const convertBtn = document.getElementById('convert-btn');
@@ -570,6 +580,9 @@
             try {
                 const response = await fetch('/convert', {
                     method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrfToken
+                    },
                     body: formData
                 });
                 const data = await response.json();
@@ -601,7 +614,7 @@
             card.className = `alert-card ${type === 'error' ? 'alert-error' : 'alert-success'} fade-in`;
             card.innerHTML = `
                 <md-icon>${type === 'error' ? 'error' : 'check_circle'}</md-icon>
-                <span>${message}</span>
+                <span>${escapeHtml(message)}</span>
             `;
             alertArea.appendChild(card);
             alertTimeout = setTimeout(() => { alertArea.innerHTML = ''; }, 5000);
@@ -673,8 +686,8 @@
                 return `
                     <md-list-item data-id="${job.id}" class="job-item ${isNew ? 'fade-in' : ''}">
                         <md-icon slot="start" style="color: var(--md-sys-color-${statusColor});">${statusIcon}</md-icon>
-                        <div slot="headline">${job.filename}</div>
-                        <div slot="supporting-text">${job.from} &rarr; ${job.to} • ${timeStr}</div>
+                        <div slot="headline">${escapeHtml(job.filename)}</div>
+                        <div slot="supporting-text">${escapeHtml(job.from)} &rarr; ${escapeHtml(job.to)} • ${timeStr}</div>
                         <div slot="trailing-supporting-text">
                             <md-assist-chip label="${statusLabel}" class="status-chip"></md-assist-chip>
                         </div>
@@ -688,20 +701,29 @@
 
         async function handleCancel(id) {
             if (await confirmAction('Cancel Conversion', 'Stop processing this document?')) {
-                await fetch(`/api/cancel/${id}`, { method: 'POST' });
+                await fetch(`/api/cancel/${id}`, { 
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': csrfToken }
+                });
                 fetchJobs();
             }
         }
 
         async function handleDelete(id) {
             if (await confirmAction('Delete Record', 'Permanently remove this conversion and its files?')) {
-                await fetch(`/api/delete/${id}`, { method: 'POST' });
+                await fetch(`/api/delete/${id}`, { 
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': csrfToken }
+                });
                 fetchJobs();
             }
         }
 
         async function handleRetry(id) {
-            await fetch(`/api/retry/${id}`, { method: 'POST' });
+            await fetch(`/api/retry/${id}`, { 
+                method: 'POST',
+                headers: { 'X-CSRFToken': csrfToken }
+            });
             fetchJobs();
             showAlert('success', 'Retry job queued.');
         }
