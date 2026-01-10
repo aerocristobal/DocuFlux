@@ -5,7 +5,7 @@ import redis
 import shutil
 from flask import Flask, render_template, request, send_from_directory, jsonify, session
 from celery import Celery
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key') # Needed for session
@@ -137,7 +137,7 @@ def convert():
         'filename': input_filename,
         'from': from_format,
         'to': to_format,
-        'created_at': datetime.now().isoformat(),
+        'created_at': datetime.now(timezone.utc).isoformat(),
         'input_path': input_path, # Stored for retry
         'output_path': output_path # Stored for retry
     })
@@ -148,6 +148,29 @@ def convert():
 @app.route('/api/jobs')
 def list_jobs():
     if 'jobs' not in session or not session['jobs']:
+        return jsonify([])
+
+    # Filter out jobs older than 60 minutes
+    threshold = datetime.now(timezone.utc) - timedelta(minutes=60)
+    valid_jobs = []
+    
+    for job in session['jobs']:
+        try:
+            # Handle potential legacy naive timestamps by assuming UTC if tzinfo is missing
+            job_time = datetime.fromisoformat(job['created_at'])
+            if job_time.tzinfo is None:
+                job_time = job_time.replace(tzinfo=timezone.utc)
+            
+            if job_time > threshold:
+                valid_jobs.append(job)
+        except Exception:
+            # If date parsing fails, remove the job
+            pass
+            
+    session['jobs'] = valid_jobs
+    session.modified = True
+    
+    if not session['jobs']:
         return jsonify([])
 
     # Batch fetch all job metadata using Redis pipeline (fixes N+1 query)
@@ -249,7 +272,7 @@ def retry_job(job_id):
         'filename': job_data['filename'],
         'from': job_data['from'],
         'to': job_data['to'],
-        'created_at': datetime.now().isoformat(),
+        'created_at': datetime.now(timezone.utc).isoformat(),
         'input_path': new_input_path,
         'output_path': new_output_path
     })
