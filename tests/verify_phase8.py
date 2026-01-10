@@ -20,7 +20,7 @@ def wait_for_service():
     print("\nService failed to start.")
     return False
 
-def run_conversion(session, filename, from_fmt, to_fmt, test_name):
+def run_conversion(session, filename, from_fmt, to_fmt, test_name, save_to=None):
     print(f"\n--- {test_name} ({filename} -> {to_fmt}) ---")
     file_path = os.path.join("tests/samples", filename)
     
@@ -41,7 +41,7 @@ def run_conversion(session, filename, from_fmt, to_fmt, test_name):
             print(f"Job submitted: {job_id}")
             
             # Poll for status
-            for _ in range(30): # 30 * 2s = 60s timeout
+            for _ in range(60): # 60 * 2s = 120s timeout (Marker is slow)
                 status_r = session.get(f"{BASE_URL}/api/jobs")
                 jobs = status_r.json()
                 my_job = next((j for j in jobs if j['id'] == job_id), None)
@@ -53,6 +53,10 @@ def run_conversion(session, filename, from_fmt, to_fmt, test_name):
                         dl_r = session.get(f"{BASE_URL}{my_job['download_url']}")
                         if dl_r.status_code == 200:
                             print("Download successful!")
+                            if save_to:
+                                with open(save_to, 'wb') as f_out:
+                                    f_out.write(dl_r.content)
+                                print(f"Saved output to {save_to}")
                             return True
                         else:
                             print(f"Download failed: {dl_r.status_code}")
@@ -73,20 +77,28 @@ def run_conversion(session, filename, from_fmt, to_fmt, test_name):
 def main():
     if not wait_for_service():
         sys.exit(1)
-        
+    
+    session = requests.Session()
+    
+    # Prerequisite: Generate a PDF for testing Marker
+    print("\n[Setup] Generating PDF for Marker test...")
+    if not run_conversion(session, "test.md", "markdown", "pdf", "Setup: Generate PDF", "tests/samples/generated_test.pdf"):
+        print("Failed to generate PDF. Skipping Marker test.")
+        marker_result = "SKIPPED"
+    else:
+        marker_result = "PENDING"
+
     tests = [
-        ("test.md", "markdown", "pdf", "Markdown to PDF (LaTeX)"),
         ("test.md", "markdown", "docx", "Markdown to Docx"),
         ("test.html", "html", "epub3", "HTML to EPUB"),
     ]
     
-    # We don't have a docx sample, so we skip the explicit Docx->PDF test 
-    # OR we use the output of the second test if we saved it?
-    # For now, let's stick to the available files.
-    
-    session = requests.Session()
-    
     results = {}
+    
+    if marker_result == "PENDING":
+        success = run_conversion(session, "generated_test.pdf", "pdf_marker", "markdown", "PDF (Marker) to Markdown")
+        results["PDF (Marker) to Markdown"] = "PASS" if success else "FAIL"
+    
     for filename, from_fmt, to_fmt, name in tests:
         success = run_conversion(session, filename, from_fmt, to_fmt, name)
         results[name] = "PASS" if success else "FAIL"

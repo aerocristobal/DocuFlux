@@ -108,7 +108,7 @@ def convert_with_marker(job_id, input_path, output_path, from_format, to_format)
     
     try:
         with open(input_path, 'rb') as f:
-            files = {'file': (os.path.basename(input_path), f, 'application/pdf')}
+            files = {'pdf_file': (os.path.basename(input_path), f, 'application/pdf')}
             # Note: Marker might accept other params like 'langs'
             response = requests.post(marker_url, files=files, timeout=1200)
             
@@ -122,9 +122,16 @@ def convert_with_marker(job_id, input_path, output_path, from_format, to_format)
         
         if 'application/json' in content_type:
             data = response.json()
-            # Try to find the markdown content
-            markdown_content = data.get('markdown') or data.get('text') or data.get('content')
+            # Try to find the markdown content (nested in 'result' -> 'markdown')
+            result = data.get('result', {})
+            markdown_content = result.get('markdown') if isinstance(result, dict) else None
+            
+            # Fallback for other potential response formats
             if not markdown_content:
+                markdown_content = data.get('markdown') or data.get('text') or data.get('content')
+                
+            if not markdown_content:
+                 print(f"Marker response data: {data}") # Log for debugging
                  raise Exception("No markdown content found in Marker API response")
         else:
             # Assume raw text
