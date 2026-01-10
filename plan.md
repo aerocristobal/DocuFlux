@@ -137,7 +137,15 @@ Single-page application in `web/templates/index.html`:
 - [x] Implement USWDS components (Banner, Header, Forms, Tables, Alerts).
 - [x] Ensure accessibility compliance (skip nav link, proper labels, semantic HTML).
 
-## Phase 7: Final Verification
+## Phase 7: UI Redesign: Apple Liquid Glass
+- [x] Implement "Liquid Glass" / Glassmorphism visual style.
+    - [x] Add dynamic/colorful background (mesh gradient).
+    - [x] Apply translucency and blur (`backdrop-filter`) to containers.
+    - [x] Update border-radius and shadows for depth.
+- [x] Modernize typography (System UI fonts).
+- [x] Refine inputs and buttons to match the aesthetic.
+
+## Phase 8: Final Verification
 - [ ] Test Markdown to PDF (LaTeX).
 - [ ] Test Word to PDF.
 - [ ] Test HTML to EPUB.

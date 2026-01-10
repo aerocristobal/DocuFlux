@@ -14,13 +14,164 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/js/uswds-init.min.js" defer></script>
     
     <style>
-        /* Custom overrides if necessary, but trying to stick to USWDS utility classes */
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.5);
+            --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+            --primary-color: #0071e3; /* Apple Blue */
+            --text-color: #1d1d1f;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            color: var(--text-color);
+            background-color: #f5f5f7;
+            min-height: 100vh;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* Mesh Gradient Background */
+        .bg-gradient {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: -1;
+            background: 
+                radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+                radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
+                radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%);
+            background-size: 150% 150%;
+            animation: gradient-animation 15s ease infinite;
+            /* Lighter mesh for light mode feel */
+            background: 
+                radial-gradient(at 40% 20%, hsla(28,100%,74%,1) 0px, transparent 50%),
+                radial-gradient(at 80% 0%, hsla(189,100%,56%,1) 0px, transparent 50%),
+                radial-gradient(at 0% 50%, hsla(355,100%,93%,1) 0px, transparent 50%),
+                radial-gradient(at 80% 50%, hsla(340,100%,76%,1) 0px, transparent 50%),
+                radial-gradient(at 0% 100%, hsla(22,100%,77%,1) 0px, transparent 50%),
+                radial-gradient(at 80% 100%, hsla(242,100%,70%,1) 0px, transparent 50%),
+                radial-gradient(at 0% 0%, hsla(343,100%,76%,1) 0px, transparent 50%);
+            filter: blur(60px);
+            opacity: 0.6;
+        }
+
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            box-shadow: var(--glass-shadow);
+            padding: 2rem;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .glass-panel:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.15);
+        }
+
+        /* Override USWDS Header */
+        .usa-header {
+            background: rgba(255, 255, 255, 0.7) !important;
+            backdrop-filter: blur(10px) !important;
+            -webkit-backdrop-filter: blur(10px) !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .usa-header--basic .usa-navbar {
+            border-bottom: none;
+        }
+
+        .usa-logo__text a {
+            color: #1d1d1f !important;
+            font-weight: 600;
+        }
+
+        /* Inputs and Selects */
+        .usa-input, .usa-select {
+            background-color: rgba(255, 255, 255, 0.5) !important;
+            border: 1px solid rgba(0, 0, 0, 0.1) !important;
+            border-radius: 12px !important;
+            backdrop-filter: blur(5px);
+            transition: all 0.2s ease;
+        }
+
+        .usa-input:focus, .usa-select:focus {
+            background-color: rgba(255, 255, 255, 0.8) !important;
+            box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.3) !important;
+            border-color: var(--primary-color) !important;
+            outline: none !important;
+        }
+
+        /* Buttons */
+        .usa-button {
+            border-radius: 980px !important; /* Pill shape */
+            background-color: var(--primary-color) !important;
+            font-weight: 500 !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: all 0.2s ease;
+        }
+
+        .usa-button:hover {
+            transform: scale(1.02);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+            background-color: #0077ed !important;
+        }
+        
+        .usa-button:disabled {
+            background-color: #d2d2d7 !important;
+            box-shadow: none;
+        }
+
+        .usa-button--secondary {
+            background-color: rgba(255, 255, 255, 0.5) !important;
+            color: var(--text-color) !important;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(0, 0, 0, 0.1) !important;
+        }
+
+        .usa-button--secondary:hover {
+            background-color: rgba(255, 255, 255, 0.8) !important;
+        }
+
+        .usa-button--outline {
+             background-color: transparent !important;
+             box-shadow: none;
+             color: var(--primary-color) !important;
+             border: 1px solid var(--primary-color) !important;
+        }
+
+        /* Table */
+        .usa-table-container {
+            background: transparent !important;
+        }
+        
+        .usa-table {
+            background: transparent !important;
+        }
+        
+        .usa-table th, .usa-table td {
+            background: transparent !important;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1) !important;
+        }
+
+        .usa-table--striped tbody tr:nth-child(odd) td, 
+        .usa-table--striped tbody tr:nth-child(odd) th {
+            background-color: rgba(255, 255, 255, 0.3) !important;
+        }
+
+        /* Utility */
         .site-title { font-weight: bold; font-size: 1.5rem; }
         .spinner-small { width: 1rem; height: 1rem; border-width: 0.15em; display: inline-block; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spinner .75s linear infinite; }
         @keyframes spinner { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
+    <div class="bg-gradient"></div>
     <a class="usa-skipnav" href="#main-content">Skip to main content</a>
 
     <!-- Header -->
@@ -42,7 +193,7 @@
             <div class="grid-row grid-gap">
                 <!-- Conversion Form Section -->
                 <div class="tablet:grid-col-4">
-                    <div class="bg-base-lightest padding-3 radius-lg margin-bottom-4">
+                    <div class="glass-panel margin-bottom-4">
                         <h2 class="usa-heading-md margin-top-0">New Conversion</h2>
                         
                         <div id="alert-area"></div>
@@ -72,7 +223,7 @@
                             </select>
 
                             <div class="margin-top-3">
-                                <button type="submit" id="convert-btn" class="usa-button" disabled>Convert Now</button>
+                                <button type="submit" id="convert-btn" class="usa-button width-full">Convert Now</button>
                             </div>
                         </form>
                     </div>
@@ -80,9 +231,10 @@
 
                 <!-- Job List Section -->
                 <div class="tablet:grid-col-8">
-                    <h2 class="usa-heading-md margin-top-0">My Conversions</h2>
-                    <div class="usa-table-container">
-                        <table class="usa-table usa-table--striped usa-table--compact width-full">
+                    <div class="glass-panel" style="min-height: 400px;">
+                        <h2 class="usa-heading-md margin-top-0">My Conversions</h2>
+                        <div class="usa-table-container">
+                            <table class="usa-table usa-table--striped usa-table--compact width-full">
                             <thead>
                                 <tr>
                                     <th scope="col">File</th>
@@ -101,6 +253,7 @@
                             <p class="usa-alert__text">No conversions found.</p>
                         </div>
                     </div>
+                    </div> <!-- End glass-panel -->
                 </div>
             </div>
         </div>
