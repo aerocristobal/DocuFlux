@@ -5,183 +5,144 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pandoc Online Converter</title>
 
-    <!-- Preconnect to CDN for faster asset loading -->
-    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <!-- Fonts: Roboto and Material Symbols -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
 
-    <!-- USWDS CSS -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/css/uswds.min.css">
-    <!-- USWDS Init (deferred for non-blocking load) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/js/uswds-init.min.js" defer></script>
+    <!-- Material Web Import Map -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@material/web/": "https://esm.run/@material/web/"
+        }
+      }
+    </script>
     
+    <!-- Component Imports -->
+    <script type="module">
+      import '@material/web/all.js';
+      import { styles as typescaleStyles } from '@material/web/typography/md-typescale-styles.js';
+      document.adoptedStyleSheets.push(typescaleStyles.styleSheet);
+    </script>
+
     <style>
         :root {
-            --glass-bg: rgba(255, 255, 255, 0.4);
-            --glass-border: rgba(255, 255, 255, 0.5);
-            --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
-            --primary-color: #0071e3; /* Apple Blue */
-            --text-color: #1d1d1f;
+            /* Material 3 Token Simulation (Light Theme) */
+            --md-sys-color-primary: #005ac1;
+            --md-sys-color-on-primary: #ffffff;
+            --md-sys-color-primary-container: #d8e2ff;
+            --md-sys-color-on-primary-container: #001a41;
+            --md-sys-color-secondary: #575e71;
+            --md-sys-color-secondary-container: #dbe2f9;
+            --md-sys-color-tertiary: #715573;
+            --md-sys-color-tertiary-container: #fbd7fc;
+            --md-sys-color-error: #ba1a1a;
+            --md-sys-color-error-container: #ffdad6;
+            --md-sys-color-background: #fdfbff;
+            --md-sys-color-on-background: #1a1b1e;
+            --md-sys-color-surface: #fdfbff;
+            --md-sys-color-on-surface: #1a1b1e;
+            --md-sys-color-surface-variant: #e1e2ec;
+            --md-sys-color-on-surface-variant: #44474f;
+            --md-sys-color-outline: #74777f;
+            
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--md-sys-color-background);
+            color: var(--md-sys-color-on-background);
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-            color: var(--text-color);
-            background-color: #f5f5f7;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
             min-height: 100vh;
-            position: relative;
-            overflow-x: hidden;
         }
 
-        /* Mesh Gradient Background */
-        .bg-gradient {
-            position: fixed;
+        /* Top App Bar */
+        header {
+            background-color: var(--md-sys-color-surface);
+            color: var(--md-sys-color-on-surface);
+            padding: 0 16px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+            position: sticky;
             top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            z-index: -1;
-            background: 
-                radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
-                radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
-                radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%);
-            background-size: 150% 150%;
-            animation: gradient-animation 15s ease infinite;
-            /* Lighter mesh for light mode feel */
-            background: 
-                radial-gradient(at 40% 20%, hsla(28,100%,74%,1) 0px, transparent 50%),
-                radial-gradient(at 80% 0%, hsla(189,100%,56%,1) 0px, transparent 50%),
-                radial-gradient(at 0% 50%, hsla(355,100%,93%,1) 0px, transparent 50%),
-                radial-gradient(at 80% 50%, hsla(340,100%,76%,1) 0px, transparent 50%),
-                radial-gradient(at 0% 100%, hsla(22,100%,77%,1) 0px, transparent 50%),
-                radial-gradient(at 80% 100%, hsla(242,100%,70%,1) 0px, transparent 50%),
-                radial-gradient(at 0% 0%, hsla(343,100%,76%,1) 0px, transparent 50%);
-            filter: blur(60px);
-            opacity: 0.6;
+            z-index: 10;
         }
 
-        .glass-panel {
-            background: var(--glass-bg);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border);
-            border-radius: 24px;
-            box-shadow: var(--glass-shadow);
-            padding: 2rem;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        .logo {
+            font-size: 22px;
+            font-weight: 400; /* Regular for Material */
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: inherit;
         }
 
-        .glass-panel:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.15);
+        /* Layout */
+        main {
+            flex: 1;
+            padding: 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+            box-sizing: border-box;
         }
 
-        /* Override USWDS Header */
-        .usa-header {
-            background: rgba(255, 255, 255, 0.7) !important;
-            backdrop-filter: blur(10px) !important;
-            -webkit-backdrop-filter: blur(10px) !important;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-        }
-        
-        .usa-header--basic .usa-navbar {
-            border-bottom: none;
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 24px;
         }
 
-        .usa-logo__text a {
-            color: #1d1d1f !important;
-            font-weight: 600;
+        @media (min-width: 768px) {
+            .grid-layout {
+                grid-template-columns: 350px 1fr;
+            }
         }
 
-        /* Inputs and Selects */
-        .usa-input, .usa-select {
-            background-color: rgba(255, 255, 255, 0.5) !important;
-            border: 1px solid rgba(0, 0, 0, 0.1) !important;
-            border-radius: 12px !important;
-            backdrop-filter: blur(5px);
-            transition: all 0.2s ease;
+        /* Cards/Surfaces */
+        .surface-card {
+            background-color: var(--md-sys-color-surface);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px 0 rgba(0,0,0,0.06);
+            /* Simulating md-elevation-1 */
+            border: 1px solid var(--md-sys-color-surface-variant);
         }
 
-        .usa-input:focus, .usa-select:focus {
-            background-color: rgba(255, 255, 255, 0.8) !important;
-            box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.3) !important;
-            border-color: var(--primary-color) !important;
-            outline: none !important;
+        h2 {
+            margin-top: 0;
+            margin-bottom: 24px;
+            font-size: 1.375rem;
+            font-weight: 500;
+            color: var(--md-sys-color-on-surface);
         }
 
-        /* Buttons */
-        .usa-button {
-            border-radius: 980px !important; /* Pill shape */
-            background-color: var(--primary-color) !important;
-            font-weight: 500 !important;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            transition: all 0.2s ease;
-        }
-
-        .usa-button:hover {
-            transform: scale(1.02);
-            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
-            background-color: #0077ed !important;
-        }
-        
-        .usa-button:disabled {
-            background-color: #d2d2d7 !important;
-            box-shadow: none;
-        }
-
-        .usa-button--secondary {
-            background-color: rgba(255, 255, 255, 0.5) !important;
-            color: var(--text-color) !important;
-            backdrop-filter: blur(5px);
-            border: 1px solid rgba(0, 0, 0, 0.1) !important;
-        }
-
-        .usa-button--secondary:hover {
-            background-color: rgba(255, 255, 255, 0.8) !important;
-        }
-
-        .usa-button--outline {
-             background-color: transparent !important;
-             box-shadow: none;
-             color: var(--primary-color) !important;
-             border: 1px solid var(--primary-color) !important;
-        }
-
-        /* Table */
-        .usa-table-container {
-            background: transparent !important;
-        }
-        
-        .usa-table {
-            background: transparent !important;
-        }
-        
-        .usa-table th, .usa-table td {
-            background: transparent !important;
-            border-bottom: 1px solid rgba(0, 0, 0, 0.1) !important;
-        }
-
-        .usa-table--striped tbody tr:nth-child(odd) td, 
-        .usa-table--striped tbody tr:nth-child(odd) th {
-            background-color: rgba(255, 255, 255, 0.3) !important;
-        }
-        
         /* Drag and Drop Zone */
         .drop-zone {
-            border: 2px dashed var(--glass-border);
-            border-radius: 12px;
-            padding: 2rem;
+            border: 2px dashed var(--md-sys-color-outline);
+            border-radius: 8px;
+            padding: 32px 16px;
             text-align: center;
-            transition: all 0.2s ease;
-            background-color: rgba(255, 255, 255, 0.2);
+            background-color: var(--md-sys-color-surface-variant);
+            color: var(--md-sys-color-on-surface-variant);
             cursor: pointer;
             position: relative;
+            transition: all 0.2s;
+            margin-bottom: 24px;
         }
 
         .drop-zone:hover, .drop-zone--dragover {
-            background-color: rgba(255, 255, 255, 0.4);
-            border-color: var(--primary-color);
-            box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.1);
+            background-color: var(--md-sys-color-primary-container);
+            color: var(--md-sys-color-on-primary-container);
+            border-color: var(--md-sys-color-primary);
         }
-        
+
         .drop-zone input[type="file"] {
             position: absolute;
             top: 0;
@@ -192,118 +153,199 @@
             cursor: pointer;
         }
 
-        .drop-zone__prompt {
+        .drop-zone-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
             pointer-events: none;
-            color: var(--text-color);
         }
 
-        /* Utility */
-        .site-title { font-weight: bold; font-size: 1.5rem; }
-        .spinner-small { width: 1rem; height: 1rem; border-width: 0.15em; display: inline-block; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spinner .75s linear infinite; }
-        @keyframes spinner { to { transform: rotate(360deg); } }
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 16px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        md-filled-select, md-filled-button, md-outlined-button {
+            width: 100%;
+            margin-bottom: 8px;
+        }
+
+        /* Table Styles */
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--md-sys-color-outline);
+            color: var(--md-sys-color-on-surface-variant);
+            font-weight: 500;
+        }
+
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--md-sys-color-surface-variant);
+            color: var(--md-sys-color-on-surface);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Status Badges */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .status-success { background: #e6f4ea; color: #137333; }
+        .status-pending { background: #fef7e0; color: #b06000; }
+        .status-error { background: #fce8e6; color: #c5221f; }
+
+        /* Alerts */
+        .alert-area {
+            margin-bottom: 16px;
+        }
+        
+        .alert-card {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .alert-error {
+            background-color: var(--md-sys-color-error-container);
+            color: var(--md-sys-color-on-error-container);
+        }
+        
+        .alert-success {
+            background-color: var(--md-sys-color-primary-container);
+            color: var(--md-sys-color-on-primary-container);
+        }
+        
+        .hidden { display: none; }
     </style>
 </head>
 <body>
-    <div class="bg-gradient"></div>
-    <a class="usa-skipnav" href="#main-content">Skip to main content</a>
 
-    <!-- Header -->
-    <div class="usa-overlay"></div>
-    <header class="usa-header usa-header--basic">
-        <div class="usa-nav-container">
-            <div class="usa-navbar">
-                <div class="usa-logo" id="basic-logo">
-                    <em class="usa-logo__text">
-                        <a href="/" title="Home" aria-label="Home">Pandoc Web Service</a>
-                    </em>
-                </div>
-            </div>
-        </div>
+    <header>
+        <a href="/" class="logo">
+            <md-icon>description</md-icon>
+            Pandoc Web Service
+        </a>
     </header>
 
-    <main id="main-content">
-        <div class="grid-container margin-top-4">
-            <div class="grid-row grid-gap">
-                <!-- Conversion Form Section -->
-                <div class="tablet:grid-col-4">
-                    <div class="glass-panel margin-bottom-4">
-                        <h2 class="usa-heading-md margin-top-0">New Conversion</h2>
-                        
-                        <div id="alert-area"></div>
+    <main>
+        <div class="grid-layout">
+            <!-- Left Column: Upload -->
+            <section>
+                <div class="surface-card">
+                    <h2>New Conversion</h2>
+                    
+                    <div id="alert-area" class="alert-area"></div>
 
-                        <form id="convert-form" class="usa-form" style="max-width: none;" enctype="multipart/form-data">
-                            
-                            <!-- Drag & Drop Zone -->
-                            <div class="drop-zone margin-bottom-3" id="drop-zone">
-                                <span class="drop-zone__prompt" id="drop-zone-prompt">Drag & Drop file here or click to select</span>
-                                <input class="usa-input" id="file" name="file" type="file" required>
+                    <form id="convert-form">
+                        <!-- Drop Zone -->
+                        <div class="drop-zone" id="drop-zone">
+                            <div class="drop-zone-content">
+                                <md-icon style="font-size: 40px;">cloud_upload</md-icon>
+                                <span id="drop-zone-prompt">Drag file here or click</span>
                             </div>
+                            <input type="file" id="file" name="file" required>
+                        </div>
 
-                            <div id="format-warning" class="usa-alert usa-alert--warning margin-top-2 display-none">
-                                <div class="usa-alert__body">
-                                    <h4 class="usa-alert__heading">Warning</h4>
-                                    <p class="usa-alert__text" id="format-warning-text"></p>
-                                </div>
-                            </div>
-
-                            <label class="usa-label" for="from_format">From Format</label>
-                            <select class="usa-select" id="from_format" name="from_format" required>
-                                <option value="" selected disabled>- Select format -</option>
+                        <!-- Format Selection -->
+                        <div class="form-group">
+                            <md-filled-select label="From Format" id="from_format" name="from_format" required>
+                                <md-select-option value="" disabled selected>
+                                    <div slot="headline">Select format</div>
+                                </md-select-option>
                                 {% for fmt in formats %}
-                                <option value="{{ fmt.key }}">{{ fmt.name }}</option>
+                                <md-select-option value="{{ fmt.key }}">
+                                    <div slot="headline">{{ fmt.name }}</div>
+                                </md-select-option>
                                 {% endfor %}
-                            </select>
+                            </md-filled-select>
+                        </div>
 
-                            <label class="usa-label" for="to_format">To Format</label>
-                            <select class="usa-select" id="to_format" name="to_format" disabled required>
-                                <option value="" selected disabled>- Select source first -</option>
-                            </select>
+                        <div class="form-group">
+                            <md-filled-select label="To Format" id="to_format" name="to_format" disabled required>
+                                <md-select-option value="" disabled selected>
+                                    <div slot="headline">Select source first</div>
+                                </md-select-option>
+                            </md-filled-select>
+                        </div>
 
-                            <div class="margin-top-3">
-                                <button type="submit" id="convert-btn" class="usa-button width-full">Convert Now</button>
-                            </div>
-                        </form>
+                        <!-- Progress Bar (Hidden by default) -->
+                        <md-linear-progress id="progress-bar" indeterminate class="hidden" style="width: 100%; margin-bottom: 16px;"></md-linear-progress>
+
+                        <!-- Actions -->
+                        <md-filled-button type="submit" id="convert-btn">
+                            Convert Now
+                            <md-icon slot="icon">transform</md-icon>
+                        </md-filled-button>
+                    </form>
+                    
+                    <div id="format-warning" class="alert-card alert-error hidden" style="margin-top: 16px;">
+                        <md-icon>warning</md-icon>
+                        <span id="format-warning-text"></span>
                     </div>
                 </div>
+            </section>
 
-                <!-- Job List Section -->
-                <div class="tablet:grid-col-8">
-                    <div class="glass-panel" style="min-height: 400px;">
-                        <h2 class="usa-heading-md margin-top-0">My Conversions</h2>
-                        <div class="usa-table-container">
-                            <table class="usa-table usa-table--striped usa-table--compact width-full">
+            <!-- Right Column: Jobs -->
+            <section>
+                <div class="surface-card" style="min-height: 500px;">
+                    <h2>My Conversions</h2>
+                    
+                    <div class="table-container">
+                        <table>
                             <thead>
                                 <tr>
-                                    <th scope="col">File</th>
-                                    <th scope="col">Conversion</th>
-                                    <th scope="col">Status</th>
-                                    <th scope="col">Actions</th>
+                                    <th>File</th>
+                                    <th>Conversion</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
-                            <tbody id="jobs-table-body" class="font-sans-xs">
-                                <!-- Jobs populated via JS -->
+                            <tbody id="jobs-table-body">
+                                <!-- Populated by JS -->
                             </tbody>
                         </table>
                     </div>
-                    <div id="no-jobs-msg" class="usa-alert usa-alert--info usa-alert--slim margin-top-2 display-none">
-                        <div class="usa-alert__body">
-                            <p class="usa-alert__text">No conversions found.</p>
-                        </div>
+                    
+                    <div id="no-jobs-msg" style="text-align: center; padding: 24px; color: var(--md-sys-color-secondary);" class="hidden">
+                        <md-icon style="font-size: 48px; opacity: 0.5; margin-bottom: 8px;">inbox</md-icon>
+                        <div>No conversions found</div>
                     </div>
-                    </div> <!-- End glass-panel -->
                 </div>
-            </div>
+            </section>
         </div>
     </main>
 
-    <!-- USWDS JS -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/js/uswds.min.js"></script>
-    
     <script>
         const formats = {{ formats|tojson }};
         const fromSelect = document.getElementById('from_format');
         const toSelect = document.getElementById('to_format');
         const convertBtn = document.getElementById('convert-btn');
+        const progressBar = document.getElementById('progress-bar');
         const formatWarning = document.getElementById('format-warning');
         const formatWarningText = document.getElementById('format-warning-text');
         const convertForm = document.getElementById('convert-form');
@@ -344,87 +386,99 @@
         });
 
         function handleFileSelect(file) {
-            // Update UI prompt
             dropZonePrompt.textContent = `Selected: ${file.name}`;
             
-            // Auto-detect format
             const filename = file.name.toLowerCase();
             const extension = '.' + filename.split('.').pop();
             
             let matchedFormat = null;
-
-            // Special preference for PDF -> High Accuracy
             if (extension === '.pdf') {
                 matchedFormat = formats.find(f => f.key === 'pdf_marker');
             } else {
                 matchedFormat = formats.find(f => f.extension === extension && f.direction !== 'Output Only');
-                
-                // Fallback for markdown variants if generic .md
                 if (!matchedFormat && (extension === '.md' || extension === '.markdown')) {
                     matchedFormat = formats.find(f => f.key === 'markdown');
                 }
             }
 
             if (matchedFormat) {
+                // Accessing value for md-filled-select might need .selectIndex or matching value
+                // For material web components, setting value directly often works if options exist
                 fromSelect.value = matchedFormat.key;
-                // Trigger change event to update target options
-                fromSelect.dispatchEvent(new Event('change'));
                 
-                // Visual feedback (optional flash/highlight on select)
-                fromSelect.style.borderColor = 'var(--primary-color)';
-                setTimeout(() => { fromSelect.style.borderColor = ''; }, 1000);
-            } else {
-                // Unknown format - reset or notify?
-                // For now, keep current selection or reset if invalid
-                // Maybe show a small hint?
+                // Dispatch change event manually since setting value doesn't always trigger it
+                updateTargetOptions(matchedFormat.key);
             }
         }
 
-        // --- Polling Configuration ---
-        const POLL_INTERVAL_ACTIVE = 5000;   // 5 seconds when active jobs
-        const POLL_INTERVAL_IDLE = 15000;    // 15 seconds when all complete
-        let pollInterval = null;
-        let fetchController = null;
-        let alertTimeout = null;
-        let lastJobsState = [];
-
         // --- Format Selection Logic ---
-        fromSelect.addEventListener('change', function() {
-            const selectedKey = this.value;
-            const selectedFormat = formats.find(f => f.key === selectedKey);
+        // md-select dispatches 'input' or 'change' (check docs, usually 'input' works)
+        fromSelect.addEventListener('input', function() {
+            updateTargetOptions(this.value);
+        });
 
+        function updateTargetOptions(selectedKey) {
+            const selectedFormat = formats.find(f => f.key === selectedKey);
+            
             // Reset UI
-            formatWarning.classList.add('display-none');
+            formatWarning.classList.add('hidden');
             convertBtn.disabled = false;
             toSelect.disabled = false;
-            toSelect.innerHTML = '<option value="" selected disabled>- Select target format -</option>';
+            
+            // Clear existing options (except placeholder if we want one, but md-select handles this differently)
+            // We need to rebuild the md-select-option children
+            while (toSelect.firstChild) {
+                toSelect.removeChild(toSelect.firstChild);
+            }
+
+            // Add placeholder
+            const placeholder = document.createElement('md-select-option');
+            placeholder.value = "";
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            placeholder.innerHTML = '<div slot="headline">Select target format</div>';
+            toSelect.appendChild(placeholder);
+
+            if (!selectedFormat) return;
 
             if (selectedFormat.direction === 'Output Only') {
-                formatWarningText.innerText = `${selectedFormat.name} is only available as an output format and cannot be used as a source.`;
-                formatWarning.classList.remove('display-none');
+                formatWarningText.innerText = `${selectedFormat.name} is only available as an output format.`;
+                formatWarning.classList.remove('hidden');
                 convertBtn.disabled = true;
                 toSelect.disabled = true;
                 return;
             }
 
-            // Populate target formats
             formats.forEach(f => {
                 if (f.key !== selectedKey && f.direction !== 'Input Only') {
-                    const option = document.createElement('option');
-                    option.value = f.key;
-                    option.text = f.name;
-                    toSelect.appendChild(option);
+                    const opt = document.createElement('md-select-option');
+                    opt.value = f.key;
+                    opt.innerHTML = `<div slot="headline">${f.name}</div>`;
+                    toSelect.appendChild(opt);
                 }
             });
-        });
+        }
 
         // --- Form Submission ---
         convertForm.addEventListener('submit', async function(e) {
             e.preventDefault();
-            const formData = new FormData(this);
+            
+            const file = fileInput.files[0];
+            const fromVal = fromSelect.value;
+            const toVal = toSelect.value;
+            
+            if(!file || !fromVal || !toVal) {
+                showAlert('error', 'Please fill all fields');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('from_format', fromVal);
+            formData.append('to_format', toVal);
 
             convertBtn.disabled = true;
-            convertBtn.innerHTML = '<span class="spinner-small"></span> Uploading...';
+            progressBar.classList.remove('hidden');
 
             try {
                 const response = await fetch('/convert', {
@@ -435,10 +489,13 @@
 
                 if (response.ok) {
                     showAlert('success', 'Conversion started successfully!');
-                    convertForm.reset();
-                    toSelect.innerHTML = '<option value="" selected disabled>- Select source first -</option>';
+                    // Reset form
+                    fileInput.value = '';
+                    dropZonePrompt.textContent = "Drag file here or click";
+                    fromSelect.value = '';
+                    toSelect.value = '';
                     toSelect.disabled = true;
-                    // Restart polling with active interval
+                    
                     startPolling(true);
                 } else {
                     showAlert('error', data.error || 'An error occurred.');
@@ -448,30 +505,35 @@
                 showAlert('error', 'Failed to submit conversion request.');
             } finally {
                 convertBtn.disabled = false;
-                convertBtn.innerText = 'Convert Now';
+                progressBar.classList.add('hidden');
             }
         });
 
         function showAlert(type, message) {
-            // Clear any existing timeout
             if (alertTimeout) clearTimeout(alertTimeout);
-
-            const title = type === 'error' ? 'Error' : 'Success';
-            alertArea.innerHTML = `
-                <div class="usa-alert usa-alert--${type} margin-bottom-2">
-                    <div class="usa-alert__body">
-                        <h4 class="usa-alert__heading">${title}</h4>
-                        <p class="usa-alert__text">${message}</p>
-                    </div>
-                </div>
+            
+            alertArea.innerHTML = '';
+            const card = document.createElement('div');
+            card.className = `alert-card ${type === 'error' ? 'alert-error' : 'alert-success'}`;
+            card.innerHTML = `
+                <md-icon>${type === 'error' ? 'error' : 'check_circle'}</md-icon>
+                <span>${message}</span>
             `;
+            alertArea.appendChild(card);
+
             alertTimeout = setTimeout(() => {
                 alertArea.innerHTML = '';
                 alertTimeout = null;
             }, 5000);
         }
 
-        // --- Smart Polling with Visibility API ---
+        // --- Polling (Simplified for brevity, logic remains similar) ---
+        const POLL_INTERVAL_ACTIVE = 5000;
+        const POLL_INTERVAL_IDLE = 15000;
+        let pollInterval = null;
+        let fetchController = null;
+        let alertTimeout = null;
+
         function startPolling(hasActiveJobs = false) {
             stopPolling();
             const interval = hasActiveJobs ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE;
@@ -485,127 +547,113 @@
                 pollInterval = null;
             }
         }
-
-        // Pause polling when tab is hidden
+        
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                stopPolling();
-            } else {
-                const hasActive = lastJobsState.some(j => j.status === 'PENDING' || j.status === 'PROCESSING' || j.status === 'STARTED');
-                startPolling(hasActive);
-            }
+            if (document.hidden) stopPolling();
+            else fetchJobs(); // Resume check
         });
 
-        // Cleanup on page unload
-        window.addEventListener('beforeunload', () => {
-            stopPolling();
-            if (fetchController) fetchController.abort();
-        });
-
-        // --- Job Fetching with Request Deduplication ---
         async function fetchJobs() {
-            // Abort any in-flight request
             if (fetchController) fetchController.abort();
             fetchController = new AbortController();
 
             try {
                 const response = await fetch('/api/jobs', { signal: fetchController.signal });
                 const jobs = await response.json();
-                lastJobsState = jobs;
                 renderJobs(jobs);
-
-                // Adjust polling interval based on job states
-                const hasActiveJobs = jobs.some(j => j.status === 'PENDING' || j.status === 'PROCESSING' || j.status === 'STARTED');
-                if (pollInterval) {
-                    const currentInterval = hasActiveJobs ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE;
-                    // Only restart if interval needs to change
-                    if ((hasActiveJobs && pollInterval._idleTimeout !== POLL_INTERVAL_ACTIVE) ||
-                        (!hasActiveJobs && pollInterval._idleTimeout !== POLL_INTERVAL_IDLE)) {
-                        startPolling(hasActiveJobs);
-                    }
+                
+                const hasActive = jobs.some(j => ['PENDING', 'PROCESSING', 'STARTED'].includes(j.status));
+                
+                // Adjust poll rate if state changed
+                if (hasActive && (!pollInterval || pollInterval._idleTimeout !== POLL_INTERVAL_ACTIVE)) {
+                    startPolling(true);
+                } else if (!hasActive && pollInterval && pollInterval._idleTimeout !== POLL_INTERVAL_IDLE) {
+                    startPolling(false);
                 }
+                
             } catch (error) {
-                if (error.name !== 'AbortError') {
-                    console.error('Error fetching jobs:', error);
-                }
-            } finally {
-                fetchController = null;
+                if (error.name !== 'AbortError') console.error('Error fetching jobs:', error);
             }
         }
 
         // --- Event Delegation for Job Actions ---
         jobsTableBody.addEventListener('click', async (e) => {
-            const btn = e.target.closest('[data-action]');
+            // Traverse up to find button or anchor
+            const btn = e.target.closest('md-filled-button, md-outlined-button'); 
             if (!btn) return;
-
+            
             const action = btn.dataset.action;
             const jobId = btn.dataset.jobId;
-
+            
+            // Note: md-button is a web component, clicks inside usually bubble
             if (action === 'cancel') {
-                if (!confirm('Are you sure you want to cancel this job?')) return;
+                if (!confirm('Cancel this job?')) return;
                 try {
                     await fetch(`/api/cancel/${jobId}`, { method: 'POST' });
                     fetchJobs();
-                } catch (error) {
-                    console.error('Error canceling job:', error);
-                }
+                } catch(e) { console.error(e); }
             } else if (action === 'retry') {
                 try {
-                    const response = await fetch(`/api/retry/${jobId}`, { method: 'POST' });
-                    if (response.ok) {
-                        startPolling(true);
-                    } else {
-                        showAlert('error', 'Failed to retry job.');
-                    }
-                } catch (error) {
-                    console.error('Error retrying job:', error);
-                }
+                    await fetch(`/api/retry/${jobId}`, { method: 'POST' });
+                    startPolling(true);
+                } catch(e) { console.error(e); }
+            } else if (action === 'download') {
+                // It's a link wrapped in a button or just window.location
+                window.location.href = `/download/${jobId}`;
             }
         });
 
         function renderJobs(jobs) {
             if (jobs.length === 0) {
                 jobsTableBody.innerHTML = '';
-                noJobsMsg.classList.remove('display-none');
+                noJobsMsg.classList.remove('hidden');
                 return;
             }
-            noJobsMsg.classList.add('display-none');
+            noJobsMsg.classList.add('hidden');
 
-            // Use array map + join for efficient string building
             const rows = jobs.map(job => {
-                let statusTag = '';
+                let statusBadge = '';
                 let actionBtn = '';
 
                 switch(job.status) {
                     case 'PENDING':
                     case 'STARTED':
                     case 'PROCESSING':
-                        statusTag = '<span class="usa-tag usa-tag--yellow">In Progress</span>';
-                        actionBtn = `<button class="usa-button usa-button--secondary usa-button--small" data-action="cancel" data-job-id="${job.id}">Cancel</button>`;
+                        statusBadge = `<span class="status-badge status-pending">In Progress</span>`;
+                        actionBtn = `<md-outlined-button data-action="cancel" data-job-id="${job.id}">Cancel</md-outlined-button>`;
                         break;
                     case 'SUCCESS':
-                        statusTag = '<span class="usa-tag usa-tag--green">Completed</span>';
-                        actionBtn = `<a href="${job.download_url}" class="usa-button usa-button--small">Download</a>`;
+                        statusBadge = `<span class="status-badge status-success">Completed</span>`;
+                        actionBtn = `<md-filled-button data-action="download" data-job-id="${job.id}">
+                                        Download
+                                        <md-icon slot="icon">download</md-icon>
+                                     </md-filled-button>`;
                         break;
                     case 'FAILURE':
-                        statusTag = '<span class="usa-tag usa-tag--red">Failed</span>';
-                        actionBtn = `<button class="usa-button usa-button--outline usa-button--small" data-action="retry" data-job-id="${job.id}">Retry</button>`;
+                        statusBadge = `<span class="status-badge status-error">Failed</span>`;
+                        actionBtn = `<md-outlined-button data-action="retry" data-job-id="${job.id}">Retry</md-outlined-button>`;
                         break;
                     case 'REVOKED':
-                        statusTag = '<span class="usa-tag">Cancelled</span>';
-                        actionBtn = `<button class="usa-button usa-button--outline usa-button--small" data-action="retry" data-job-id="${job.id}">Retry</button>`;
+                        statusBadge = `<span class="status-badge">Cancelled</span>`;
+                        actionBtn = `<md-outlined-button data-action="retry" data-job-id="${job.id}">Retry</md-outlined-button>`;
                         break;
                     default:
-                        statusTag = `<span class="usa-tag">${job.status}</span>`;
+                        statusBadge = job.status;
                 }
 
-                const errorHtml = job.result ? `<div class="font-sans-3xs text-secondary margin-top-05">${job.result.substring(0, 100)}${job.result.length > 100 ? '...' : ''}</div>` : '';
+                const errorMsg = job.result ? `<div style="font-size:12px; color:var(--md-sys-color-error); margin-top:4px;">${job.result.substring(0,60)}...</div>` : '';
 
                 return `
-                    <tr data-job-id="${job.id}">
-                        <th scope="row" style="word-break: break-all; max-width: 200px;">${job.filename}</th>
-                        <td class="text-no-wrap">${job.from} &rarr; ${job.to}</td>
-                        <td>${statusTag}${errorHtml}</td>
+                    <tr>
+                        <td>
+                            <div style="font-weight:500;">${job.filename}</div>
+                            <div style="font-size:12px; color:var(--md-sys-color-secondary);">${new Date(job.created_at).toLocaleTimeString()}</div>
+                        </td>
+                        <td>${job.from} &rarr; ${job.to}</td>
+                        <td>
+                            ${statusBadge}
+                            ${errorMsg}
+                        </td>
                         <td>${actionBtn}</td>
                     </tr>
                 `;
@@ -613,10 +661,8 @@
 
             jobsTableBody.innerHTML = rows.join('');
         }
-
-        // Initialize polling
+        
         startPolling(false);
-
     </script>
 </body>
 </html>

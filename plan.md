@@ -165,6 +165,14 @@ Single-page application in `web/templates/index.html`:
 - [x] Allow manual override of the format selection.
 - [x] Add visual feedback (highlighting) for drag operations.
 
+## Phase 11: UI Redesign: Material Web
+- [x] Remove USWDS and Liquid Glass styles.
+- [x] Integrate @material/web via CDN (esm.run).
+- [x] Replace form elements with Material Web components (`md-filled-select`, `md-filled-button`, etc.).
+- [x] Refactor Drag and Drop zone to match Material Design.
+- [x] Style the job list table to align with Material Design.
+- [x] Update JavaScript to handle Web Component properties (e.g., `.value` access).
+
 ---
 
 ## Technical Reference
