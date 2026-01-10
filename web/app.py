@@ -3,6 +3,8 @@ import uuid
 import time
 import redis
 import shutil
+import magic
+import requests
 from flask import Flask, render_template, request, send_from_directory, jsonify, session
 from celery import Celery
 from datetime import datetime, timezone, timedelta
@@ -18,6 +20,14 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024 # 100MB limit
+
+# Minimum free space required (in bytes) - 500MB
+MIN_FREE_SPACE = 500 * 1024 * 1024 
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({'error': 'File too large. Maximum size is 100MB.'}), 413
 
 # Metadata Redis client (DB 1) with connection pooling
 redis_client = redis.Redis.from_url(
@@ -33,25 +43,60 @@ celery = Celery(
     backend=os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
 )
 
+def check_disk_space():
+    """Check if there is enough free space in the upload directory."""
+    try:
+        total, used, free = shutil.disk_usage(UPLOAD_FOLDER)
+        return free >= MIN_FREE_SPACE
+    except Exception:
+        return True # Assume space if check fails to avoid blocking
+
+MARKER_API_URL = os.environ.get('MARKER_API_URL', 'http://marker-api:8000')
+
+@app.route('/api/status/services')
+def service_status():
+    """Check status of dependent services."""
+    status = {
+        'marker_api': 'unknown',
+        'disk_space': 'ok'
+    }
+    
+    # Check Marker API
+    try:
+        # Fast timeout check
+        resp = requests.get(f"{MARKER_API_URL}/health", timeout=2) 
+        if resp.status_code == 200:
+            status['marker_api'] = 'available'
+        else:
+            status['marker_api'] = 'unavailable'
+    except Exception:
+        status['marker_api'] = 'unavailable'
+        
+    # Check Disk Space
+    if not check_disk_space():
+        status['disk_space'] = 'low'
+        
+    return jsonify(status)
+
 FORMATS = [
-    {'name': 'Pandoc Markdown', 'key': 'markdown', 'direction': 'Both', 'extension': '.md', 'category': 'Markdown'},
-    {'name': 'GitHub Flavored Markdown', 'key': 'gfm', 'direction': 'Both', 'extension': '.md', 'category': 'Markdown'},
-    {'name': 'HTML5', 'key': 'html', 'direction': 'Both', 'extension': '.html', 'category': 'Web'},
-    {'name': 'Jupyter Notebook', 'key': 'ipynb', 'direction': 'Both', 'extension': '.ipynb', 'category': 'Web'},
-    {'name': 'Microsoft Word', 'key': 'docx', 'direction': 'Both', 'extension': '.docx', 'category': 'Office'},
-    {'name': 'Microsoft PowerPoint', 'key': 'pptx', 'direction': 'Output Only', 'extension': '.pptx', 'category': 'Office'},
-    {'name': 'OpenOffice / LibreOffice', 'key': 'odt', 'direction': 'Both', 'extension': '.odt', 'category': 'Office'},
-    {'name': 'Rich Text Format', 'key': 'rtf', 'direction': 'Both', 'extension': '.rtf', 'category': 'Office'},
-    {'name': 'EPUB (v3)', 'key': 'epub3', 'direction': 'Both', 'extension': '.epub', 'category': 'E-Books'},
-    {'name': 'EPUB (v2)', 'key': 'epub2', 'direction': 'Both', 'extension': '.epub', 'category': 'E-Books'},
-    {'name': 'LaTeX', 'key': 'latex', 'direction': 'Both', 'extension': '.tex', 'category': 'Technical'},
-    {'name': 'PDF (via LaTeX)', 'key': 'pdf', 'direction': 'Output Only', 'extension': '.pdf', 'category': 'Technical'},
-    {'name': 'PDF (High Accuracy)', 'key': 'pdf_marker', 'direction': 'Input Only', 'extension': '.pdf', 'category': 'Technical'},
-    {'name': 'AsciiDoc', 'key': 'asciidoc', 'direction': 'Both', 'extension': '.adoc', 'category': 'Technical'},
-    {'name': 'reStructuredText', 'key': 'rst', 'direction': 'Both', 'extension': '.rst', 'category': 'Technical'},
-    {'name': 'BibTeX (Bibliography)', 'key': 'bibtex', 'direction': 'Both', 'extension': '.bib', 'category': 'Technical'},
-    {'name': 'MediaWiki', 'key': 'mediawiki', 'direction': 'Both', 'extension': '.wiki', 'category': 'Wiki'},
-    {'name': 'Jira Wiki', 'key': 'jira', 'direction': 'Both', 'extension': '.txt', 'category': 'Wiki'},
+    {'name': 'Pandoc Markdown', 'key': 'markdown', 'direction': 'Both', 'extension': '.md', 'category': 'Markdown', 'mime_types': ['text/plain', 'text/markdown', 'text/x-markdown']},
+    {'name': 'GitHub Flavored Markdown', 'key': 'gfm', 'direction': 'Both', 'extension': '.md', 'category': 'Markdown', 'mime_types': ['text/plain', 'text/markdown', 'text/x-markdown']},
+    {'name': 'HTML5', 'key': 'html', 'direction': 'Both', 'extension': '.html', 'category': 'Web', 'mime_types': ['text/html']},
+    {'name': 'Jupyter Notebook', 'key': 'ipynb', 'direction': 'Both', 'extension': '.ipynb', 'category': 'Web', 'mime_types': ['text/plain', 'application/json']},
+    {'name': 'Microsoft Word', 'key': 'docx', 'direction': 'Both', 'extension': '.docx', 'category': 'Office', 'mime_types': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document']},
+    {'name': 'Microsoft PowerPoint', 'key': 'pptx', 'direction': 'Output Only', 'extension': '.pptx', 'category': 'Office', 'mime_types': ['application/vnd.openxmlformats-officedocument.presentationml.presentation']},
+    {'name': 'OpenOffice / LibreOffice', 'key': 'odt', 'direction': 'Both', 'extension': '.odt', 'category': 'Office', 'mime_types': ['application/vnd.oasis.opendocument.text']},
+    {'name': 'Rich Text Format', 'key': 'rtf', 'direction': 'Both', 'extension': '.rtf', 'category': 'Office', 'mime_types': ['text/rtf']},
+    {'name': 'EPUB (v3)', 'key': 'epub3', 'direction': 'Both', 'extension': '.epub', 'category': 'E-Books', 'mime_types': ['application/epub+zip']},
+    {'name': 'EPUB (v2)', 'key': 'epub2', 'direction': 'Both', 'extension': '.epub', 'category': 'E-Books', 'mime_types': ['application/epub+zip']},
+    {'name': 'LaTeX', 'key': 'latex', 'direction': 'Both', 'extension': '.tex', 'category': 'Technical', 'mime_types': ['text/x-tex', 'text/plain']},
+    {'name': 'PDF (via LaTeX)', 'key': 'pdf', 'direction': 'Output Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
+    {'name': 'PDF (High Accuracy)', 'key': 'pdf_marker', 'direction': 'Input Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
+    {'name': 'AsciiDoc', 'key': 'asciidoc', 'direction': 'Both', 'extension': '.adoc', 'category': 'Technical', 'mime_types': ['text/plain']},
+    {'name': 'reStructuredText', 'key': 'rst', 'direction': 'Both', 'extension': '.rst', 'category': 'Technical', 'mime_types': ['text/plain', 'text/x-rst']},
+    {'name': 'BibTeX (Bibliography)', 'key': 'bibtex', 'direction': 'Both', 'extension': '.bib', 'category': 'Technical', 'mime_types': ['text/plain', 'text/x-bibtex']},
+    {'name': 'MediaWiki', 'key': 'mediawiki', 'direction': 'Both', 'extension': '.wiki', 'category': 'Wiki', 'mime_types': ['text/plain']},
+    {'name': 'Jira Wiki', 'key': 'jira', 'direction': 'Both', 'extension': '.txt', 'category': 'Wiki', 'mime_types': ['text/plain']},
 ]
 
 def update_job_metadata(job_id, updates):
@@ -68,6 +113,10 @@ def index():
 
 @app.route('/convert', methods=['POST'])
 def convert():
+    # Pre-check disk space
+    if not check_disk_space():
+        return jsonify({'error': 'Server storage is full. Please try again later.'}), 507 # Insufficient Storage
+
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
     
@@ -96,6 +145,34 @@ def convert():
     if file_ext != from_info['extension']:
         if not (from_info['key'] == 'markdown' and file_ext in ['.md', '.markdown']):
              return jsonify({'error': f"File extension {file_ext} does not match selected format {from_info['name']}. Expected: {from_info['extension']}"}), 400
+
+    # MIME type validation
+    allowed_mimes = from_info.get('mime_types', [])
+    if allowed_mimes:
+        try:
+            # Read header to detect mime type
+            header = file.read(2048)
+            mime = magic.Magic(mime=True)
+            file_mime = mime.from_buffer(header)
+            file.seek(0) # Reset stream position
+
+            # Special handling for text files which might just be "text/plain" or "text/x-..."
+            is_valid = False
+            if file_mime in allowed_mimes:
+                is_valid = True
+            elif 'text/plain' in allowed_mimes and file_mime.startswith('text/'):
+                # Allow generic text if text/plain is allowed
+                is_valid = True
+            
+            if not is_valid:
+                print(f"MIME check failed. Detected: {file_mime}, Allowed: {allowed_mimes}") # Logging
+                return jsonify({'error': f"Invalid file content. Detected: {file_mime}. Please ensure the file matches the selected format."}), 400
+                
+        except Exception as e:
+            print(f"MIME detection error: {e}")
+            # If magic fails, fall back to extension check (which passed) or block?
+            # Safe to block if we want strict security.
+            return jsonify({'error': "Could not validate file type."}), 500
 
     job_id = str(uuid.uuid4())
     job_dir = os.path.join(app.config['UPLOAD_FOLDER'], job_id)
@@ -204,16 +281,37 @@ def list_jobs():
 def cancel_job(job_id):
     celery.control.revoke(job_id, terminate=True)
     
-    # Update local session to reflect cancelled? 
-    # Actually celery status might stay PENDING or go to REVOKED depending on timing.
-    # We can remove it from session or just let the status update handle it.
-    # Requirement: "Queued job is removed from the list".
+    # Update status to REVOKED in Redis
+    update_job_metadata(job_id, {'status': 'REVOKED'})
     
-    if 'jobs' in session:
-        session['jobs'] = [j for j in session['jobs'] if j['id'] != job_id]
-        session.modified = True
-        
     return jsonify({'status': 'cancelled'})
+
+@app.route('/api/delete/<job_id>', methods=['POST'])
+def delete_job(job_id):
+    if 'jobs' not in session:
+        return jsonify({'error': 'Job not found'}), 404
+        
+    # Remove from session
+    session['jobs'] = [j for j in session['jobs'] if j['id'] != job_id]
+    session.modified = True
+    
+    # Clean up files immediately (optional, or let background task handle it)
+    # Ideally we remove files to free space
+    job_dir = os.path.join(app.config['UPLOAD_FOLDER'], job_id)
+    output_job_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+    
+    try:
+        if os.path.exists(job_dir):
+            shutil.rmtree(job_dir)
+        if os.path.exists(output_job_dir):
+            shutil.rmtree(output_job_dir)
+    except Exception as e:
+        print(f"Error deleting files for {job_id}: {e}")
+
+    # Remove metadata
+    redis_client.delete(f"job:{job_id}")
+    
+    return jsonify({'status': 'deleted'})
 
 @app.route('/api/retry/<job_id>', methods=['POST'])
 def retry_job(job_id):

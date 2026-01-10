@@ -88,13 +88,15 @@ def convert_document(job_id, input_path, output_path, from_format, to_format):
 
 @celery.task(
     name='tasks.convert_with_marker',
+    bind=True,                # Enable access to self (for retry)
     time_limit=1200,          # Marker is slower (GPU/CPU heavy) - 20 mins
     soft_time_limit=1140,     # 19 mins
     acks_late=True,
-    reject_on_worker_lost=True
+    reject_on_worker_lost=True,
+    max_retries=10            # Retry for ~5 minutes (10 * 30s)
 )
-def convert_with_marker(job_id, input_path, output_path, from_format, to_format):
-    print(f"Starting Marker conversion for job {job_id}")
+def convert_with_marker(self, job_id, input_path, output_path, from_format, to_format):
+    print(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1})")
     update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time())})
     
     if not os.path.exists(input_path):
@@ -114,6 +116,10 @@ def convert_with_marker(job_id, input_path, output_path, from_format, to_format)
             
         if response.status_code != 200:
             error_msg = f"Marker API failed with status {response.status_code}: {response.text[:200]}"
+            # If 503 Service Unavailable, we could retry too
+            if response.status_code == 503:
+                print(f"Marker API busy (503), retrying job {job_id}...")
+                raise requests.exceptions.RequestException("Service Unavailable")
             raise Exception(error_msg)
             
         # Handle Response
@@ -144,7 +150,27 @@ def convert_with_marker(job_id, input_path, output_path, from_format, to_format)
         update_job_metadata(job_id, {'status': 'SUCCESS', 'completed_at': str(time.time())})
         return {"status": "success", "output_file": os.path.basename(output_path)}
 
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        print(f"Marker API unavailable (Connection/Timeout), retrying job {job_id} in 30s... Error: {e}")
+        try:
+            # Update metadata to let user know we are waiting
+            update_job_metadata(job_id, {'status': 'PROCESSING', 'error': f"Waiting for AI Service (Attempt {self.request.retries + 1})..."})
+            self.retry(countdown=30)
+        except self.MaxRetriesExceededError:
+            error_msg = f"Marker API unavailable after multiple retries: {str(e)}"
+            update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg[:500]})
+            raise Exception(error_msg)
+
     except requests.exceptions.RequestException as e:
+        # Handle other request exceptions (like 503 if we raised it above, or 500s)
+        # Check if we should retry 503s specifically if not caught above, but keeping it simple
+        if "Service Unavailable" in str(e):
+             try:
+                update_job_metadata(job_id, {'status': 'PROCESSING', 'error': f"AI Service Busy (Attempt {self.request.retries + 1})..."})
+                self.retry(countdown=30)
+             except self.MaxRetriesExceededError:
+                pass
+
         error_msg = f"Marker API connection error: {str(e)}"
         print(f"Marker error for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg[:500]})

@@ -401,6 +401,34 @@
         const jobsTableBody = document.getElementById('jobs-table-body');
         const noJobsMsg = document.getElementById('no-jobs-msg');
         
+        // --- Service Status & Logic ---
+        let markerApiAvailable = true; // Default assume yes until checked
+        let diskSpaceLow = false;
+
+        async function checkServices() {
+            try {
+                const response = await fetch('/api/status/services');
+                const status = await response.json();
+                
+                markerApiAvailable = status.marker_api === 'available';
+                diskSpaceLow = status.disk_space === 'low';
+                
+                if (diskSpaceLow) {
+                    showAlert('error', 'Server storage is low. Conversion may be unavailable.');
+                }
+                
+                // Re-evaluate format selection based on availability
+                updateTargetOptions(fromSelect.value);
+                
+            } catch (e) {
+                console.warn('Service status check failed', e);
+            }
+        }
+        
+        // Check on load and periodically
+        checkServices();
+        setInterval(checkServices, 60000); // Check every minute
+
         // --- Drag & Drop / Auto-Detection ---
         const dropZone = document.getElementById('drop-zone');
         const dropZonePrompt = document.getElementById('drop-zone-prompt');
@@ -441,6 +469,11 @@
             
             let matchedFormat = null;
             if (extension === '.pdf') {
+                // Prefer Marker if available, otherwise standard PDF (which is usually output only, so actually we don't have a standard PDF input?)
+                // Actually app.py FORMATS says PDF (via LaTeX) is Output Only.
+                // PDF (High Accuracy) is Input Only.
+                // So if Marker is down, we have no PDF input? Or we fallback?
+                // For now, select it, but updateTargetOptions will handle the warning if unavailable.
                 matchedFormat = formats.find(f => f.key === 'pdf_marker');
             } else {
                 matchedFormat = formats.find(f => f.extension === extension && f.direction !== 'Output Only');
@@ -450,17 +483,12 @@
             }
 
             if (matchedFormat) {
-                // Accessing value for md-filled-select might need .selectIndex or matching value
-                // For material web components, setting value directly often works if options exist
                 fromSelect.value = matchedFormat.key;
-                
-                // Dispatch change event manually since setting value doesn't always trigger it
                 updateTargetOptions(matchedFormat.key);
             }
         }
 
         // --- Format Selection Logic ---
-        // md-select dispatches 'input' or 'change' (check docs, usually 'input' works)
         fromSelect.addEventListener('input', function() {
             updateTargetOptions(this.value);
         });
@@ -473,8 +501,7 @@
             convertBtn.disabled = false;
             toSelect.disabled = false;
             
-            // Clear existing options (except placeholder if we want one, but md-select handles this differently)
-            // We need to rebuild the md-select-option children
+            // Clear existing options
             while (toSelect.firstChild) {
                 toSelect.removeChild(toSelect.firstChild);
             }
@@ -489,6 +516,13 @@
 
             if (!selectedFormat) return;
 
+            // Service Availability Checks
+            if (selectedKey === 'pdf_marker' && !markerApiAvailable) {
+                formatWarningText.innerText = "AI Service is currently unavailable. Your job will be queued and processed automatically when the service returns.";
+                formatWarning.classList.remove('hidden');
+                // We allow submission now (Epic 16.7)
+            }
+
             if (selectedFormat.direction === 'Output Only') {
                 formatWarningText.innerText = `${selectedFormat.name} is only available as an output format.`;
                 formatWarning.classList.remove('hidden');
@@ -497,6 +531,11 @@
                 return;
             }
 
+            // Compatibility Hints (Epic 15.4)
+            // Filter "To" options based on logic.
+            // For now, we generally allow most things, but we should filter "Input Only" from "To".
+            // And maybe specific logic if needed.
+            
             formats.forEach(f => {
                 if (f.key !== selectedKey && f.direction !== 'Input Only') {
                     const opt = document.createElement('md-select-option');
@@ -506,6 +545,7 @@
                 }
             });
         }
+
 
         // --- Form Submission ---
         convertForm.addEventListener('submit', async function(e) {
@@ -627,13 +667,12 @@
         // --- Event Delegation for Job Actions ---
         jobsTableBody.addEventListener('click', async (e) => {
             // Traverse up to find button or anchor
-            const btn = e.target.closest('md-filled-button, md-outlined-button'); 
+            const btn = e.target.closest('md-filled-button, md-outlined-button, md-icon-button'); 
             if (!btn) return;
             
             const action = btn.dataset.action;
             const jobId = btn.dataset.jobId;
             
-            // Note: md-button is a web component, clicks inside usually bubble
             if (action === 'cancel') {
                 if (!confirm('Cancel this job?')) return;
                 try {
@@ -644,6 +683,12 @@
                 try {
                     await fetch(`/api/retry/${jobId}`, { method: 'POST' });
                     startPolling(true);
+                } catch(e) { console.error(e); }
+            } else if (action === 'delete') {
+                if (!confirm('Delete this job? This cannot be undone.')) return;
+                try {
+                    await fetch(`/api/delete/${jobId}`, { method: 'POST' });
+                    fetchJobs();
                 } catch(e) { console.error(e); }
             }
         });
@@ -659,6 +704,9 @@
             const rows = jobs.map(job => {
                 let statusBadge = '';
                 let actionBtn = '';
+                let deleteBtn = `<md-icon-button data-action="delete" data-job-id="${job.id}" title="Delete Job">
+                                    <md-icon>delete</md-icon>
+                                 </md-icon-button>`;
 
                 switch(job.status) {
                     case 'PENDING':
@@ -666,6 +714,7 @@
                     case 'PROCESSING':
                         statusBadge = `<span class="status-badge status-pending">In Progress</span>`;
                         actionBtn = `<md-outlined-button data-action="cancel" data-job-id="${job.id}">Cancel</md-outlined-button>`;
+                        deleteBtn = ''; // Can't delete while active
                         break;
                     case 'SUCCESS':
                         statusBadge = `<span class="status-badge status-success">Completed</span>`;
@@ -702,7 +751,12 @@
                             ${statusBadge}
                             ${errorMsg}
                         </td>
-                        <td>${actionBtn}</td>
+                        <td>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                ${actionBtn}
+                                ${deleteBtn}
+                            </div>
+                        </td>
                     </tr>
                 `;
             });

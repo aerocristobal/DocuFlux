@@ -1,0 +1,205 @@
+openapi: 3.0.0
+info:
+  title: Pandoc Web Converter API
+  description: API for the Pandoc Web Conversion Service, supporting document conversion via Pandoc and AI-powered PDF extraction via Marker.
+  version: 1.0.0
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+paths:
+  /convert:
+    post:
+      summary: Submit a new conversion job
+      description: Uploads a file and queues a conversion task.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The file to convert (Max 100MB).
+                from_format:
+                  type: string
+                  description: Source format key (e.g., 'markdown', 'docx', 'pdf_marker').
+                to_format:
+                  type: string
+                  description: Target format key (e.g., 'pdf', 'html').
+      responses:
+        '200':
+          description: Job queued successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: queued
+        '400':
+          description: Bad Request (Invalid file, format, or missing parameters)
+        '413':
+          description: Payload Too Large (File exceeds 100MB)
+        '507':
+          description: Insufficient Storage (Server disk full)
+
+  /api/jobs:
+    get:
+      summary: List jobs
+      description: Retrieve a list of conversion jobs for the current session (last 60 minutes).
+      responses:
+        '200':
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    filename:
+                      type: string
+                    from:
+                      type: string
+                    to:
+                      type: string
+                    created_at:
+                      type: string
+                      format: date-time
+                    status:
+                      type: string
+                      enum: [PENDING, PROCESSING, SUCCESS, FAILURE, REVOKED]
+                    result:
+                      type: string
+                      description: Error message if failed, or null.
+                    download_url:
+                      type: string
+                      nullable: true
+
+  /api/cancel/{job_id}:
+    post:
+      summary: Cancel a job
+      parameters:
+        - in: path
+          name: job_id
+          schema:
+            type: string
+            format: uuid
+          required: true
+          description: UUID of the job to cancel
+      responses:
+        '200':
+          description: Job cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: cancelled
+
+  /api/retry/{job_id}:
+    post:
+      summary: Retry a failed job
+      description: Creates a new job with the same parameters and file content as the failed job.
+      parameters:
+        - in: path
+          name: job_id
+          schema:
+            type: string
+            format: uuid
+          required: true
+          description: UUID of the failed/cancelled job
+      responses:
+        '200':
+          description: Retry job created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: retried
+                  new_job_id:
+                    type: string
+                    format: uuid
+        '404':
+          description: Original job not found
+        '400':
+          description: Original input file missing (expired/cleaned up)
+
+  /api/delete/{job_id}:
+    post:
+      summary: Delete a job
+      description: Immediately removes job metadata and files.
+      parameters:
+        - in: path
+          name: job_id
+          schema:
+            type: string
+            format: uuid
+          required: true
+      responses:
+        '200':
+          description: Job deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+        '404':
+          description: Job not found
+
+  /download/{job_id}:
+    get:
+      summary: Download converted file
+      parameters:
+        - in: path
+          name: job_id
+          schema:
+            type: string
+            format: uuid
+          required: true
+      responses:
+        '200':
+          description: File download
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: File not found (or expired)
+
+  /api/status/services:
+    get:
+      summary: Check service health
+      description: Returns the availability of dependent services (Marker API, Disk Space).
+      responses:
+        '200':
+          description: Service status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  marker_api:
+                    type: string
+                    enum: [available, unavailable, unknown]
+                  disk_space:
+                    type: string
+                    enum: [ok, low]
