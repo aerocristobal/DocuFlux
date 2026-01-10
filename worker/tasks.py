@@ -212,7 +212,51 @@ def cleanup_old_files():
     logging.info(f"Running cleanup. Found {len(job_ids)} jobs on disk.")
 
     for job_id in job_ids:
-...
+        # Fetch metadata using Redis Hash
+        key = f"job:{job_id}"
+        meta = get_job_metadata(job_id)
+
+        should_delete = False
+        reason = ""
+
+        if meta:
+            status = meta.get('status')
+            completed_at = float(meta.get('completed_at', 0)) if meta.get('completed_at') else None
+            downloaded_at = float(meta.get('downloaded_at', 0)) if meta.get('downloaded_at') else None
+            started_at = float(meta.get('started_at', 0)) if meta.get('started_at') else None
+
+            # Check policies
+            if status == 'FAILURE':
+                if completed_at and now > completed_at + RETENTION_FAILURE:
+                    should_delete = True
+                    reason = "Failed job expired (5m)"
+
+            elif status == 'SUCCESS':
+                if downloaded_at:
+                    if now > downloaded_at + RETENTION_SUCCESS_DOWNLOADED:
+                        should_delete = True
+                        reason = "Downloaded job expired (10m)"
+                elif completed_at:
+                    if now > completed_at + RETENTION_SUCCESS_NO_DOWNLOAD:
+                        should_delete = True
+                        reason = "Completed job (not downloaded) expired (1h)"
+
+            # Safety net for stuck PROCESSING jobs (e.g. worker crash)
+            # If started > 2 hours ago and no completion
+            if not completed_at and started_at and now > started_at + 7200:
+                should_delete = True
+                reason = "Stale processing job (2h)"
+        
+        else:
+            # Orphaned (No metadata) - use file mtime fallback
+            check_path = os.path.join(upload_dir, job_id)
+            if not os.path.exists(check_path):
+                 check_path = os.path.join(output_dir, job_id)
+            
+            if os.path.exists(check_path):
+                 mtime = os.path.getmtime(check_path)
+                 if now > mtime + RETENTION_ORPHAN:
+                     should_delete = True
                      reason = "Orphaned job expired (1h fallback)"
 
         if should_delete:

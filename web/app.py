@@ -447,4 +447,6 @@ def download_file(job_id):
     return send_from_directory(job_dir, files[0], as_attachment=True)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Default to False for security. Enable only in development.
+    debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(host='0.0.0.0', port=5000, debug=debug_mode)

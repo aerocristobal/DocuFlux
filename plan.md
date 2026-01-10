@@ -46,6 +46,9 @@ Single-page application in `web/templates/index.html`:
 ### Security Hardening (Current Session)
 ...
 4. **CI/CD Fixes**: Resolved submodule configuration error and fixed test collection failures by adding `pythonpath` to `pytest.ini`, creating `__init__.py` files, and moving module imports into test fixtures to ensure proper environment initialization.
+5. **Security Remediations**: 
+    - Fixed path traversal vulnerability by sanitizing filenames and validating Job UUIDs.
+    - Disabled Flask debug mode by default to prevent info exposure and RCE risks.
 4. **CI/CD Fixes**: Resolved submodule configuration error by adding `.gitmodules` and enabling recursive submodule checkout in GitHub Actions.
 
 ### UX & Observability (Current Session)
