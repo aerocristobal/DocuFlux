@@ -105,7 +105,7 @@ Single-page application in `web/templates/index.html`:
 - [x] Allow manual override of the format selection.
 - [x] Add visual feedback (highlighting) for drag operations.
 
-## Phase 11: UI Redesign: Material Web
+## Epic 9: UI Redesign: Material Web
 - [x] Remove USWDS and Liquid Glass styles.
 - [x] Integrate @material/web via CDN (esm.run).
 - [x] Replace form elements with Material Web components (`md-filled-select`, `md-filled-button`, etc.).
@@ -113,7 +113,7 @@ Single-page application in `web/templates/index.html`:
 - [x] Style the job list table to align with Material Design.
 - [x] Update JavaScript to handle Web Component properties (e.g., `.value` access).
 
-## Phase 12: Intelligent Theme Customization
+## Epic 10: Intelligent Theme Customization
 - [x] Implement theme toggle in the header (System/Light/Dark).
 - [x] Create Dark Mode color tokens (Material Design 3 dark scheme).
 - [x] Implement JavaScript logic for System/Manual theme switching.
@@ -180,13 +180,9 @@ HSET job:<job_id>
 
 ## Next Steps
 
-1. **Production Deployment**: The system is fully verified and ready for production use.
+**Resource Monitoring**: Monitor `marker-api` container memory usage in high-load scenarios.
 
-2. **Resource Monitoring**: Monitor `marker-api` container memory usage in high-load scenarios.
-
-3. **Backup Policy**: Implement persistent storage backups for the shared volume if data persistence beyond 60 minutes is ever required (currently ephemeral).
-
-4. **Security Audit**: Review Gunicorn/FastAPI middleware for production-grade security headers.
+**Security Audit**: Review Gunicorn/FastAPI middleware for production-grade security headers.
 
 
 
@@ -203,5 +199,3 @@ HSET job:<job_id>
 | AI PDF Startup | <5 min | ~2 min (Pass) |
 
 | Memory stability | No Leaks | Verified |
-
-
