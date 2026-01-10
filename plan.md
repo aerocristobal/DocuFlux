@@ -114,11 +114,11 @@ Single-page application in `web/templates/index.html`:
 - [x] Update JavaScript to handle Web Component properties (e.g., `.value` access).
 
 ## Phase 12: Intelligent Theme Customization
-- [ ] Implement theme toggle in the header (System/Light/Dark).
-- [ ] Create Dark Mode color tokens (Material Design 3 dark scheme).
-- [ ] Implement JavaScript logic for System/Manual theme switching.
-- [ ] Persist user preference in LocalStorage.
-- [ ] Listen for system preference changes (`prefers-color-scheme`).
+- [x] Implement theme toggle in the header (System/Light/Dark).
+- [x] Create Dark Mode color tokens (Material Design 3 dark scheme).
+- [x] Implement JavaScript logic for System/Manual theme switching.
+- [x] Persist user preference in LocalStorage.
+- [x] Listen for system preference changes (`prefers-color-scheme`).
 
 ---
 
