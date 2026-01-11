@@ -180,9 +180,12 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         logging.info(f"Running marker_single: {' '.join(cmd)}")
         update_job_metadata(job_id, {'progress': '20'})
 
+        # Redirect stdout/stderr to DEVNULL to avoid buffer deadlock
+        # marker_single can produce large amounts of output that would fill capture buffers
         process = subprocess.run(
             cmd,
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             check=True,
             timeout=1100  # 18 minutes (less than soft_time_limit)
