@@ -12,5 +12,5 @@ COPY . .
 
 EXPOSE 5000
 
-# Use gunicorn for production (2 workers, 4 threads each)
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--access-logfile", "-", "app:app"]
+# Use gunicorn with gevent for WebSocket support
+CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "app:app"]

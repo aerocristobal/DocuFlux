@@ -15,35 +15,34 @@ This project implements a containerized document conversion service using a Task
 - **Infrastructure**: Docker, Docker Compose, Redis, NVIDIA Container Toolkit (for AI).
 - **Conversion Engines**: Pandoc 3.1, Marker (AI-powered PDF engine).
 
----
-
 ## Current Session State
 
-### Implemented Fixes & Optimizations (Completed)
+### Implemented Fixes & Optimizations
 
 #### AI Conversion (Marker API)
-1. **Routing Fix**: Patched Marker API `server.py` to mount Gradio UI at `/gradio`. This resolved a 404 error where Gradio was shadowing API endpoints at the root path.
-2. **Library Compatibility**: Applied `sed` patch to `surya` model in the Dockerfile to force `_attn_implementation = "eager"`. This resolved a `KeyError: 'sdpa'` crash.
-3. **Resource Scaling**: Increased `marker-api` memory limit to **16GB** and added GPU reservations to support large vision models.
-4. **Integration Fixes**:
+**Routing Fix**: Patched Marker API `server.py` to mount Gradio UI at `/gradio`. This resolved a 404 error where Gradio was shadowing API endpoints at the root path.
+**Library Compatibility**: Applied `sed` patch to `surya` model in the Dockerfile to force `_attn_implementation = "eager"`. This resolved a `KeyError: 'sdpa'` crash.
+**Resource Scaling**: Increased `marker-api` memory limit to **16GB** and added GPU reservations to support large vision models.
+**Integration Fixes**:
    - Corrected file field mapping to `pdf_file`.
    - Implemented nested JSON parsing to extract markdown from `data['result']['markdown']`.
 
 #### UI & UX Enhancements
-1. **Material Design Migration**: Replaced USWDS/Liquid Glass with **Material Web Components (M3)**.
-2. **Branding**: Updated project name to **DocuFlux**. Reverted to **Material 3 Baseline** colors (Purple).
-3. **History Management**: Implemented automatic session history cleanup for jobs older than **60 minutes**.
-4. **Time Zone Support**: Switched to ISO 8601 UTC timestamps on the backend, with client-side localization using the browser's locale.
-5. **Intelligent Ingestion**: Added drag-and-drop zone with automatic extension detection and AI-engine defaulting for PDFs.
+**Material Design Migration**: Replaced USWDS/Liquid Glass with **Material Web Components (M3)**..
+**History Management**: Implemented automatic session history cleanup for jobs older than **60 minutes**.
+**Time Zone Support**: Switched to ISO 8601 UTC timestamps on the backend, with client-side localization using the browser's locale.
+**Intelligent Ingestion**: Added drag-and-drop zone with automatic extension detection and AI-engine defaulting for PDFs.
+...
 
-#### UI Architecture (Current)
+...
+#### UI Architecture
 Single-page application in `web/templates/index.html`:
 - **Left column**: Material 3 Surface Card with Drag & Drop zone and format selectors.
 - **Right column**: Material 3 Surface Card with `md-list` for job tracking.
-- **Components**: `md-filled-select` (refined for dark mode legibility), `md-filled-button`, `md-linear-progress`, `md-icon`, `md-list`, `md-assist-chip`, `md-dialog`.
-- **Interactions**: Material 3 Dialogs for confirmations, adaptive polling, and theme persistence.
+- **Components**: `md-filled-select`, `md-filled-button`, `md-linear-progress` (determinate), `md-icon`, `md-list`, `md-assist-chip`, `md-dialog`.
+- **Interactions**: WebSocket-based real-time updates (Socket.IO), Material 3 Dialogs, theme persistence.
 
-### Security Hardening (Current Session)
+### Security Hardening
 ...
 4. **CI/CD Fixes**: Resolved submodule configuration error and fixed test collection failures by adding `pythonpath` to `pytest.ini`, creating `__init__.py` files, and moving module imports into test fixtures to ensure proper environment initialization.
 5. **Security Remediations**: 
@@ -53,9 +52,11 @@ Single-page application in `web/templates/index.html`:
     - Hardened session cookies (`HttpOnly`, `Secure`, `SameSite`) and enabled **HSTS**.
     - Fixed **Cross-site Scripting (XSS)** vulnerabilities in the frontend by escaping all user-controlled data before rendering.
     - Disabled Flask debug mode by default to prevent info exposure and RCE risks.
+    - Fixed application crash caused by malformed logging format string in `web/app.py`.
+    - Migrated async stack from **eventlet to gevent** to resolve Redis connection timeouts and DNS lookup issues in the containerized environment.
 4. **CI/CD Fixes**: Resolved submodule configuration error by adding `.gitmodules` and enabling recursive submodule checkout in GitHub Actions.
 
-### UX & Observability (Current Session)
+### UX & Observability
 1. **Service Status Monitoring**: Added real-time checks for `marker-api` availability and server disk space. The UI warns users if the AI service is down or storage is low.
 2. **Structured Logging**: Implemented JSON-formatted logging for better observability.
 3. **Disk Space Pre-Check**: Implemented a 500MB free space safety check before accepting uploads (Error 507).
@@ -173,21 +174,21 @@ Single-page application in `web/templates/index.html`:
 - [x] 14.5 Document Marker API integration and fallback behavior.
 
 ## Epic 15: UX Enhancements
-- [ ] 15.1 Add determinate progress indication (percentage completion).
-- [ ] 15.2 Implement batch/bulk file upload support.
+- [x] 15.1 Add determinate progress indication (percentage completion).
+- [x] 15.2 Implement batch/bulk file upload support.
 - [x] 15.3 Add manual job deletion from UI (before auto-cleanup).
 - [x] 15.4 Display format compatibility hints when selecting formats.
 - [ ] 15.5 Add job status webhooks/notifications.
-- [x] 15.6 Add an 'available' or 'unavailable' status indicator (Epic 13.8). 
+- [x] 15.6 Add an 'available' or 'unavailable' status indicator (Epic 13.8).
 - [x] 15.7 Add an error message if a user tried to convert a file and the disk space pre-checks fail (Epic 13.5).
 
 ## Epic 16: Scalability & Performance
 - [ ] 16.1 Make worker concurrency configurable via env var.
-- [ ] 16.2 Implement WebSocket support to replace polling.
-- [ ] 16.3 Add Redis connection pooling optimization.
+- [x] 16.2 Implement WebSocket support to replace polling.
+- [x] 16.3 Add Redis connection pooling optimization.
 - [ ] 16.4 Create Kubernetes/Helm deployment manifests.
 - [ ] 16.5 Add load testing suite (locust/k6).
-- [ ] 16.6 Implement queue priority levels (small files faster).
+- [x] 16.6 Implement queue priority levels (small files faster).
 - [x] 16.7 Implement queueing for marker-api jobs when api is not available.
 
 ---
@@ -246,6 +247,5 @@ HSET job:<job_id>
 | GET | `/api/status/services` | Check status of dependent services (Marker API, Disk Space) |
 
 ## Next Steps for Future Sessions
-1. **Rate Limiting (Epic 11.3)**: Implement `Flask-Limiter` to protect the `/convert` endpoint from abuse.
-2. **WebSocket Support (Epic 16.2)**: Consider moving from polling to WebSockets for real-time updates.
-3. **Metrics (Epic 13.3)**: Implement Prometheus metrics for better operational insights.
+**Rate Limiting (Epic 11.3)**: Implement `Flask-Limiter` to protect the `/convert` endpoint from abuse.
+**Metrics (Epic 13.3)**: Implement Prometheus metrics for better operational insights.
