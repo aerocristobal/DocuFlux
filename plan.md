@@ -15,7 +15,67 @@ This project implements a containerized document conversion service using a Task
 - **Infrastructure**: Docker, Docker Compose, Redis, NVIDIA Container Toolkit (for AI).
 - **Conversion Engines**: Pandoc 3.1, Marker (AI-powered PDF engine).
 
+---
+
+## Quick Start for New Sessions
+
+**Last Updated**: 2026-01-10
+
+### Critical Files to Understand
+| File | Purpose | Lines |
+|------|---------|-------|
+| `web/app.py` | Flask backend - routes, security, Redis integration | ~326 |
+| `worker/tasks.py` | Celery tasks - Pandoc & Marker conversions, cleanup | ~308 |
+| `web/templates/index.html` | Material Design 3 UI - SPA with Socket.IO | ~274 |
+| `docker-compose.yml` | Service orchestration (web, worker, beat, redis, marker-api) | ~150 |
+
+### Running the Application
+```bash
+# Start all services (add --build on first run or after code changes)
+docker-compose up --build
+
+# Run tests
+pytest tests/ -v
+
+# Check test coverage
+pytest tests/ --cov=web --cov=worker --cov-report=term-missing
+
+# View logs for a specific service
+docker-compose logs -f web
+docker-compose logs -f worker
+```
+
+### Verifying Everything Works
+1. Open http://localhost:5000 in browser
+2. Upload a Markdown file, convert to PDF - should complete in seconds
+3. Upload a PDF, select "PDF (High Accuracy)" as source - uses Marker AI (requires GPU for best performance)
+4. Check `/api/status/services` endpoint for health status
+
+### Common Issues
+| Issue | Solution |
+|-------|----------|
+| Marker API 503 errors | Service starting up (takes 1-2 min with GPU, longer on CPU) |
+| Redis connection refused | Ensure redis container is running: `docker-compose up redis` |
+| Permission denied on data/ | `chmod -R 777 data/` or fix volume ownership |
+| CSRF token missing | Clear browser cookies, reload page |
+
+### Architecture Notes
+- **Marker API**: Uses standalone `marker/Dockerfile` that directly clones [adithya-s-k/marker-api](https://github.com/adithya-s-k/marker-api). No submodule dependency.
+
+---
+
 ## Current Session State
+
+### Status Summary
+| Category | Status | Notes |
+|----------|--------|-------|
+| Core Conversion | **Working** | Pandoc conversions (17 formats) fully functional |
+| AI Conversion | **Working** | Marker API integration with retry logic |
+| Web UI | **Working** | Material Design 3, drag-drop, real-time updates |
+| Security | **Working** | CSRF, rate limiting, input validation, headers |
+| Testing | **Working** | pytest suite with CI/CD pipeline |
+| Observability | **Partial** | Logging done; Prometheus/Grafana not implemented |
+| Deployment | **Partial** | Docker Compose ready; K8s manifests missing |
 
 ### Implemented Fixes & Optimizations
 
@@ -191,6 +251,72 @@ Single-page application in `web/templates/index.html`:
 - [x] 16.6 Implement queue priority levels (small files faster).
 - [x] 16.7 Implement queueing for marker-api jobs when api is not available.
 
+## Epic 17: Marker API Migration (maximofn → adithya-s-k)
+
+**Goal**: Remove dependency on `maximofn/marker_api_docker` submodule and use `adithya-s-k/marker-api` directly.
+
+**Background**:
+- Current: `marker_api_service/` is a git submodule of `maximofn/marker_api_docker`
+- The Dockerfile inside already clones `adithya-s-k/marker-api` at build time
+- This creates an unnecessary indirection and dependency on an external repo's Docker setup
+
+**Key Differences** (current vs adithya-s-k/marker-api direct):
+| Aspect | Current (via maximofn) | adithya-s-k/marker-api |
+|--------|------------------------|------------------------|
+| Port | 8000 | 8080 (default) |
+| Health endpoint | `/health` | `/health` |
+| Convert endpoint | `/convert` | `/convert` |
+| Request field | `pdf_file` | `pdf_file` |
+| Response | `{"result":{"markdown":"..."}}` | `{"status":"Success","result":{...}}` |
+| Gradio path | `/gradio` (patched) | `/` (default) |
+
+### Tasks
+- [x] 17.1 Remove `maximofn/marker_api_docker` git submodule
+  - `git submodule deinit marker_api_service`
+  - `git rm marker_api_service`
+  - Remove from `.gitmodules`
+- [x] 17.2 Create new `marker/` directory with standalone Dockerfile
+  - Base: `nvcr.io/nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04`
+  - Clone `adithya-s-k/marker-api` directly
+  - Apply Surya attention patch (if still needed)
+  - Apply Gradio path patch (mount at `/gradio`)
+  - Expose port 8000 (keep consistent with current setup)
+- [x] 17.3 Update `docker-compose.yml` marker-api service
+  - Change build context from `./marker_api_service` to `./marker`
+  - Verify port mapping remains 8000:8000
+- [x] 17.4 Verify response parsing in `worker/tasks.py`
+  - Check if `result.markdown` path still works
+  - Add fallback for different response structures
+- [x] 17.5 Update health check in `web/app.py`
+  - Verify `/health` endpoint works
+- [x] 17.6 Update tests for new Marker API structure
+  - `tests/unit/test_worker.py` - mock response format
+  - `tests/wait_for_marker.py` - health check endpoint
+- [x] 17.7 Update documentation
+  - `docs/AI_INTEGRATION.md` - new setup instructions
+  - `plan.md` - architecture notes
+- [ ] 17.8 Verify end-to-end PDF conversion flow
+  - Manual test: Upload PDF, convert to Markdown
+  - Verify retry logic still works on 503
+
+### Files to Modify
+| File | Changes |
+|------|---------|
+| `.gitmodules` | Remove marker_api_service entry |
+| `docker-compose.yml` | Update build context to `./marker` |
+| `marker/Dockerfile` | New file (standalone, no submodule) |
+| `worker/tasks.py` | Verify/update response parsing |
+| `web/app.py` | Verify health check works |
+| `tests/unit/test_worker.py` | Update mock responses |
+| `tests/wait_for_marker.py` | Verify health endpoint |
+| `docs/AI_INTEGRATION.md` | Update setup instructions |
+
+### Rollback Plan
+If issues arise, revert to submodule approach:
+1. `git submodule add https://github.com/maximofn/marker_api_docker marker_api_service`
+2. Restore docker-compose.yml build context
+3. Delete `marker/` directory
+
 ---
 
 ## Technical Reference
@@ -247,5 +373,45 @@ HSET job:<job_id>
 | GET | `/api/status/services` | Check status of dependent services (Marker API, Disk Space) |
 
 ## Next Steps for Future Sessions
-**Rate Limiting (Epic 11.3)**: Implement `Flask-Limiter` to protect the `/convert` endpoint from abuse.
-**Metrics (Epic 13.3)**: Implement Prometheus metrics for better operational insights.
+
+### ~~Priority 0: Marker API Migration (Epic 17)~~ COMPLETED
+| Task | Epic | Status | Description |
+|------|------|--------|-------------|
+| Remove submodule | 17.1 | Done | Removed maximofn/marker_api_docker submodule |
+| Create standalone Dockerfile | 17.2 | Done | Created `marker/Dockerfile` |
+| Update docker-compose | 17.3 | Done | Changed build context to `./marker` |
+| Verify response parsing | 17.4 | Done | Parsing already handles multiple formats |
+| Update tests | 17.6 | Done | Updated `wait_for_marker.py` to use `/health` |
+| End-to-end verification | 17.8 | **Pending** | Requires manual test with `docker-compose up` |
+
+### Priority 1: Observability (Production Readiness)
+| Task | Epic | Effort | Description |
+|------|------|--------|-------------|
+| Prometheus metrics | 13.3 | Medium | Add `/metrics` endpoint with conversion counts, durations, queue depth |
+| Health checks | 13.2 | Low | Add healthcheck directives for worker/beat in docker-compose.yml |
+| Grafana dashboard | 13.4 | Medium | Create dashboard template for the Prometheus metrics |
+| Alerting rules | 13.6 | Medium | Configure alerts for queue backlog, failed jobs, disk space |
+
+### Priority 2: DevOps & Infrastructure
+| Task | Epic | Effort | Description |
+|------|------|--------|-------------|
+| GitHub branch protection | 11.8 | Low | Configure ruleset to prevent force push to main |
+| Worker concurrency env var | 16.1 | Low | Make `--concurrency=N` configurable via WORKER_CONCURRENCY env |
+| Kubernetes manifests | 16.4 | High | Create Helm chart for K8s deployment |
+| Load testing | 16.5 | Medium | Add locust/k6 test suite for performance validation |
+
+### Priority 3: Advanced Features
+| Task | Epic | Effort | Description |
+|------|------|--------|-------------|
+| Job webhooks | 15.5 | Medium | POST callback to user-defined URL on job completion/failure |
+
+### Quick Wins (< 1 hour each)
+1. **Epic 11.8** - GitHub branch protection: Settings → Branches → Add ruleset
+2. **Epic 13.2** - Health checks: Add `healthcheck` to worker/beat in docker-compose.yml
+3. **Epic 16.1** - Worker concurrency: Replace hardcoded `--concurrency=2` with `${WORKER_CONCURRENCY:-2}`
+
+### Implementation Notes for Future Sessions
+- **Prometheus metrics**: Use `prometheus_flask_exporter` library; expose at `/metrics`
+- **Kubernetes**: Consider Kompose for initial conversion, then customize
+- **Load testing**: Focus on `/convert` endpoint with various file sizes
+- **Webhooks**: Add `callback_url` parameter to `/convert`, call on task completion

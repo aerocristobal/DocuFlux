@@ -1,3 +1,0 @@
-[submodule "marker_api_service"]
-	path = marker_api_service
-	url = https://github.com/maximofn/marker_api_docker.git

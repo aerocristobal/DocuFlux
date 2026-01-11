@@ -3,7 +3,7 @@
 This project integrates [Marker](https://github.com/VikParuchuri/marker), a high-accuracy PDF-to-Markdown converter powered by deep learning models (OCR, Layout Analysis).
 
 ## Architecture
-- **Service**: `marker_api_service`
+- **Service**: `marker/` (standalone Dockerfile using [adithya-s-k/marker-api](https://github.com/adithya-s-k/marker-api))
 - **Container**: `marker-api`
 - **Communication**: HTTP (REST)
 - **Endpoint**: `POST http://marker-api:8000/convert`

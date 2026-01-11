@@ -8,7 +8,7 @@ print("Waiting for Marker API to start...")
 start_time = time.time()
 while time.time() - start_time < 300: # Wait up to 5 minutes
     try:
-        r = requests.get(f"{BASE_URL}/docs")
+        r = requests.get(f"{BASE_URL}/health")
         if r.status_code == 200:
             print("Marker API is up!")
             sys.exit(0)

@@ -84,9 +84,8 @@ services:
 
   marker-api:
     build:
-      context: ./marker_api_service
-      dockerfile: docker/Dockerfile
-    command: uvicorn server:app --host 0.0.0.0 --port 8000
+      context: ./marker
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     deploy:
