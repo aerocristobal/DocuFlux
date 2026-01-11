@@ -127,16 +127,9 @@ def check_disk_space():
     except Exception:
         return True
 
-MARKER_API_URL = os.environ.get('MARKER_API_URL', 'http://marker-api:8000')
-
 @app.route('/api/status/services')
 def service_status():
-    status = {'marker_api': 'unknown', 'disk_space': 'ok'}
-    try:
-        resp = requests.get(f"{MARKER_API_URL}/health", timeout=2) 
-        status['marker_api'] = 'available' if resp.status_code == 200 else 'unavailable'
-    except Exception:
-        status['marker_api'] = 'unavailable'
+    status = {'disk_space': 'ok'}
     if not check_disk_space():
         status['disk_space'] = 'low'
     return jsonify(status)

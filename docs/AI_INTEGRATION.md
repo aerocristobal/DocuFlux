@@ -1,26 +1,26 @@
-# AI Integration: Marker API
+# AI Integration: Marker PDF
 
 This project integrates [Marker](https://github.com/VikParuchuri/marker), a high-accuracy PDF-to-Markdown converter powered by deep learning models (OCR, Layout Analysis).
 
 ## Architecture
-- **Service**: `marker/` (standalone Dockerfile using [adithya-s-k/marker-api](https://github.com/adithya-s-k/marker-api))
-- **Container**: `marker-api`
-- **Communication**: HTTP (REST)
-- **Endpoint**: `POST http://marker-api:8000/convert`
+- **Integration**: Direct library integration via `marker-pdf` Python package
+- **Location**: Installed in the `worker` container
+- **Communication**: Direct subprocess call to `marker_single` CLI
+- **GPU**: Shared with worker container (NVIDIA CUDA)
 
 ## Usage
 When a user selects **"PDF (High Accuracy)"** (`pdf_marker`) as the input format:
 1. The web app queues a `tasks.convert_with_marker` Celery task.
-2. The worker sends the PDF file to the `marker-api` container.
+2. The worker runs `marker_single` CLI directly with the PDF file.
 3. Marker processes the file (GPU accelerated if available).
-4. Marker returns the extracted Markdown content.
-5. The worker saves this as the output `.md` file.
+4. Marker generates Markdown output in a temporary directory.
+5. The worker copies the markdown to the final output location.
 
 ## Fallback & Resilience
-Since AI inference is heavy and the service might be fragile (OOM, startup time):
-1. **Queuing**: If the API is busy (503) or unreachable (Connection Error), the worker **retries** the task automatically with exponential backoff for up to ~5 minutes.
-2. **UI Feedback**: The frontend polls the status endpoint `/api/status/services`. If Marker is down, the user is warned *before* upload, but allowed to queue the job (knowing it will wait).
-3. **Timeouts**: AI jobs have a higher timeout (20 minutes) compared to standard jobs (10 minutes).
+Since AI inference is heavy and can fail:
+1. **Retry Logic**: Failed conversions are retried up to 3 times automatically.
+2. **Timeouts**: AI jobs have a higher timeout (20 minutes) compared to standard jobs (10 minutes).
+3. **Error Handling**: Subprocess errors are captured and reported to the user with detailed error messages.
 
 ## Technical Details
 - **Models**: Uses `surya` for OCR/Layout. Weights are cached in `/app/models` inside the container.

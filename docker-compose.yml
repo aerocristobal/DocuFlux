@@ -28,7 +28,6 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - REDIS_METADATA_URL=redis://redis:6379/1
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - MARKER_API_URL=http://marker-api:8000
     depends_on:
       redis:
         condition: service_healthy
@@ -53,7 +52,6 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - REDIS_METADATA_URL=redis://redis:6379/1
-      - MARKER_API_URL=http://marker-api:8000/convert
     command: celery -A tasks worker --loglevel=info --pool=gevent --concurrency=100 -Q high_priority,default
     depends_on:
       redis:
@@ -61,8 +59,13 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 2G
+          cpus: '4.0'
+          memory: 16G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
 
   beat:
@@ -82,22 +85,6 @@ services:
       resources:
         limits:
           memory: 256M
-    restart: unless-stopped
-
-  marker-api:
-    image: savatar101/marker-api:0.3
-    ports:
-      - "8000:8000"
-    deploy:
-      resources:
-        limits:
-          cpus: '4.0'
-          memory: 16G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     restart: unless-stopped
 
 volumes:
