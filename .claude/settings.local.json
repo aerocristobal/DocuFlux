@@ -1,9 +1,28 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git -C /mnt/c/Users/chris/onedrive/documents/github/pandoc-web diff web/templates/status.html)",
-      "Bash(git -C /mnt/c/Users/chris/onedrive/documents/github/pandoc-web show:*)",
-      "Bash(tree:*)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:hub.docker.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "Bash(git submodule:*)",
+      "Bash(git rm:*)",
+      "Bash(pytest:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(docker-compose down:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose ps:*)",
+      "Bash(curl:*)",
+      "Bash(docker-compose logs:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker-compose restart:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker restart:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker-compose stop:*)",
+      "Bash(docker-compose rm:*)",
+      "Bash(docker-compose pull:*)"
     ]
   }
 }
