@@ -22,7 +22,9 @@
       "Bash(docker inspect:*)",
       "Bash(docker-compose stop:*)",
       "Bash(docker-compose rm:*)",
-      "Bash(docker-compose pull:*)"
+      "Bash(docker-compose pull:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(docker-compose exec:*)"
     ]
   }
 }

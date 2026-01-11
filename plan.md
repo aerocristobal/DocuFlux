@@ -317,7 +317,95 @@ If issues arise, revert to submodule approach:
 2. Restore docker-compose.yml build context
 3. Delete `marker/` directory
 
----
+## Epic 18: Epic: Migrate to datalab-to/marker
+**As a developer, I want to replace adithya-s-k/marker-api with datalab-to/marker so that the application uses the latest, feature-rich conversion engine.**
+
+- [ ] 18.1 ## Story: Install Latest Marker in Worker
+**As a Docker builder, I want the Celery worker container to install marker-pdf[full] so that it supports PDF/images/PPTX/DOCX/XLSX/HTML/EPUB conversions.**
+**Acceptance Criteria:**
+- Dockerfile installs `marker-pdf[full]` on CUDA 12.1 base image[1]
+- Container runs `marker_single --help` successfully with GPU detection
+- `docker-compose up --build worker` succeeds without pip errors
+- Test: `docker-compose run worker marker_single --version` outputs latest (post-0.3.2)[2]
+
+- [ ] 18.2 ## Story: Refactor Marker Conversion Task
+**As a backend developer, I want the `convertwithmarker` Celery task to invoke `marker_single` CLI instead of HTTP API so that conversions use datalab-to/marker directly.**
+**Acceptance Criteria:**
+- `workertasks.py` replaces requests.post with subprocess.run(["marker_single", input_path, output_dir, "--output_format", "markdown"])[1]
+- Handles stdout parsing for markdown; stores in `data/outputs/job_id/output.md`
+- Supports `--force_ocr` for PDFs; falls back to Pandoc if CLI fails
+- Task updates Redis status: PENDING -> PROCESSING -> SUCCESS/FAILURE
+- Logs GPU usage and OOM errors with `--batch_multiplier 1` default
+
+- [ ] 18.3 ## Story: Update Docker Compose for Marker Workers
+**As a DevOps engineer, I want docker-compose.yml to remove marker-api service and scale Celery workers with GPU so that Marker tasks run distributed without separate API.**
+**Acceptance Criteria:**
+- Remove `marker` service/build context from docker-compose.yml[1]
+- Add `deploy.resources.reservations.devices` for `--gpus all` on worker service
+- Use separate Celery queue (`marker_queue`) via `CELERY_TASK_ROUTES`
+- `docker-compose up --scale worker=3` processes 3 parallel PDFs
+- Healthcheck verifies `marker_single` availability in worker
+
+- [ ] 18.4 ## Story: Enhance Task with Marker Features
+**As an application user, I want PDF conversions to leverage datalab-to/marker's advanced options so that accuracy improves for tables/equations/images.**
+**Acceptance Criteria:**
+- CLI flags: `--use_llm` toggle (env `MARKER_USE_LLM=true`), `--force_ocr`, `--output_format json` option[3][1]
+- Extract images to `data/outputs/job_id/images/`; link in markdown
+- UI selects "High Accuracy LLM" for `--use_llm`; warns on no Ollama/Gemini key
+- Job metadata in Redis includes `marker_flags` for audit
+
+- [ ] 18.5 ## Story: Update Tests and Verification
+**As a QA engineer, I want updated pytest suite to cover new Marker CLI integration so that migration doesn't regress PDF conversions.**
+**Acceptance Criteria:**
+- `tests/unittestworker.py` mocks `subprocess.run` for `marker_single`[1]
+- `tests/waitformarker.py` tests end-to-end: upload PDF -> SUCCESS -> download.md
+- Coverage >90% on `workertasks.py`; includes OOM retry scenarios
+- `pytest tests -v --cov` passes; GitHub Actions green[1]
+
+- [ ] 18.6 ## Story: Documentation and Rollback
+**As a maintainer, I want updated docs and rollback plan so that the migration is reversible and reproducible.**
+**Acceptance Criteria:**
+- `docs/AI_INTEGRATION.md` details new CLI setup, flags, GPU tuning[1]
+- `plan.md` Epic 18: Marker Migration with verification checklist
+- Rollback: Restore marker service Dockerfile, revert task to HTTP
+- README.md notes datalab-to/marker version pinning (`pip install marker-pdf==latest`)
+[1](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/29358965/9e56848c-debb-4c89-9deb-aff1776080c1/plan.md)
+[2](https://pypi.org/project/marker-pdf/0.3.2/)
+[3](https://github.com/datalab-to/marker)
+
+- [ ] 18.7 ## Story: Optimize Marker Integration with Python API
+**As a performance engineer, I want Celery tasks to use datalab-to/marker's Python PdfConverter API instead of CLI subprocess so that conversion overhead is eliminated and GPU memory is tuned dynamically.**
+**Acceptance Criteria:**
+- `workertasks.py` imports `from marker.converters.pdf import PdfConverter; from marker.models import create_model_dict; from marker.output import text_from_rendered` and invokes `converter("input.pdf")` directly[1][2]
+- Sets `os.environ["INFERENCE_RAM"] = "16"` (or env-var tunable) before import to match GPU VRAM; falls back to "8" on smaller GPUs[1]
+- Extracts `markdown, metadata, images` via `text_from_rendered`; saves images to `data/outputs/job_id/images/`, embeds links in markdown
+- Task completes 2x faster than subprocess (benchmark: <30s avg PDF on A6000); no shell spawn logs in Celery output
+- Handles OOM by retrying with reduced `VRAM_PER_TASK=8` env and `--max_pages 50`; updates Redis `error: "GPU OOM, retrying low-mem"`
+- Test: `pytest tests/test_marker_api.py` mocks `PdfConverter`, asserts markdown len >0, images dict non-empty; e2e GPU test passes
+[1](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/29358965/9e56848c-debb-4c89-9deb-aff1776080c1/plan.md)
+[2](https://github.com/datalab-to/marker)
+
+## Epic 19: Functional Enhancements
+**As a user, I want functionality that increase the value I received from the application.**
+- [ ] 19.1## Story: Download Multi-File Conversion Outputs as ZIP Archive
+**As a user, when I convert a file from one format to another format and the output has multiple files, such as a markdown formatted file and multiple images, I want to download all the files in one archive from the web UI so that I can easily access the complete conversion result without multiple downloads.**
+**Acceptance Criteria:**
+- PDF→Markdown via Marker generates `output.md` + `image-001.png`, `image-002.png`, etc. in `data/outputs/job_id/`[1][2]
+- Download button shows "📦 Download All (ZIP)" when `job.status == SUCCESS` and directory contains >1 file; otherwise "📥 Download" for single file
+- `webapp.py` adds `/download_zip/<job_id>` endpoint: scans `data/outputs/job_id/`, zips all files (`*.md`, `*.png`, `*.jpg`, `metadata.json`), streams response with `Content-Type: application/zip; Content-Disposition: attachment`
+- ZIP contains flat structure: `output.md`, `images/image-001.png`, `images/image-002.png`, `metadata.json` (Marker metadata with page_stats, toc)
+- Frontend `index.html` updates JS: `fetch('/download_zip/${jobId}')` triggers download; Material md-circular-progress during zip creation (>5s)
+- Size limit: Reject jobs >500MB total output; Redis `error: "Output too large for ZIP"` with partial download option
+- Test: `pytest tests/test_download_zip.py` creates mock job with 3 images + md, verifies ZIP extracts correctly with `zipfile` assertions
+- Cleanup: ZIP streamed, not stored; respects existing retention (delete after download/1hr)[1]
+**UI Mockup:**
+```
+Job List Item:
+[Markdown ✓] sample.pdf → md    📦 Download All (4 files, 2.3MB)
+                          12:34 PM  ✅ Success  28s
+```
+[1](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/29358965/9e56848c-debb-4c89-9deb-aff1776080c1/plan.md)
+[2](https://github.com/datalab-to/marker)
 
 ## Technical Reference
 
