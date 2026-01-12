@@ -1,6 +1,3 @@
-from gevent import monkey
-monkey.patch_all()
-
 import os
 import subprocess
 import time
@@ -133,6 +130,21 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
         raise
 
+model_dict = None
+
+def get_model_dict():
+    global model_dict
+    if model_dict is None:
+        # Set env vars for marker to optimize for 16GB VRAM
+        os.environ["INFERENCE_RAM"] = "16"
+        # Import here to avoid loading at top level
+        from marker.models import create_model_dict
+        
+        logging.info("Initializing Marker models...")
+        model_dict = create_model_dict()
+        logging.info("Marker models initialized.")
+    return model_dict
+
 @celery.task(
     name='tasks.convert_with_marker',
     bind=True,                # Enable access to self (for retry)
@@ -142,15 +154,19 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
     reject_on_worker_lost=True,
     max_retries=3             # Reduced retries since no external service dependency
 )
-def convert_with_marker(self, job_id, input_filename, output_filename, from_format, to_format):
+def convert_with_marker(self, job_id, input_filename, output_filename, from_format, to_format, options=None):
     if not is_valid_uuid(job_id):
         logging.error(f"Invalid job_id received: {job_id}")
         return {"status": "error", "message": "Invalid job ID"}
+    
+    if options is None:
+        options = {}
 
     input_path = os.path.join(UPLOAD_FOLDER, job_id, input_filename)
-    output_path = os.path.join(OUTPUT_FOLDER, job_id, output_filename)
+    output_dir = os.path.join(OUTPUT_FOLDER, job_id)
+    output_path = os.path.join(output_dir, output_filename)
 
-    logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1})")
+    logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1}) with options: {options}")
     update_job_metadata(job_id, {
         'status': 'PROCESSING',
         'started_at': str(time.time()),
@@ -161,81 +177,70 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-    # Create temporary directory for marker output
-    marker_output_dir = os.path.join(OUTPUT_FOLDER, job_id, 'marker_temp')
-    os.makedirs(marker_output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create images subdirectory
+    images_dir = os.path.join(output_dir, 'images')
+    os.makedirs(images_dir, exist_ok=True)
 
     try:
         update_job_metadata(job_id, {'progress': '15'})
-
-        # Run marker_single CLI
-        cmd = [
-            'marker_single',
-            input_path,
-            '--output_dir', marker_output_dir
-        ]
-
-        logging.info(f"Running marker_single: {' '.join(cmd)}")
+        
+        # Get cached models
+        artifacts = get_model_dict()
+        
+        # Initialize converter with task-specific configuration
+        from marker.converters.pdf import PdfConverter
+        converter = PdfConverter(artifact_dict=artifacts, config=options)
+        
         update_job_metadata(job_id, {'progress': '20'})
-
-        # Redirect stdout/stderr to DEVNULL to avoid buffer deadlock
-        # marker_single can produce large amounts of output that would fill capture buffers
-        process = subprocess.run(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True,
-            timeout=1100  # 18 minutes (less than soft_time_limit)
-        )
-
+        
+        logging.info(f"Running Marker conversion on {input_path}")
+        
+        # Run conversion
+        rendered = converter(input_path)
+        
         update_job_metadata(job_id, {'progress': '80'})
+        
+        # Extract results
+        from marker.output import text_from_rendered
+        import json
+        
+        text, _, images = text_from_rendered(rendered)
+        
+        # Save images and update markdown links
+        saved_images_count = 0
+        for filename, image in images.items():
+            image_save_path = os.path.join(images_dir, filename)
+            image.save(image_save_path)
+            saved_images_count += 1
+            text = text.replace(f"({filename})", f"(images/{filename})")
+            
+        logging.info(f"Saved {saved_images_count} images to {images_dir}")
 
-        # Find the generated markdown file
-        md_files = [f for f in os.listdir(marker_output_dir) if f.endswith('.md')]
-        if not md_files:
-            raise Exception(f"No markdown file generated by marker in {marker_output_dir}")
-
-        # Use the first (and likely only) markdown file
-        generated_md = os.path.join(marker_output_dir, md_files[0])
-
-        # Copy to final output path
-        shutil.copy2(generated_md, output_path)
-
-        # Clean up temporary directory
-        shutil.rmtree(marker_output_dir)
+        # Save markdown
+        with open(output_path, "w", encoding='utf-8') as f:
+            f.write(text)
+            
+        # Save metadata
+        metadata_path = os.path.join(output_dir, "metadata.json")
+        with open(metadata_path, "w", encoding='utf-8') as f:
+            json.dump(rendered.metadata, f, indent=2, default=str)
 
         update_job_metadata(job_id, {'progress': '90'})
         logging.info(f"Marker conversion successful: {output_path}")
+        
         update_job_metadata(job_id, {
             'status': 'SUCCESS',
             'completed_at': str(time.time()),
             'progress': '100'
         })
+        
         return {"status": "success", "output_file": os.path.basename(output_path)}
 
-    except subprocess.TimeoutExpired as e:
-        error_msg = "Marker conversion timed out after 18 minutes"
-        logging.error(f"Timeout for job {job_id}: {error_msg}")
-        if os.path.exists(marker_output_dir):
-            shutil.rmtree(marker_output_dir)
-        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg, 'progress': '0'})
-        raise Exception(error_msg)
-
-    except subprocess.CalledProcessError as e:
-        error_msg = e.stderr or e.stdout or "Unknown marker_single error"
-        logging.error(f"Marker error for job {job_id}: {error_msg}")
-        if os.path.exists(marker_output_dir):
-            shutil.rmtree(marker_output_dir)
-        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500], 'progress': '0'})
-        raise Exception(f"marker_single failed: {error_msg}")
-
     except Exception as e:
-        logging.error(f"Unexpected error for job {job_id}: {str(e)}")
-        if os.path.exists(marker_output_dir):
-            shutil.rmtree(marker_output_dir)
+        error_msg = f"Marker conversion failed: {str(e)}"
+        logging.error(f"Error for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
         raise
 

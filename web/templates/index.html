@@ -91,6 +91,12 @@
             <section>
                 <div class="surface-card">
                     <h2 class="md-typescale-title-medium">New Conversion</h2>
+                    
+                    <div id="status-banner" class="alert-card alert-warning hidden">
+                        <md-icon>hourglass_empty</md-icon>
+                        <span id="status-text">Marker initializing...</span>
+                    </div>
+
                     <div id="alert-area"></div>
                     <form id="convert-form">
                         <div class="drop-zone" id="drop-zone">
@@ -106,6 +112,18 @@
                         <md-filled-select label="To Format" id="to_format" name="to_format" disabled required>
                             <md-select-option value="" disabled selected><div slot="headline">Select source first</div></md-select-option>
                         </md-filled-select>
+                        
+                        <div id="marker-options" class="hidden" style="margin-bottom: 16px;">
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                                <md-checkbox id="force_ocr" name="force_ocr" value="on"></md-checkbox>
+                                <label for="force_ocr">Force OCR (Slower, better for scanned)</label>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <md-checkbox id="use_llm" name="use_llm" value="on"></md-checkbox>
+                                <label for="use_llm">Use LLM (High Accuracy, requires GPU)</label>
+                            </div>
+                        </div>
+
                         <md-linear-progress id="submit-progress" indeterminate class="hidden" style="margin-bottom: 16px;"></md-linear-progress>
                         <md-filled-button type="submit" id="convert-btn">Convert Now<md-icon slot="icon">transform</md-icon></md-filled-button>
                     </form>
@@ -202,6 +220,8 @@
                     toSelect.appendChild(opt);
                 }
             });
+            const opts = document.getElementById('marker-options');
+            if (key === 'pdf_marker') opts.classList.remove('hidden'); else opts.classList.add('hidden');
         }
 
         document.getElementById('convert-form').addEventListener('submit', async (e) => {
@@ -251,7 +271,15 @@
                 const time = new Date(ts * (ts < 10000000000 ? 1000 : 1)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 const active = ['PENDING', 'PROCESSING', 'STARTED'].includes(j.status);
                 let icon = 'pending', color = 'secondary', label = 'Waiting', actions = '';
-                if (j.status === 'SUCCESS') { icon = 'check_circle'; color = 'primary'; label = 'Done'; actions = `<a href="/download/${j.id}" download slot="end"><md-icon-button><md-icon>download</md-icon></md-icon-button></a>`; }
+                if (j.status === 'SUCCESS') { 
+                    icon = 'check_circle'; 
+                    color = 'primary'; 
+                    label = 'Done'; 
+                    const dlUrl = j.download_url || `/download/${j.id}`;
+                    const dlIcon = j.is_zip ? 'folder_zip' : 'download';
+                    const dlTitle = j.is_zip ? 'Download ZIP' : 'Download File';
+                    actions = `<a href="${dlUrl}" download slot="end" title="${dlTitle}"><md-icon-button><md-icon>${dlIcon}</md-icon></md-icon-button></a>`; 
+                }
                 else if (j.status === 'FAILURE') { icon = 'error'; color = 'error'; label = 'Failed'; actions = `<md-icon-button slot="end" onclick="window.retryJob('${j.id}')"><md-icon>replay</md-icon></md-icon-button>`; }
                 else if (j.status === 'REVOKED') { icon = 'cancel'; color = 'outline'; label = 'Cancelled'; actions = `<md-icon-button slot="end" onclick="window.retryJob('${j.id}')"><md-icon>replay</md-icon></md-icon-button>`; }
                 else actions = `<md-icon-button slot="end" onclick="window.cancelJob('${j.id}')"><md-icon>close</md-icon></md-icon-button>`;
@@ -270,6 +298,36 @@
         window.cancelJob = async (id) => { if (await confirmAction('Cancel?', 'Stop?')) { await fetch(`/api/cancel/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); } };
         window.deleteJob = async (id) => { if (await confirmAction('Delete?', 'Remove?')) { await fetch(`/api/delete/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); } };
         window.retryJob = async (id) => { await fetch(`/api/retry/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); showAlert('success', 'Retried.'); };
+
+        async function checkServices() {
+            try {
+                const r = await fetch('/api/status/services');
+                const d = await r.json();
+                const banner = document.getElementById('status-banner');
+                const txt = document.getElementById('status-text');
+                const pdfOpt = document.querySelector('md-select-option[value="pdf_marker"]');
+                
+                if (d.marker && d.marker !== 'ready') {
+                    banner.classList.remove('hidden');
+                    const isError = d.marker === 'error';
+                    banner.className = `alert-card alert-${isError ? 'error' : 'warning'}`;
+                    const icon = banner.querySelector('md-icon');
+                    if (icon) icon.textContent = isError ? 'error' : 'hourglass_empty';
+                    
+                    txt.textContent = `Marker Service: ${d.marker.toUpperCase()}${d.llm_download_eta ? ` (ETA: ${d.llm_download_eta})` : ''}. PDF conversion unavailable.`;
+                    
+                    if (pdfOpt) {
+                        pdfOpt.disabled = true;
+                        if (fromSelect.value === 'pdf_marker') fromSelect.value = ''; // Deselect if selected
+                    }
+                } else {
+                    banner.classList.add('hidden');
+                    if (pdfOpt) pdfOpt.disabled = false;
+                }
+            } catch(e) { console.error(e); }
+        }
+        setInterval(checkServices, 10000);
+        checkServices();
     </script>
 </body>
 </html>

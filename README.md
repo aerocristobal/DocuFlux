@@ -20,7 +20,7 @@ DocuFlux is a modern, containerized document conversion service that bridges the
 -   **Task Queue**: Celery with Redis Broker.
 -   **Conversion Engines**:
     -   [Pandoc](https://pandoc.org/) (Universal converter)
-    -   [Marker](https://github.com/VikParuchuri/marker) (AI PDF processing)
+    -   [Marker](https://github.com/VikParuchuri/marker) (AI PDF processing, embedded in Worker)
 -   **Infrastructure**: Docker, Docker Compose, NVIDIA Container Toolkit.
 
 ## Prerequisites
@@ -40,7 +40,7 @@ DocuFlux is a modern, containerized document conversion service that bridges the
     ```bash
     docker-compose up -d --build
     ```
-    *Note: The `marker-api` service downloads large AI models (~3GB) on the first build/run. Please be patient.*
+    *Note: The `worker` service downloads large AI models (~3GB) on the first build/run. Please be patient.*
 
 3.  **Access the interface:**
     Open your browser and navigate to `http://localhost:5000`.
@@ -52,8 +52,7 @@ The system follows a microservices pattern orchestrated by Docker Compose:
 | Service | Description |
 | :--- | :--- |
 | **`web`** | Flask frontend. Handles uploads, serves the UI, and dispatches jobs. |
-| **`worker`** | Celery worker. Executes standard Pandoc conversions and coordinates with the AI service. |
-| **`marker-api`** | Specialized FastAPI service hosting the PyTorch models for AI PDF extraction. |
+| **`worker`** | Celery worker. Executes standard Pandoc conversions and runs local Marker AI models for PDF extraction. |
 | **`redis`** | Message broker for the task queue and ephemeral metadata store. |
 | **`beat`** | Scheduler for periodic cleanup tasks. |
 
@@ -82,7 +81,6 @@ docuflux/
 │   └── templates/          # Material Design templates
 ├── worker/                 # Celery Worker
 │   └── tasks.py            # Conversion logic
-├── marker_api_service/     # AI Engine (Submodule)
 ├── data/                   # Shared volume (Ignored)
 └── tests/                  # Verification scripts
 ```

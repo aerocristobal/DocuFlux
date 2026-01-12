@@ -52,7 +52,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - REDIS_METADATA_URL=redis://redis:6379/1
-    command: celery -A tasks worker --loglevel=info --pool=gevent --concurrency=100 -Q high_priority,default
+    command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q high_priority,default
     depends_on:
       redis:
         condition: service_healthy
@@ -66,6 +66,12 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   beat:

@@ -10,7 +10,9 @@ import magic
 import requests
 import logging
 import sys
-from flask import Flask, render_template, request, send_from_directory, jsonify, session
+import zipfile
+import io
+from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file
 from werkzeug.utils import secure_filename
 from celery import Celery
 from flask_limiter import Limiter
@@ -132,6 +134,20 @@ def service_status():
     status = {'disk_space': 'ok'}
     if not check_disk_space():
         status['disk_space'] = 'low'
+    
+    # Check Marker status from Redis
+    try:
+        marker_status = redis_client.get("service:marker:status") or "initializing"
+        marker_eta = redis_client.get("service:marker:eta") or "calculating..."
+        # vram = redis_client.get("service:marker:gpu_vram_free")
+        
+        status['marker'] = marker_status
+        status['llm_download_eta'] = marker_eta
+        status['models_cached'] = (marker_status == 'ready')
+    except Exception as e:
+        logging.error(f"Error checking marker status: {e}")
+        status['marker'] = 'error'
+        
     return jsonify(status)
 
 FORMATS = [
@@ -210,14 +226,25 @@ def convert():
         
         update_job_metadata(job_id, {
             'status': 'PENDING', 'created_at': str(time.time()), 'filename': file.filename,
-            'from': from_format, 'to': to_format
+            'from': from_format, 'to': to_format,
+            'force_ocr': str(request.form.get('force_ocr') == 'on'),
+            'use_llm': str(request.form.get('use_llm') == 'on')
         })
         
         file_size = os.path.getsize(input_path)
         target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
-        celery.send_task('tasks.' + ('convert_with_marker' if from_format == 'pdf_marker' else 'convert_document'),
-                         args=[job_id, input_filename, output_filename, from_format, to_format],
-                         task_id=job_id, queue=target_queue)
+        
+        task_name = 'tasks.convert_with_marker' if from_format == 'pdf_marker' else 'tasks.convert_document'
+        task_args = [job_id, input_filename, output_filename, from_format, to_format]
+        
+        if from_format == 'pdf_marker':
+            options = {
+                'force_ocr': request.form.get('force_ocr') == 'on',
+                'use_llm': request.form.get('use_llm') == 'on'
+            }
+            task_args.append(options)
+
+        celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
         
         history_key = f"history:{session_id}"
         redis_client.lpush(history_key, job_id)
@@ -241,12 +268,31 @@ def list_jobs():
     jobs_data = []
     for jid, meta in zip(job_ids, results):
         if not meta: continue
+        
+        # Check output files for download type
+        job_dir = os.path.join(OUTPUT_FOLDER, jid)
+        file_count = 0
+        if meta.get('status') == 'SUCCESS':
+            if os.path.exists(job_dir):
+                for root, dirs, files in os.walk(job_dir):
+                    file_count += len(files)
+                logging.info(f"Job {jid}: Found {file_count} files. is_zip={file_count > 1}")
+            else:
+                logging.warning(f"Job {jid}: SUCCESS but dir {job_dir} missing")
+        
+        is_zip = file_count > 1
+        download_url = None
+        if meta.get('status') == 'SUCCESS':
+            download_url = f"/download_zip/{jid}" if is_zip else f"/download/{jid}"
+
         jobs_data.append({
             'id': jid, 'filename': meta.get('filename'), 'from': meta.get('from'),
             'to': meta.get('to'), 'created_at': float(meta.get('created_at', 0)),
             'status': meta.get('status', 'PENDING'), 'progress': meta.get('progress', '0'),
             'result': meta.get('error') if meta.get('status') == 'FAILURE' else None,
-            'download_url': f"/download/{jid}" if meta.get('status') == 'SUCCESS' else None
+            'download_url': download_url,
+            'is_zip': is_zip,
+            'file_count': file_count
         })
     jobs_data.sort(key=lambda x: x['created_at'], reverse=True)
     return jsonify(jobs_data)
@@ -294,11 +340,22 @@ def retry_job(job_id):
 
     update_job_metadata(new_job_id, {
         'status': 'PENDING', 'created_at': str(time.time()), 'filename': input_filename,
-        'from': job_data.get('from'), 'to': job_data.get('to')
+        'from': job_data.get('from'), 'to': job_data.get('to'),
+        'force_ocr': job_data.get('force_ocr'),
+        'use_llm': job_data.get('use_llm')
     })
-    celery.send_task('tasks.' + ('convert_with_marker' if job_data.get('from') == 'pdf_marker' else 'convert_document'),
-                     args=[new_job_id, input_filename, output_filename, job_data.get('from'), job_data.get('to')],
-                     task_id=new_job_id)
+
+    task_name = 'tasks.convert_with_marker' if job_data.get('from') == 'pdf_marker' else 'tasks.convert_document'
+    task_args = [new_job_id, input_filename, output_filename, job_data.get('from'), job_data.get('to')]
+
+    if job_data.get('from') == 'pdf_marker':
+        options = {
+            'force_ocr': job_data.get('force_ocr') == 'True',
+            'use_llm': job_data.get('use_llm') == 'True'
+        }
+        task_args.append(options)
+
+    celery.send_task(task_name, args=task_args, task_id=new_job_id)
     
     session_id = session.get('session_id')
     redis_client.lpush(f"history:{session_id}", new_job_id)
@@ -309,10 +366,42 @@ def download_file(job_id):
     if not is_valid_uuid(job_id): return "Invalid", 400
     job_dir = os.path.join(OUTPUT_FOLDER, job_id)
     if not os.path.exists(job_dir): return "Not found", 404
-    files = os.listdir(job_dir)
+    files = [f for f in os.listdir(job_dir) if os.path.isfile(os.path.join(job_dir, f)) and not f.startswith('.')]
     if not files: return "Not found", 404
+    # Prefer non-json/metadata files if possible, or just take first
+    target_file = files[0]
+    # Filter out metadata.json if there are other files
+    if len(files) > 1:
+        others = [f for f in files if f != 'metadata.json']
+        if others: target_file = others[0]
+        
     update_job_metadata(job_id, {'downloaded_at': str(time.time())})
-    return send_from_directory(job_dir, files[0], as_attachment=True)
+    return send_from_directory(job_dir, target_file, as_attachment=True)
+
+@app.route('/download_zip/<job_id>')
+def download_zip(job_id):
+    if not is_valid_uuid(job_id): return "Invalid", 400
+    job_dir = os.path.join(OUTPUT_FOLDER, job_id)
+    if not os.path.exists(job_dir): return "Not found", 404
+    
+    memory_file = io.BytesIO()
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(job_dir):
+            for file in files:
+                abs_path = os.path.join(root, file)
+                rel_path = os.path.relpath(abs_path, job_dir)
+                zf.write(abs_path, rel_path)
+    
+    memory_file.seek(0)
+    
+    update_job_metadata(job_id, {'downloaded_at': str(time.time())})
+    
+    return send_file(
+        memory_file,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f"conversion_{job_id}.zip"
+    )
 
 if __name__ == '__main__':
     debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'

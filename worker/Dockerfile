@@ -33,8 +33,14 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Copy worker code
 COPY . .
 
-# Reset entrypoint (not needed for worker)
-ENTRYPOINT []
+# Pre-cache Marker models during build
+RUN python3 -c "import os; os.environ['INFERENCE_RAM']='16'; from marker.converters.pdf import PdfConverter; from marker.models import create_model_dict; PdfConverter(artifact_dict=create_model_dict())"
+
+# Make entrypoint executable
+RUN chmod +x entrypoint.sh
+
+# Set entrypoint
+ENTRYPOINT ["./entrypoint.sh"]
 
 # Run celery worker (command overridden in docker-compose.yml)
-CMD ["celery", "-A", "tasks", "worker", "--loglevel=info", "--concurrency=2"]
+CMD ["celery", "-A", "tasks", "worker", "--loglevel=info", "--pool=gevent", "--concurrency=10"]

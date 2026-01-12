@@ -5,16 +5,16 @@ This project integrates [Marker](https://github.com/VikParuchuri/marker), a high
 ## Architecture
 - **Integration**: Direct library integration via `marker-pdf` Python package
 - **Location**: Installed in the `worker` container
-- **Communication**: Direct subprocess call to `marker_single` CLI
+- **Communication**: Direct Python API call (`PdfConverter`)
 - **GPU**: Shared with worker container (NVIDIA CUDA)
 
 ## Usage
 When a user selects **"PDF (High Accuracy)"** (`pdf_marker`) as the input format:
 1. The web app queues a `tasks.convert_with_marker` Celery task.
-2. The worker runs `marker_single` CLI directly with the PDF file.
+2. The worker initializes the Marker models (cached after first use) and runs conversion in-process.
 3. Marker processes the file (GPU accelerated if available).
-4. Marker generates Markdown output in a temporary directory.
-5. The worker copies the markdown to the final output location.
+4. Marker generates output objects which are serialized to disk (markdown, images, metadata).
+5. The worker organizes these into the final output directory.
 
 ## Fallback & Resilience
 Since AI inference is heavy and can fail:
