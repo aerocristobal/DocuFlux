@@ -76,17 +76,44 @@ docker-compose logs -f worker
 | Core Conversion | **Working** | Pandoc conversions (17 formats) fully functional |
 | AI Conversion | **Working** | Marker Python API integration with options (OCR, LLM) |
 | Web UI | **Working** | Material Design 3, drag-drop, real-time updates, Marker status banner |
-| Security | **Working** | CSRF, rate limiting, input validation, headers |
+| Security | **Partial** | CSRF, rate limiting, headers; needs secrets mgmt, container hardening, enhanced validation |
 | Testing | **Partial** | pytest suite exists, but needs updates for recent Marker API changes |
-| Observability | **Partial** | Logging done; Prometheus/Grafana not implemented |
-| Deployment | **Partial** | Docker Compose ready; K8s manifests missing |
+| Observability | **Partial** | Logging done; Prometheus/Grafana not implemented, GPU monitoring placeholder only |
+| Deployment | **Partial** | Docker Compose ready; no GPU detection, no profiles, K8s manifests missing |
+| Resource Efficiency | **Needs Work** | No GPU detection, hardcoded 16GB VRAM, no conditional builds, ~15GB worker image |
 
 ### Recent Changes
+- **2026-01-14 (Epics 22-25 Planning)**: Completed comprehensive planning for HTTPS support via Cloudflare Tunnel, application-level encryption at rest, Redis TLS with CA certificates, and automated certificate management with Certbot + Cloudflare DNS. Created detailed BDD user stories covering all security domains. See `/home/chris/.claude/plans/velvet-dreaming-micali.md`.
+- **2026-01-14 (Epic 21 Planning)**: Completed comprehensive planning for GPU detection, resource optimization, security hardening, and operational excellence. Created detailed implementation plan with BDD user stories. See previous plan session.
 - **Epic 18 (Marker Migration)**: Completed migration to direct library usage.
 - **Epic 19.1 (ZIP Download)**: Implemented automatic ZIP bundling for multi-file outputs (images + markdown).
 - **Startup Optimization**: Added build-time model download and runtime `warmup.py` to prevent cold start delays.
 - **Status Reporting**: Added real-time Marker status polling (Initialization/Ready) to the UI.
 - **Bug Fixes**: Resolved worker hang by switching to `solo` pool and removing Gevent patching in worker. Fixed `TypeError` in `PdfConverter` call.
+
+### Known Gaps Identified in Planning
+
+**GPU & Resource Management (Epic 21):**
+- **No GPU detection**: Worker always assumes GPU available, fails on CPU-only hosts
+- **Hardcoded GPU assumptions**: INFERENCE_RAM=16 hardcoded, no runtime adaptation
+- **Large image size**: Worker image ~15GB due to unconditional CUDA/PyTorch/models
+- **Incomplete GPU monitoring**: `check_gpu_memory()` in warmup.py is a placeholder
+- **No deployment profiles**: All services start unconditionally, no GPU/CPU profiles
+
+**Security & Encryption (Epics 22-25):**
+- **No HTTPS support**: Web service runs on plain HTTP port 5000, no TLS termination
+- **No encryption at rest**: Files stored in plaintext (~53MB in data/), 777 permissions
+- **Redis exposed**: Port 6379 exposed on 0.0.0.0 (critical security vulnerability)
+- **No encryption in transit**: All Redis connections unencrypted, Celery messages in plaintext
+- **No certificate infrastructure**: No PKI, no certificate management, no renewal automation
+- **Insecure cookies**: SESSION_COOKIE_SECURE=false, vulnerable to session hijacking
+- **WebSocket unencrypted**: Uses ws:// protocol, no wss:// support
+- **Default secrets**: SECRET_KEY hardcoded to default value, no validation
+
+**Observability & Operations:**
+- **Missing observability**: No Prometheus metrics, no alerting, no detailed health checks
+- **Limited input validation**: Basic validation exists but needs enhancement
+- **Container security**: Containers run as root, no read-only filesystems
 
 ---
 
@@ -268,16 +295,245 @@ The goal was to switch API implementations, but we decided to move the engine di
   - Add UI banner in `index.html` to show "Initializing" status.
   - Disable PDF conversion option until service is ready.
 
+## Epic 21: GPU Detection and Resource Optimization (Planned)
+**Goal**: Enable DocuFlux to run efficiently on both GPU and CPU-only infrastructure with intelligent detection and conditional builds.
+
+**Status**: Planning completed 2026-01-14. See detailed plan at `/home/chris/.claude/plans/velvet-dreaming-micali.md`
+
+- [ ] 21.1 **Story: Detect GPU Availability at Build Time**
+  - Add build arguments and conditional Dockerfile logic
+  - Create GPU detection script (`detect_gpu.sh`)
+  - Support building `worker:gpu` and `worker:cpu` images
+  - Create separate requirements files for GPU and CPU builds
+
+- [ ] 21.2 **Story: Runtime GPU Detection and Graceful Degradation**
+  - Implement real `check_gpu_availability()` in `warmup.py` (replace placeholder)
+  - Store GPU status and VRAM info in Redis
+  - Add GPU exception handling in Marker conversion tasks
+  - Update UI to disable Marker option when GPU unavailable
+
+- [ ] 21.3 **Story: Docker Compose Profiles for Deployment Scenarios**
+  - Add GPU and CPU profiles to docker-compose
+  - Create `docker-compose.gpu.yml` and `docker-compose.cpu.yml` overrides
+  - Support mixed infrastructure deployments
+
+- [ ] 21.4 **Story: Reduce Worker Memory Footprint**
+  - Implement lazy model loading
+  - Add memory cleanup after tasks (`gc.collect()`)
+  - Adjust memory limits per deployment profile
+
+- [ ] 21.5 **Story: Prometheus Metrics Endpoint**
+  - Add `prometheus-client` dependency
+  - Expose `/metrics` endpoint on port 9090
+  - Track task duration, queue depth, GPU utilization
+
+- [ ] 21.6 **Story: Intelligent Data Retention**
+  - Prioritize cleanup of large files
+  - Track last viewed timestamps
+  - Implement emergency cleanup triggers
+
+- [ ] 21.7 **Story: Secrets Management and Rotation**
+  - Create secrets loading utility
+  - Validate secrets at startup (fail fast if default)
+  - Support Docker Swarm secrets and rotation
+
+- [ ] 21.8 **Story: Container Security Hardening**
+  - Add non-root users to Dockerfiles
+  - Enable read-only root filesystems
+  - Drop unnecessary Linux capabilities
+
+- [ ] 21.9 **Story: Input Validation and Sanitization**
+  - Add UUID validation decorators
+  - Implement comprehensive input validation
+  - Create validation utilities module
+
+- [ ] 21.10 **Story: Enhanced Health Checks**
+  - Add `/healthz`, `/readyz`, `/livez` endpoints
+  - Check Redis, disk, GPU, and model availability
+  - Return detailed component status
+
+- [ ] 21.11 **Story: Alerting Rules and Failure Notifications**
+  - Create Prometheus alerting rules
+  - Configure alert routing
+  - Add critical logging for alert triggers
+
+- [ ] 21.12 **Story: Graceful Shutdown and Task Cleanup**
+  - Add SIGTERM/SIGINT signal handlers
+  - Implement task timeout and state saving
+  - Add GPU memory cleanup on shutdown
+
+## Epic 22: HTTPS Support with Cloudflare Tunnel (Planned)
+**Goal**: Enable zero-touch HTTPS with automatic SSL certificate management via Cloudflare Tunnel.
+
+**Status**: Planning completed 2026-01-14. See detailed plan at `/home/chris/.claude/plans/velvet-dreaming-micali.md`
+
+- [ ] 22.1 **Story: Cloudflare Tunnel Service Integration**
+  - Add cloudflare-tunnel Docker service
+  - Configure CLOUDFLARE_TUNNEL_TOKEN environment variable
+  - Setup automatic connection to Cloudflare edge network
+  - Health monitoring for tunnel status
+
+- [ ] 22.2 **Story: Automatic Tunnel Configuration and DNS**
+  - Create tunnel in Cloudflare dashboard
+  - Configure ingress rules for domain routing
+  - Automatic CNAME record creation
+  - Support multiple service routing
+
+- [ ] 22.3 **Story: WebSocket Secure (WSS) Support Through Tunnel**
+  - Enable wss:// protocol for Socket.IO
+  - Update CSP headers for WebSocket security
+  - Test real-time updates over encrypted connection
+
+- [ ] 22.4 **Story: Session Cookie Security Updates**
+  - Set SESSION_COOKIE_SECURE=true for HTTPS
+  - Enable ProxyFix middleware for X-Forwarded-Proto
+  - Always apply HSTS headers in production
+  - Test secure cookie flags in browser
+
+## Epic 23: Application-Level Encryption at Rest (Planned)
+**Goal**: Implement AES-256-GCM encryption for all files and sensitive metadata with per-job encryption keys.
+
+**Status**: Planning completed 2026-01-14. See detailed plan at `/home/chris/.claude/plans/velvet-dreaming-micali.md`
+
+- [ ] 23.1 **Story: File Encryption Service with AES-256-GCM**
+  - Create EncryptionService class in web and worker
+  - Implement streaming encryption for large files
+  - Encrypt uploads before writing to disk
+  - Encrypt conversion outputs
+
+- [ ] 23.2 **Story: Per-Job Encryption Key Management**
+  - Generate unique 256-bit key per job
+  - Encrypt job keys with master key
+  - Store encrypted keys in Redis with TTL
+  - Support key rotation and dual-key mode
+
+- [ ] 23.3 **Story: Transparent Decryption on Download**
+  - Stream decrypted files to HTTP response
+  - Handle ZIP archives with multiple encrypted files
+  - Verify GCM authentication tags
+  - Never write plaintext to disk
+
+- [ ] 23.4 **Story: Redis Data Encryption for Sensitive Metadata**
+  - Create EncryptedRedisClient wrapper
+  - Encrypt filename and error message fields
+  - Keep indexed fields plaintext for queries
+  - Transparent encryption/decryption
+
+- [ ] 23.5 **Story: Master Key and Secrets Management**
+  - Load master key from environment or Docker secrets
+  - Derive master key from SECRET_KEY using HKDF
+  - Refuse to start with default secrets in production
+  - Document key backup and recovery procedures
+
+## Epic 24: Encryption in Transit with Redis TLS (Planned)
+**Goal**: Secure all inter-service communication with Redis TLS and remove port exposure.
+
+**Status**: Planning completed 2026-01-14. See detailed plan at `/home/chris/.claude/plans/velvet-dreaming-micali.md`
+
+- [ ] 24.1 **Story: Redis TLS Configuration with CA Certificates**
+  - Generate certificates for Redis server and clients
+  - Configure Redis with TLS-only mode
+  - Update connection URLs to rediss://
+  - Client certificate authentication (mTLS)
+
+- [ ] 24.2 **Story: Celery Task Message Encryption**
+  - Enable Celery message signing
+  - Configure encrypted task serializer
+  - Reject unsigned/tampered messages
+  - Log authentication failures
+
+- [ ] 24.3 **Story: Remove Redis Port Exposure**
+  - Remove ports section from Redis service
+  - Isolate Redis to Docker internal network
+  - Add optional Redis Commander for debugging
+  - Update development documentation
+
+- [ ] 24.4 **Story: Certificate Management for Redis TLS**
+  - Automate certificate generation and renewal
+  - Implement certificate reload without downtime
+  - Monitor certificate expiration
+  - Validate certificates before deployment
+
+## Epic 25: Certificate Management with Certbot & Cloudflare DNS (Planned)
+**Goal**: Automated certificate issuance and renewal via DNS-01 challenge for Redis TLS.
+
+**Status**: Planning completed 2026-01-14. See detailed plan at `/home/chris/.claude/plans/velvet-dreaming-micali.md`
+
+- [ ] 25.1 **Story: Certbot Container with Cloudflare DNS Plugin**
+  - Add certbot Docker service with dns-cloudflare plugin
+  - Configure Cloudflare API credentials
+  - Issue certificates via DNS-01 challenge
+  - Support wildcard certificates
+
+- [ ] 25.2 **Story: Automatic DNS-01 Challenge Completion**
+  - Automated TXT record creation/deletion
+  - Handle DNS propagation delays
+  - Retry with exponential backoff
+  - Cloudflare API token permissions
+
+- [ ] 25.3 **Story: Certificate Renewal Automation**
+  - Daily renewal checks via cron/Celery Beat
+  - Renew certificates within 30 days of expiration
+  - Deploy hook to reload services
+  - Handle renewal failures gracefully
+
+- [ ] 25.4 **Story: Certificate Distribution to Redis and Services**
+  - Distribute certificates to all services via volume
+  - Atomic certificate replacement
+  - Validate certificates before deployment
+  - Send reload signals to services
+
 ## Next Steps for Future Sessions
 
-### Priority 1: Stabilization & Testing
+### CURRENT FOCUS: Encryption & HTTPS Implementation (Epics 22-25)
+**Detailed Plan**: See `/home/chris/.claude/plans/velvet-dreaming-micali.md` for comprehensive BDD user stories
+
+**Implementation Order (Recommended):**
+1. **Phase 1**: Epic 22 (Cloudflare Tunnel) - 1-2 days - HIGHEST PRIORITY
+2. **Phase 2**: Epic 25 (Certbot & Cloudflare DNS) - 2-3 days - HIGH PRIORITY
+3. **Phase 3**: Epic 24 (Redis TLS) - 2-3 days - HIGH PRIORITY
+4. **Phase 4**: Epic 23 (Encryption at Rest) - 4-5 days - MEDIUM PRIORITY
+
+**Previous Planning**: Epic 21 (GPU Detection) - See earlier plan session
+
+### Priority 1: GPU Detection and Conditional Builds (Epic 21.1-21.3)
+| Task | Epic | Effort | Description |
+|------|------|--------|-------------|
+| Build-time GPU detection | 21.1 | High | Modify Dockerfile with ARG and conditional builds for GPU vs CPU |
+| Runtime GPU detection | 21.2 | High | Implement real GPU checking in warmup.py and tasks.py |
+| Docker Compose profiles | 21.3 | Medium | Create profiles for GPU/CPU/mixed deployments |
+
+### Priority 2: Resource Optimization (Epic 21.4-21.6)
+| Task | Epic | Effort | Description |
+|------|------|--------|-------------|
+| Memory optimization | 21.4 | Medium | Lazy loading, cleanup, adjusted limits |
+| Prometheus metrics | 21.5 | Medium | Add `/metrics` endpoint for monitoring |
+| Intelligent cleanup | 21.6 | Low | Size-based prioritization, emergency cleanup |
+
+### Priority 3: Security Hardening (Epic 21.7-21.9)
+| Task | Epic | Effort | Description |
+|------|------|--------|-------------|
+| Secrets management | 21.7 | Medium | Proper loading, validation, rotation support |
+| Container hardening | 21.8 | Medium | Non-root users, read-only fs, capability dropping |
+| Input validation | 21.9 | Medium | UUID validation, sanitization, whitelisting |
+
+### Priority 4: Operational Excellence (Epic 21.10-21.12)
+| Task | Epic | Effort | Description |
+|------|------|--------|-------------|
+| Health endpoints | 21.10 | Medium | Detailed healthz/readyz/livez with component checks |
+| Alerting | 21.11 | Medium | Prometheus rules and notification routing |
+| Graceful shutdown | 21.12 | Low | Signal handlers, GPU cleanup, state preservation |
+
+### Priority 5: Stabilization & Testing
 | Task | Epic | Effort | Description |
 |------|------|--------|-------------|
 | Update Unit Tests | 12 | Medium | Update `tests/unit/test_worker.py` to match the new `PdfConverter` API usage (mocking `PdfConverter` class instead of `subprocess`). |
 | Load Testing | 16.5 | Medium | Validate behavior under concurrent load with `solo` pool (verify queueing works). |
+| GPU Detection Tests | 21 | High | End-to-end verification of GPU detection and fallback scenarios |
 
-### Priority 2: DevOps
+### Priority 6: Future Enhancements
 | Task | Epic | Effort | Description |
 |------|------|--------|-------------|
-| Prometheus metrics | 13.3 | Medium | Add `/metrics` endpoint to worker for monitoring queue depth and GPU usage. |
 | Kubernetes Manifests | 16.4 | High | Prepare Helm charts for production deployment. |
+| User tier-based priority | New | High | Premium users, authentication, tiered queues |
+| Conversion history | New | High | Persistent storage, user accounts, history UI |
