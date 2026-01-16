@@ -1,0 +1,197 @@
+# Prometheus Alerting Rules for DocuFlux
+# Epic 21.11: Alerting Rules and Failure Notifications
+#
+# Usage:
+#   1. Add to Prometheus config:
+#      rule_files:
+#        - "/etc/prometheus/alerts.yml"
+#   2. Configure Alertmanager for notifications
+#
+# Severity Levels:
+#   - critical: P0 - Immediate action required
+#   - warning: P1 - Investigate soon
+#   - info: P2 - Informational, track trends
+
+groups:
+  - name: docuflux_service_health
+    interval: 30s
+    rules:
+      - alert: DocuFluxServiceDown
+        expr: up{job="docuflux-web"} == 0 or up{job="docuflux-worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: infrastructure
+        annotations:
+          summary: "DocuFlux service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been down for more than 1 minute. Check container status and logs."
+          runbook: "https://github.com/your-repo/docs/runbooks/service-down.md"
+
+      - alert: RedisConnectionFailed
+        expr: up{job="docuflux-redis"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis is unreachable"
+          description: "Redis connection failed. This will prevent all conversions and job tracking."
+          runbook: "https://github.com/your-repo/docs/runbooks/redis-down.md"
+
+  - name: docuflux_task_performance
+    interval: 1m
+    rules:
+      - alert: HighTaskFailureRate
+        expr: (sum(rate(docuflux_conversion_total{status="failure"}[5m])) / sum(rate(docuflux_conversion_total[5m]))) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "High task failure rate detected"
+          description: "More than 10% of conversions are failing over the past 5 minutes. Current rate: {{ $value | humanizePercentage }}"
+          runbook: "https://github.com/your-repo/docs/runbooks/high-failure-rate.md"
+
+      - alert: CriticalTaskFailureRate
+        expr: (sum(rate(docuflux_conversion_total{status="failure"}[5m])) / sum(rate(docuflux_conversion_total[5m]))) > 0.50
+        for: 2m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "CRITICAL: More than 50% of tasks failing"
+          description: "Critical failure rate: {{ $value | humanizePercentage }}. Investigate worker health immediately."
+          runbook: "https://github.com/your-repo/docs/runbooks/critical-failures.md"
+
+      - alert: SlowConversionTasks
+        expr: histogram_quantile(0.95, rate(docuflux_conversion_duration_seconds_bucket[5m])) > 300
+        for: 10m
+        labels:
+          severity: warning
+          component: performance
+        annotations:
+          summary: "95th percentile conversion time exceeds 5 minutes"
+          description: "Conversions are taking longer than expected. P95: {{ $value | humanizeDuration }}"
+          runbook: "https://github.com/your-repo/docs/runbooks/slow-conversions.md"
+
+  - name: docuflux_resource_usage
+    interval: 1m
+    rules:
+      - alert: DiskSpaceWarning
+        expr: (docuflux_disk_usage_bytes / docuflux_disk_total_bytes) > 0.80
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Disk space usage above 80%"
+          description: "Disk usage on {{ $labels.path }} is at {{ $value | humanizePercentage }}. Cleanup may be needed."
+          runbook: "https://github.com/your-repo/docs/runbooks/disk-space.md"
+
+      - alert: DiskSpaceCritical
+        expr: (docuflux_disk_usage_bytes / docuflux_disk_total_bytes) > 0.95
+        for: 1m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "CRITICAL: Disk space usage above 95%"
+          description: "Disk usage on {{ $labels.path }} is at {{ $value | humanizePercentage }}. Emergency cleanup triggered."
+          runbook: "https://github.com/your-repo/docs/runbooks/disk-critical.md"
+
+      - alert: HighMemoryUsage
+        expr: container_memory_usage_bytes{container="worker"} / container_spec_memory_limit_bytes{container="worker"} > 0.90
+        for: 5m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Worker memory usage above 90%"
+          description: "Worker container is using {{ $value | humanizePercentage }} of allocated memory. May need memory limit increase or leak investigation."
+          runbook: "https://github.com/your-repo/docs/runbooks/high-memory.md"
+
+  - name: docuflux_gpu_status
+    interval: 1m
+    rules:
+      - alert: GPUUnavailable
+        expr: docuflux_gpu_utilization_percent == 0 and on() changes(docuflux_gpu_utilization_percent[10m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "GPU appears unavailable"
+          description: "GPU utilization has been 0% for 5 minutes. Check GPU driver and CUDA availability."
+          runbook: "https://github.com/your-repo/docs/runbooks/gpu-unavailable.md"
+
+      - alert: GPUMemoryHigh
+        expr: (docuflux_gpu_memory_used_bytes / docuflux_gpu_memory_total_bytes) > 0.95
+        for: 2m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "GPU memory usage above 95%"
+          description: "GPU VRAM usage is critically high: {{ $value | humanizePercentage }}. May cause OOM errors."
+          runbook: "https://github.com/your-repo/docs/runbooks/gpu-memory-high.md"
+
+      - alert: GPUTemperatureHigh
+        expr: docuflux_gpu_temperature_celsius > 85
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "GPU temperature exceeds safe threshold"
+          description: "GPU temperature is {{ $value }}°C. Check cooling and workload."
+          runbook: "https://github.com/your-repo/docs/runbooks/gpu-temperature.md"
+
+  - name: docuflux_queue_health
+    interval: 1m
+    rules:
+      - alert: QueueBacklog
+        expr: docuflux_queue_depth{queue_name="celery"} > 100
+        for: 10m
+        labels:
+          severity: warning
+          component: queue
+        annotations:
+          summary: "Celery queue backlog detected"
+          description: "Queue depth is {{ $value }}. Workers may be overloaded or slow."
+          runbook: "https://github.com/your-repo/docs/runbooks/queue-backlog.md"
+
+      - alert: QueueStalled
+        expr: changes(docuflux_queue_depth{queue_name="celery"}[15m]) == 0 and docuflux_queue_depth{queue_name="celery"} > 10
+        for: 5m
+        labels:
+          severity: critical
+          component: queue
+        annotations:
+          summary: "Queue appears stalled"
+          description: "Queue depth hasn't changed in 15 minutes with {{ $value }} jobs pending. Workers may be deadlocked."
+          runbook: "https://github.com/your-repo/docs/runbooks/queue-stalled.md"
+
+  - name: docuflux_worker_health
+    interval: 1m
+    rules:
+      - alert: NoActiveWorkers
+        expr: docuflux_worker_tasks_active == 0 and on() changes(docuflux_worker_tasks_active[10m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "No workers processing tasks"
+          description: "No active task processing detected for 5 minutes. Workers may be down or stuck."
+          runbook: "https://github.com/your-repo/docs/runbooks/no-workers.md"
+
+      - alert: WorkerTasksStuck
+        expr: docuflux_worker_tasks_active > 0 and on() changes(docuflux_worker_tasks_active[30m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Worker tasks may be stuck"
+          description: "{{ $value }} tasks have been active without completion for 30 minutes."
+          runbook: "https://github.com/your-repo/docs/runbooks/stuck-tasks.md"

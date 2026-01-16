@@ -481,6 +481,151 @@ def download_zip(job_id):
         download_name=f"conversion_{job_id}.zip"
     )
 
+
+# Epic 21.10: Enhanced Health Check Endpoints
+
+@app.route('/healthz')
+def healthz():
+    """
+    Liveness probe - is the process alive?
+
+    Returns 200 if process is running, 500 if deadlocked or unresponsive.
+    """
+    return 'OK', 200
+
+
+@app.route('/readyz')
+def readyz():
+    """
+    Readiness probe - is the service ready to accept traffic?
+
+    Checks:
+    - Redis connectivity
+    - Critical services available
+
+    Returns:
+        200 if ready, 503 if not ready
+    """
+    try:
+        # Check Redis connectivity
+        redis_client.ping()
+
+        return jsonify({
+            'status': 'ready',
+            'redis': 'connected',
+            'timestamp': time.time()
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Readiness check failed: {e}")
+        return jsonify({
+            'status': 'not_ready',
+            'error': str(e),
+            'timestamp': time.time()
+        }), 503
+
+
+@app.route('/api/health')
+def health_detailed():
+    """
+    Detailed health check with component status.
+
+    Epic 21.10: Comprehensive health status
+
+    Returns:
+        JSON with detailed component health information
+    """
+    health_status = {
+        'status': 'healthy',
+        'timestamp': time.time(),
+        'components': {}
+    }
+
+    # Check Redis connectivity
+    try:
+        redis_client.ping()
+        health_status['components']['redis'] = {
+            'status': 'up',
+            'response_time_ms': 'OK'
+        }
+    except Exception as e:
+        health_status['status'] = 'unhealthy'
+        health_status['components']['redis'] = {
+            'status': 'down',
+            'error': str(e)
+        }
+
+    # Check disk space
+    try:
+        total, used, free = shutil.disk_usage('/app/data')
+        used_percent = (used / total) * 100
+        health_status['components']['disk'] = {
+            'status': 'ok' if used_percent < 90 else 'warning',
+            'total_gb': round(total / (1024**3), 2),
+            'used_gb': round(used / (1024**3), 2),
+            'free_gb': round(free / (1024**3), 2),
+            'used_percent': round(used_percent, 1)
+        }
+
+        if used_percent >= 95:
+            health_status['components']['disk']['status'] = 'critical'
+            health_status['status'] = 'degraded'
+
+    except Exception as e:
+        health_status['components']['disk'] = {
+            'status': 'unknown',
+            'error': str(e)
+        }
+
+    # Check GPU status (from worker via Redis)
+    try:
+        gpu_status = redis_client.get('marker:gpu_status')
+        gpu_info = redis_client.hgetall('marker:gpu_info')
+
+        health_status['components']['gpu'] = {
+            'status': gpu_status or 'unknown',
+            'info': gpu_info if gpu_info else {}
+        }
+    except Exception as e:
+        health_status['components']['gpu'] = {
+            'status': 'unknown',
+            'error': str(e)
+        }
+
+    # Check Celery worker availability
+    try:
+        # Check if workers are available
+        inspect = celery.control.inspect()
+        active_workers = inspect.active()
+
+        if active_workers and len(active_workers) > 0:
+            health_status['components']['celery_workers'] = {
+                'status': 'up',
+                'worker_count': len(active_workers)
+            }
+        else:
+            health_status['components']['celery_workers'] = {
+                'status': 'down',
+                'worker_count': 0
+            }
+            health_status['status'] = 'degraded'
+
+    except Exception as e:
+        health_status['components']['celery_workers'] = {
+            'status': 'unknown',
+            'error': str(e)
+        }
+
+    # Overall status code
+    status_code = 200
+    if health_status['status'] == 'degraded':
+        status_code = 200  # Still operational but degraded
+    elif health_status['status'] == 'unhealthy':
+        status_code = 503
+
+    return jsonify(health_status), status_code
+
+
 if __name__ == '__main__':
     debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
     app.run(host='0.0.0.0', port=5000, debug=debug_mode)

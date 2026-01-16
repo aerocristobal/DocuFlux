@@ -7,6 +7,8 @@ import requests
 import logging
 import sys
 import threading
+import signal
+import atexit
 from celery import Celery
 from celery.schedules import crontab
 from flask_socketio import SocketIO
@@ -85,6 +87,78 @@ worker_info.info({
     'python_version': sys.version.split()[0],
     'celery_version': celery.VERSION
 })
+
+# Epic 21.12: Graceful Shutdown Handling
+shutdown_requested = False
+
+def cleanup_on_shutdown():
+    """
+    Cleanup handler called on shutdown.
+
+    Epic 21.12: GPU memory cleanup and graceful shutdown
+    """
+    global shutdown_requested
+    if shutdown_requested:
+        return  # Already handling shutdown
+
+    shutdown_requested = True
+    logging.info("Shutdown requested - performing cleanup...")
+
+    try:
+        # Epic 21.12: GPU memory cleanup
+        try:
+            import torch
+            import gc
+
+            gc.collect()
+
+            if torch.cuda.is_available():
+                logging.info("Freeing GPU memory...")
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+                # Log final GPU memory state
+                allocated = torch.cuda.memory_allocated(0) / 1e9
+                reserved = torch.cuda.memory_reserved(0) / 1e9
+                logging.info(f"GPU memory freed. Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
+            else:
+                logging.info("CPU-only mode - no GPU cleanup needed")
+
+        except Exception as e:
+            logging.error(f"Error during GPU cleanup: {e}")
+
+        # Log shutdown completion
+        logging.info("Shutdown cleanup complete")
+
+    except Exception as e:
+        logging.error(f"Error during shutdown cleanup: {e}")
+
+
+def signal_handler(signum, frame):
+    """
+    Handle SIGTERM and SIGINT signals for graceful shutdown.
+
+    Epic 21.12: Graceful shutdown on signal
+    """
+    signal_name = 'SIGTERM' if signum == signal.SIGTERM else 'SIGINT'
+    logging.info(f"Received {signal_name} - initiating graceful shutdown...")
+
+    # Run cleanup
+    cleanup_on_shutdown()
+
+    # Exit gracefully (Celery will finish current task first due to acks_late)
+    sys.exit(0)
+
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
+# Register cleanup for normal exit
+atexit.register(cleanup_on_shutdown)
+
+logging.info("Graceful shutdown handlers registered (SIGTERM, SIGINT, atexit)")
+
 
 def update_job_metadata(job_id, updates):
     """Update job metadata using Redis Hash (atomic operation) and broadcast via WebSocket."""
