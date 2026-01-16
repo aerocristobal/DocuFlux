@@ -10,6 +10,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Epic 21.8: Create non-root user for security
+RUN groupadd -r appuser && useradd -r -g appuser appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 5000
 
 # Use gunicorn with gevent for WebSocket support

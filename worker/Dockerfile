@@ -66,6 +66,11 @@ RUN if [ "$BUILD_GPU" = "true" ]; then \
 # Make entrypoint executable
 RUN chmod +x entrypoint.sh
 
+# Epic 21.8: Create non-root user for security
+RUN groupadd -r appuser && useradd -r -g appuser appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
 # Set entrypoint
 ENTRYPOINT ["./entrypoint.sh"]
 

@@ -22,6 +22,9 @@ from flask_wtf.csrf import CSRFProtect
 from flask_socketio import SocketIO
 from datetime import datetime, timezone, timedelta
 
+# Epic 21.7: Import secrets management
+from secrets import validate_secrets_at_startup, load_secret
+
 # Configure Structured Logging
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
@@ -29,8 +32,16 @@ root_logger = logging.getLogger()
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 
+# Epic 21.7: Validate secrets at startup
+try:
+    app_secrets = validate_secrets_at_startup()
+except ValueError as e:
+    logging.error(f"Failed to load secrets: {e}")
+    sys.exit(1)
+
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'docuflux-secret-key-123')
+# Epic 21.7: Use validated secret from secrets module
+app.secret_key = app_secrets['SECRET_KEY']
 
 # Epic 22.4: ProxyFix middleware for Cloudflare Tunnel / reverse proxy support
 # Trust proxy headers (X-Forwarded-For, X-Forwarded-Proto, etc.)

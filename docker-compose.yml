@@ -38,6 +38,13 @@ services:
         limits:
           cpus: '1.0'
           memory: 512M
+    # Epic 21.8: Container security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=100m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/"]
       interval: 30s
@@ -70,6 +77,13 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    # Epic 21.8: Container security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=500m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 10s
@@ -114,6 +128,24 @@ services:
     # Note: This service requires CLOUDFLARE_TUNNEL_TOKEN environment variable
     # Create tunnel at: https://one.dash.cloudflare.com/
     # See docs/CLOUDFLARE_TUNNEL_SETUP.md for setup instructions
+
+# Epic 21.7: Docker Swarm Secrets (optional)
+# To use Docker secrets instead of environment variables:
+# 1. Create secrets:
+#    echo "your-secret-key-here" | docker secret create secret_key -
+#    echo "your-tunnel-token" | docker secret create cloudflare_tunnel_token -
+# 2. Add to services:
+#    secrets:
+#      - secret_key
+#      - cloudflare_tunnel_token
+# 3. Secrets are available at /run/secrets/secret_key, etc.
+# 4. The secrets module automatically loads from /run/secrets/ first
+#
+# secrets:
+#   secret_key:
+#     external: true
+#   cloudflare_tunnel_token:
+#     external: true
 
 volumes:
   redis-data:
