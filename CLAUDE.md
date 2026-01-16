@@ -421,9 +421,9 @@ if not is_valid_uuid(job_id):
 | `INFERENCE_RAM` | (auto-detected) | VRAM allocation for Marker |
 | `SESSION_COOKIE_SECURE` | `false` | HTTPS-only cookies |
 
-## Plan.md Structure
+## Plan.md Structure and Maintenance
 
-The `plan.md` file (1804 lines) is the project's master planning document:
+The `plan.md` file (1804 lines) is the project's **living master planning document** that must be kept up-to-date:
 
 - **Lines 1-120**: Quick start guide, architecture, critical files, running instructions
 - **Lines 121-680**: Status summary, epics 1-20 (completed), BDD user stories
@@ -432,6 +432,199 @@ The `plan.md` file (1804 lines) is the project's master planning document:
 
 **Epic tracking**: Each epic has BDD user stories with Gherkin scenarios (Given/When/Then)
 **Status format**: ✅ Completed | 🔵 Planned | 🟡 In Progress | ⚠️ Deferred | ❌ Cancelled
+
+### Maintaining Plan.md
+
+**CRITICAL**: You must update plan.md as you work to keep it synchronized with the current application state.
+
+#### When Planning New Work
+
+1. **Add new epics** in BDD format with complete Gherkin scenarios:
+```markdown
+## Epic X: [Feature Name]
+
+**Status**: 🔵 Planned | **Priority**: P0-Critical | **Effort**: X days
+**Dependencies**: Epic Y (if any)
+
+**Goal**: [High-level objective]
+
+#### Story X.1: [Story Title]
+**As a** [role]
+**I want** [capability]
+**So that** [benefit]
+
+**Acceptance Criteria:**
+
+```gherkin
+Feature: [Feature Name]
+  As a [actor]
+  I need to [action]
+  So that [outcome]
+
+  Scenario: [Scenario name]
+    Given [precondition]
+    When [action]
+    Then [expected result]
+    And [additional assertion]
+```
+
+**Technical Implementation:**
+- [Implementation detail 1]
+- [Implementation detail 2]
+
+**Files to Modify:**
+- `path/to/file.py` - [Description] (~X lines)
+
+**Dependencies:** [Story dependencies or prerequisites]
+
+**Definition of Done:**
+- [ ] Criterion 1
+- [ ] Criterion 2
+```
+
+2. **Update "Current Session State" section** (lines 70-118) with:
+   - Latest changes and their dates
+   - Status summary table updates
+   - Known gaps/issues discovered
+
+3. **Update "Next Steps" section** (lines 1477+) with:
+   - New implementation phases
+   - Priority order for new epics
+   - Reasoning for starting points
+
+#### When Completing Work
+
+1. **Mark tasks complete** with checkmarks and dates:
+```markdown
+- [x] Task completed ✅ (2026-01-15)
+```
+
+2. **Update epic status headers**:
+```markdown
+## Epic X: Feature Name
+
+✅ **Status**: Completed (2026-01-15) | **Session**: session-name | **Effort**: 2 days
+```
+
+3. **Add completion details** for complex epics:
+```markdown
+- [x] X.Y **Story: [Title]**
+  - **Goal**: [What was accomplished]
+  - **What Changed**:
+    - [Change 1 with technical detail]
+    - [Change 2 with technical detail]
+  - **Files Modified**:
+    - `path/to/file.py` - [What changed] (lines X-Y)
+  - **Verification**:
+    ```bash
+    # Command to verify
+    # Expected output
+    ```
+  - ✅ **Completed**: 2026-01-15 | **Session**: session-name
+```
+
+4. **Update "Status Summary" table** (lines 73-82):
+   - Change status from "Needs Work" → "Partial" → "Working"
+   - Update notes with current capabilities
+   - Add new categories as needed
+
+5. **Update "Recent Changes" list** (lines 84-92):
+   - Add entry with date, epic/feature name, and brief description
+   - Keep chronologically ordered (most recent first)
+
+6. **Move completed epics** from "Planned" to "Completed" sections
+
+7. **Update "Known Gaps" section** (lines 94-117):
+   - Remove gaps that were addressed
+   - Add newly discovered issues
+
+#### Format Guidelines
+
+**Three-Tier Graduated Approach** (already established in plan.md):
+
+- **Option A (Full BDD)**: For planned work (Epics 21-25)
+  - Complete user story with role/capability/benefit
+  - Multiple Gherkin scenarios with Given/When/Then
+  - Technical implementation details
+  - Files to modify with line estimates
+  - Risks, dependencies, Definition of Done
+
+- **Option B (Concise Story)**: For recently completed complex work (Epics 18-20)
+  - Goal + What Changed + Verification
+  - Files modified with line numbers
+  - Completion date and session ID
+
+- **Option C (Enhanced Checkbox)**: For completed simple work (Epics 1-17)
+  - User story one-liner
+  - Implementation summary
+  - Files modified + verification command
+  - Completion date
+
+#### Example: Completing an Epic
+
+**Before (Planned):**
+```markdown
+## Epic 21: GPU Detection (Planned)
+🔵 **Status**: Planned | **Priority**: P0
+
+- [ ] 21.1: Build-time GPU detection
+- [ ] 21.2: Runtime GPU detection
+```
+
+**After (Completed):**
+```markdown
+## Epic 21: GPU Detection (Completed)
+✅ **Status**: Completed (2026-01-15) | **Session**: epic-21 | **Effort**: 3 days
+
+- [x] 21.1: Build-time GPU detection ✅ (2026-01-15)
+  - **Goal**: Create conditional Docker builds for GPU vs CPU
+  - **What Changed**:
+    - Added scripts/build.sh with auto-detection
+    - Modified worker/Dockerfile with ARG BUILD_GPU
+    - Created requirements-gpu.txt and requirements-cpu.txt
+  - **Files Modified**:
+    - `scripts/build.sh` (new) - GPU detection script (107 lines)
+    - `worker/Dockerfile` - Conditional multi-stage build (+27 lines)
+  - **Verification**: `./scripts/build.sh auto` detects GPU and builds appropriate image
+  - ✅ **Completed**: 2026-01-15
+
+- [x] 21.2: Runtime GPU detection ✅ (2026-01-15)
+  - **Goal**: Worker detects GPU at startup and adapts behavior
+  - **What Changed**:
+    - Implemented check_gpu_availability() in warmup.py
+    - Stores GPU info in Redis for UI display
+  - **Files Modified**:
+    - `worker/warmup.py` - GPU detection (+68 lines)
+  - ✅ **Completed**: 2026-01-15
+```
+
+**And update Status Summary:**
+```markdown
+| Deployment | **Working** | Conditional GPU/CPU builds, deployment profiles |
+```
+
+#### Critical Rules
+
+1. **Always update plan.md in the same commit** as the implementation
+2. **Update "Last Updated" date** in Quick Start section (line 21)
+3. **Keep self-contained** - all epic details inline, no external file references
+4. **Use consistent formatting** - follow the three-tier approach (A/B/C)
+5. **Document what changed, not just what was done** - include files, line counts, verification
+6. **Preserve context** - future Claude sessions must understand current state without reading all code
+
+#### Verification Checklist
+
+Before committing plan.md updates:
+- [ ] "Last Updated" date is current
+- [ ] "Recent Changes" list includes new work (chronological)
+- [ ] "Status Summary" table reflects new capabilities
+- [ ] "Known Gaps" section updated (issues removed or added)
+- [ ] Epic status indicators match reality (✅/🔵/🟡)
+- [ ] All completed tasks have checkmarks and dates
+- [ ] "Next Steps" section updated with new priorities
+- [ ] Format follows established conventions (Option A/B/C)
+- [ ] No broken references to external files
+- [ ] Gherkin scenarios use proper Given/When/Then format
 
 ## Verification and Troubleshooting
 
