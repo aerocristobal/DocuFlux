@@ -132,23 +132,22 @@ def warmup():
 
         os.environ["INFERENCE_RAM"] = str(inference_ram)
         logging.info(f"Set INFERENCE_RAM={inference_ram} (GPU status: {gpu_info['status']})")
-        
-        logging.info("Loading Marker models...")
-        from marker.converters.pdf import PdfConverter
-        from marker.models import create_model_dict
-        import torch
-        import gc
-        
-        # This call will download if missing, or load if present
-        converter = PdfConverter(artifact_dict=create_model_dict())
-        
-        # Release memory so the worker can use it
-        del converter
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            
-        logging.info("Marker models loaded and verified. Releasing memory.")
+
+        # Epic 21.4: Lazy model loading
+        # Only verify models exist, don't load them into memory yet
+        # Models will be loaded on-demand in tasks.py when first Marker task runs
+        if gpu_info["status"] == "available":
+            logging.info("Verifying Marker models are cached (lazy loading mode)...")
+            import os as os_check
+            # Models are pre-cached during Docker build, just verify cache dir exists
+            cache_dir = os_check.path.expanduser("~/.cache/huggingface")
+            if os_check.path.exists(cache_dir):
+                logging.info(f"Marker model cache verified at {cache_dir}")
+                logging.info("Models will be loaded on-demand when first PDF conversion is requested")
+            else:
+                logging.warning("Marker model cache not found - models will download on first use")
+        else:
+            logging.info("GPU unavailable - Marker tasks will be disabled")
         
         # Signal ready
         with open(MODELS_READY_FILE, 'w') as f:

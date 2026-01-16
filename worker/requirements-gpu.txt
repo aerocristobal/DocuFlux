@@ -1,0 +1,16 @@
+# GPU-enabled worker requirements
+# Includes full Marker dependencies with CUDA/PyTorch GPU support
+
+celery==5.3.4
+redis==5.0.1
+requests==2.32.4
+flask-socketio==5.3.6
+gevent==23.9.1
+gevent-websocket==0.10.1
+
+# Marker with full GPU support (includes PyTorch with CUDA)
+marker-pdf[full]==1.10.1
+
+# Explicit GPU dependencies (marker-pdf[full] should include these, but being explicit)
+# torch with CUDA support is included via marker-pdf[full]
+# torchvision with CUDA support is included via marker-pdf[full]

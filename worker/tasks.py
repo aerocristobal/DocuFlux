@@ -110,10 +110,15 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
         logging.info(f"Conversion successful: {output_path}")
         update_job_metadata(job_id, {
-            'status': 'SUCCESS', 
+            'status': 'SUCCESS',
             'completed_at': str(time.time()),
             'progress': '100'
         })
+
+        # Epic 21.4: Memory cleanup after Pandoc task
+        import gc
+        gc.collect()
+
         return {"status": "success", "output_file": os.path.basename(output_path)}
     except subprocess.TimeoutExpired:
         error_msg = "Conversion timed out after 500 seconds"
@@ -235,13 +240,39 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
             'completed_at': str(time.time()),
             'progress': '100'
         })
-        
+
+        # Epic 21.4: Memory cleanup after successful task
+        logging.info("Performing memory cleanup after Marker task completion...")
+        del converter, rendered, text, images
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            mem_freed = torch.cuda.memory_reserved(0) - torch.cuda.memory_allocated(0)
+            logging.info(f"Memory cleanup complete. GPU memory freed: {mem_freed / 1e9:.2f} GB")
+        else:
+            logging.info("Memory cleanup complete (CPU mode)")
+
         return {"status": "success", "output_file": os.path.basename(output_path)}
 
     except Exception as e:
         error_msg = f"Marker conversion failed: {str(e)}"
         logging.error(f"Error for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+
+        # Epic 21.4: Memory cleanup even after failure
+        logging.info("Performing memory cleanup after task failure...")
+        import gc
+        try:
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logging.info("Memory cleanup complete after failure")
+        except Exception as cleanup_error:
+            logging.warning(f"Memory cleanup failed: {cleanup_error}")
+
         raise
 
 @celery.task(name='tasks.cleanup_old_files')

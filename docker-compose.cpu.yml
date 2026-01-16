@@ -1,0 +1,31 @@
+# CPU Profile Override
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
+# Or: docker-compose --profile cpu up (if profiles added to main compose file)
+
+services:
+  worker:
+    image: worker:cpu
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+      args:
+        BUILD_GPU: "false"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_METADATA_URL=redis://redis:6379/1
+      - MARKER_ENABLED=false
+      - BUILD_GPU=false
+    command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q high_priority,default
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G  # CPU-only needs much less memory (Epic 21.4)
+      # No GPU reservations for CPU profile
+    profiles:
+      - cpu
+
+  beat:
+    profiles:
+      - cpu

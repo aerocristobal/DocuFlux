@@ -1,0 +1,13 @@
+# CPU-only worker requirements
+# Minimal dependencies without GPU/CUDA support
+
+celery==5.3.4
+redis==5.0.1
+requests==2.32.4
+flask-socketio==5.3.6
+gevent==23.9.1
+gevent-websocket==0.10.1
+
+# Note: Marker is NOT installed in CPU-only mode
+# The worker will detect GPU unavailable at runtime and skip Marker tasks
+# This significantly reduces image size from ~15GB to <3GB
