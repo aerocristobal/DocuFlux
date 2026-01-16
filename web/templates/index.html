@@ -70,12 +70,52 @@
         .status-chip { height: 28px; }
         .hidden { display: none !important; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* GPU Status Indicator Styles */
+        #gpu-status-chip {
+            cursor: pointer;
+            margin-right: 12px;
+            transition: all 0.3s ease;
+        }
+        #gpu-status-chip:hover {
+            filter: brightness(1.1);
+        }
+        .gpu-available {
+            background-color: var(--md-sys-color-primary) !important;
+            color: var(--md-sys-color-on-primary) !important;
+        }
+        .gpu-unavailable {
+            background-color: var(--md-sys-color-tertiary) !important;
+            color: var(--md-sys-color-on-tertiary) !important;
+        }
+        .gpu-initializing {
+            background-color: var(--md-sys-color-surface-variant) !important;
+            color: var(--md-sys-color-on-surface-variant) !important;
+        }
+        #gpu-modal-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+        #gpu-modal-table td {
+            padding: 8px;
+            border-bottom: 1px solid var(--md-sys-color-outline-variant);
+        }
+        #gpu-modal-table td:first-child {
+            font-weight: 500;
+            color: var(--md-sys-color-on-surface-variant);
+            width: 40%;
+        }
     </style>
 </head>
 <body>
     <header>
         <a href="/" class="logo md-typescale-title-large"><md-icon>description</md-icon> DocuFlux</a>
         <div style="flex: 1;"></div>
+
+        <!-- GPU Status Indicator -->
+        <md-filter-chip id="gpu-status-chip" class="gpu-initializing" label="⏳ Detecting GPU..."></md-filter-chip>
+
         <span style="position: relative;">
             <md-icon-button id="theme-toggle"><md-icon>brightness_auto</md-icon></md-icon-button>
             <md-menu id="theme-menu" anchor="theme-toggle">
@@ -328,6 +368,111 @@
         }
         setInterval(checkServices, 10000);
         checkServices();
+
+        // GPU Status Indicator Functions
+        function updateGPUStatus(data) {
+            const chip = document.getElementById('gpu-status-chip');
+            if (!chip) return;
+
+            const gpu_status = data.gpu_status || 'initializing';
+            const gpu_info = data.gpu_info || {};
+
+            // Remove all status classes
+            chip.classList.remove('gpu-available', 'gpu-unavailable', 'gpu-initializing');
+
+            if (gpu_status === 'available') {
+                chip.classList.add('gpu-available');
+                const model = gpu_info.model || 'GPU';
+                const shortModel = model.replace('NVIDIA GeForce ', '').replace('NVIDIA ', '');
+                chip.label = `⚡ ${shortModel}`;
+            } else if (gpu_status === 'unavailable') {
+                chip.classList.add('gpu-unavailable');
+                chip.label = '🖥️ CPU Mode';
+                // Disable PDF (High Accuracy) option
+                const pdfMarkerOpt = document.querySelector('md-select-option[value="pdf_marker"]');
+                if (pdfMarkerOpt) pdfMarkerOpt.disabled = true;
+            } else {
+                chip.classList.add('gpu-initializing');
+                chip.label = '⏳ Detecting GPU...';
+            }
+        }
+
+        function openGPUModal() {
+            const dialog = document.getElementById('gpu-details-modal');
+            if (dialog) dialog.show();
+        }
+
+        async function refreshGPUDetails() {
+            try {
+                const r = await fetch('/api/status/services');
+                const data = await r.json();
+                const gpu_info = data.gpu_info || {};
+
+                // Update modal table
+                document.getElementById('modal-gpu-status').textContent = gpu_info.status || 'unknown';
+                document.getElementById('modal-gpu-model').textContent = gpu_info.model || 'N/A';
+                document.getElementById('modal-gpu-vram').textContent = gpu_info.vram_total ?
+                    `${gpu_info.vram_available || 0} GB / ${gpu_info.vram_total} GB` : 'N/A';
+                document.getElementById('modal-gpu-cuda').textContent = gpu_info.cuda_version || 'N/A';
+                document.getElementById('modal-gpu-driver').textContent = gpu_info.driver_version || 'N/A';
+                document.getElementById('modal-gpu-util').textContent = gpu_info.utilization !== undefined ?
+                    `${gpu_info.utilization}%` : 'N/A';
+            } catch(e) {
+                console.error('Error refreshing GPU details:', e);
+            }
+        }
+
+        // Update GPU status on service check
+        const originalCheckServices = checkServices;
+        checkServices = async function() {
+            await originalCheckServices();
+            try {
+                const r = await fetch('/api/status/services');
+                const data = await r.json();
+                updateGPUStatus(data);
+            } catch(e) {
+                console.error('Error checking GPU status:', e);
+            }
+        };
+
+        // Setup GPU chip click handler
+        document.addEventListener('DOMContentLoaded', () => {
+            const chip = document.getElementById('gpu-status-chip');
+            if (chip) {
+                chip.addEventListener('click', () => {
+                    refreshGPUDetails();
+                    openGPUModal();
+                });
+            }
+        });
+
+        // WebSocket listener for GPU status updates
+        if (typeof socket !== 'undefined') {
+            socket.on('gpu_status_update', (data) => {
+                console.log('GPU status update received:', data);
+                updateGPUStatus(data);
+            });
+        }
     </script>
+
+    <!-- GPU Details Modal -->
+    <md-dialog id="gpu-details-modal">
+        <div slot="headline">System Status</div>
+        <div slot="content" style="min-width: 400px;">
+            <h3 class="md-typescale-title-small" style="margin-top: 0;">GPU Information</h3>
+            <table id="gpu-modal-table">
+                <tr><td>Status:</td><td id="modal-gpu-status">Unknown</td></tr>
+                <tr><td>Model:</td><td id="modal-gpu-model">N/A</td></tr>
+                <tr><td>VRAM:</td><td id="modal-gpu-vram">N/A</td></tr>
+                <tr><td>CUDA Version:</td><td id="modal-gpu-cuda">N/A</td></tr>
+                <tr><td>Driver Version:</td><td id="modal-gpu-driver">N/A</td></tr>
+                <tr><td>Utilization:</td><td id="modal-gpu-util">N/A</td></tr>
+            </table>
+        </div>
+        <div slot="actions">
+            <md-text-button onclick="document.getElementById('gpu-details-modal').close()">Close</md-text-button>
+        </div>
+    </md-dialog>
+
 </body>
 </html>

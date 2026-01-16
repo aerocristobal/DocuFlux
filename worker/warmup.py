@@ -43,23 +43,95 @@ def start_health_server():
     logging.info("Starting health check server on port 8080")
     httpd.serve_forever()
 
-def check_gpu_memory():
+def check_gpu_availability():
+    """
+    Detect GPU availability and store detailed info in Redis.
+    Returns GPU info dict with status, model, VRAM, CUDA version, etc.
+    """
     try:
-        # Simple nvidia-smi check if available
-        # This is a placeholder as parsing nvidia-smi output requires popen
-        # For now, we assume 16GB free if start succeeds or read from env
-        pass
-    except:
-        pass
+        import torch
+        import subprocess
+
+        if not torch.cuda.is_available():
+            # No GPU detected
+            gpu_info = {"status": "unavailable"}
+            logging.warning("No GPU detected - running in CPU-only mode")
+        else:
+            # GPU detected - get detailed information
+            device_props = torch.cuda.get_device_properties(0)
+            vram_total_gb = device_props.total_memory / 1e9
+            vram_allocated_gb = torch.cuda.memory_allocated(0) / 1e9
+            vram_available_gb = vram_total_gb - vram_allocated_gb
+
+            gpu_info = {
+                "status": "available",
+                "model": torch.cuda.get_device_name(0),
+                "vram_total": round(vram_total_gb, 2),
+                "vram_available": round(vram_available_gb, 2),
+                "cuda_version": torch.version.cuda if torch.version.cuda else "unknown"
+            }
+
+            # Try to get driver version from nvidia-smi
+            try:
+                result = subprocess.run(
+                    ['nvidia-smi', '--query-gpu=driver_version', '--format=csv,noheader'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    gpu_info["driver_version"] = result.stdout.strip()
+                else:
+                    gpu_info["driver_version"] = "unknown"
+            except Exception:
+                gpu_info["driver_version"] = "unknown"
+
+            # Try to get GPU utilization
+            try:
+                result = subprocess.run(
+                    ['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    gpu_info["utilization"] = int(result.stdout.strip())
+                else:
+                    gpu_info["utilization"] = 0
+            except Exception:
+                gpu_info["utilization"] = 0
+
+            logging.info(f"GPU detected: {gpu_info['model']} with {gpu_info['vram_total']} GB VRAM")
+
+        # Store in Redis
+        r.hset("marker:gpu_info", mapping=gpu_info)
+        r.set("marker:gpu_status", gpu_info["status"])
+
+        return gpu_info
+
+    except Exception as e:
+        logging.error(f"GPU detection failed: {e}")
+        # Fallback to unavailable
+        gpu_info = {"status": "unavailable", "error": str(e)}
+        r.hset("marker:gpu_info", mapping=gpu_info)
+        r.set("marker:gpu_status", "unavailable")
+        return gpu_info
 
 def warmup():
     logging.info("Starting Marker warmup...")
     r.set(STATUS_KEY, "initializing")
     r.set(ETA_KEY, "Estimating...")
-    
+
+    # Detect GPU availability
+    gpu_info = check_gpu_availability()
+
     try:
-        # Set env var for marker
-        os.environ["INFERENCE_RAM"] = "16"
+        # Set env var for marker based on detected GPU
+        if gpu_info["status"] == "available" and "vram_total" in gpu_info:
+            # Use detected VRAM, cap at 16GB for safety
+            inference_ram = min(16, int(gpu_info["vram_total"]))
+        else:
+            # CPU mode or detection failed, use minimal RAM
+            inference_ram = 4
+
+        os.environ["INFERENCE_RAM"] = str(inference_ram)
+        logging.info(f"Set INFERENCE_RAM={inference_ram} (GPU status: {gpu_info['status']})")
         
         logging.info("Loading Marker models...")
         from marker.converters.pdf import PdfConverter

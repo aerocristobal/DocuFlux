@@ -134,20 +134,58 @@ def service_status():
     status = {'disk_space': 'ok'}
     if not check_disk_space():
         status['disk_space'] = 'low'
-    
+
     # Check Marker status from Redis
     try:
         marker_status = redis_client.get("service:marker:status") or "initializing"
         marker_eta = redis_client.get("service:marker:eta") or "calculating..."
-        # vram = redis_client.get("service:marker:gpu_vram_free")
-        
+
         status['marker'] = marker_status
+        status['marker_status'] = marker_status  # Alias for consistency
         status['llm_download_eta'] = marker_eta
         status['models_cached'] = (marker_status == 'ready')
     except Exception as e:
         logging.error(f"Error checking marker status: {e}")
         status['marker'] = 'error'
-        
+        status['marker_status'] = 'error'
+
+    # Get GPU status and info from Redis
+    try:
+        gpu_status = redis_client.get("marker:gpu_status") or "initializing"
+        status['gpu_status'] = gpu_status
+
+        # Get detailed GPU info
+        gpu_info_raw = redis_client.hgetall("marker:gpu_info")
+        if gpu_info_raw:
+            # Convert byte keys/values to strings and parse numbers
+            gpu_info = {}
+            for key, value in gpu_info_raw.items():
+                # Decode if bytes
+                if isinstance(key, bytes):
+                    key = key.decode('utf-8')
+                if isinstance(value, bytes):
+                    value = value.decode('utf-8')
+
+                # Try to convert numeric strings to numbers
+                try:
+                    if '.' in value:
+                        gpu_info[key] = float(value)
+                    elif value.isdigit():
+                        gpu_info[key] = int(value)
+                    else:
+                        gpu_info[key] = value
+                except (ValueError, AttributeError):
+                    gpu_info[key] = value
+
+            status['gpu_info'] = gpu_info
+        else:
+            status['gpu_info'] = {"status": "initializing"}
+
+    except Exception as e:
+        logging.error(f"Error checking GPU status: {e}")
+        status['gpu_status'] = 'unavailable'
+        status['gpu_info'] = {"status": "unavailable", "error": str(e)}
+
     return jsonify(status)
 
 FORMATS = [
