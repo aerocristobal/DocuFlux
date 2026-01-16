@@ -432,7 +432,12 @@ def download_file(job_id):
         others = [f for f in files if f != 'metadata.json']
         if others: target_file = others[0]
         
-    update_job_metadata(job_id, {'downloaded_at': str(time.time())})
+    # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
+    current_time = str(time.time())
+    update_job_metadata(job_id, {
+        'downloaded_at': str(time.time()),
+        'last_viewed': current_time
+    })
     return send_from_directory(job_dir, target_file, as_attachment=True)
 
 @app.route('/download_zip/<job_id>')
@@ -450,9 +455,14 @@ def download_zip(job_id):
                 zf.write(abs_path, rel_path)
     
     memory_file.seek(0)
-    
-    update_job_metadata(job_id, {'downloaded_at': str(time.time())})
-    
+
+    # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
+    current_time = str(time.time())
+    update_job_metadata(job_id, {
+        'downloaded_at': str(time.time()),
+        'last_viewed': current_time
+    })
+
     return send_file(
         memory_file,
         mimetype='application/zip',

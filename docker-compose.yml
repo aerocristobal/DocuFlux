@@ -50,6 +50,8 @@ services:
     build: ./worker
     volumes:
       - ./data:/app/data
+    ports:
+      - "9090:9090"  # Epic 21.5: Prometheus metrics endpoint
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
