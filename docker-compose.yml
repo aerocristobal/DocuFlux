@@ -28,6 +28,8 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - REDIS_METADATA_URL=redis://redis:6379/1
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
+      - BEHIND_PROXY=${BEHIND_PROXY:-false}
     depends_on:
       redis:
         condition: service_healthy
@@ -92,6 +94,24 @@ services:
         limits:
           memory: 256M
     restart: unless-stopped
+
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - web
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    restart: unless-stopped
+    profiles:
+      - https
+    # Note: This service requires CLOUDFLARE_TUNNEL_TOKEN environment variable
+    # Create tunnel at: https://one.dash.cloudflare.com/
+    # See docs/CLOUDFLARE_TUNNEL_SETUP.md for setup instructions
 
 volumes:
   redis-data:

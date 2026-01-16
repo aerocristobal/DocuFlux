@@ -14,6 +14,7 @@ import zipfile
 import io
 from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 from celery import Celery
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -29,7 +30,19 @@ root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'docuflux-secret-key-123') 
+app.secret_key = os.environ.get('SECRET_KEY', 'docuflux-secret-key-123')
+
+# Epic 22.4: ProxyFix middleware for Cloudflare Tunnel / reverse proxy support
+# Trust proxy headers (X-Forwarded-For, X-Forwarded-Proto, etc.)
+if os.environ.get('BEHIND_PROXY', 'false').lower() == 'true':
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=1,      # Trust 1 proxy for X-Forwarded-For
+        x_proto=1,    # Trust 1 proxy for X-Forwarded-Proto (http/https)
+        x_host=1,     # Trust 1 proxy for X-Forwarded-Host
+        x_prefix=1    # Trust 1 proxy for X-Forwarded-Prefix
+    )
+    logging.info("ProxyFix middleware enabled - trusting proxy headers")
 
 # Security Hardening for Cookies
 app.config.update(
@@ -84,6 +97,8 @@ def request_entity_too_large(error):
 
 @app.after_request
 def add_security_headers(response):
+    # Epic 22.3: Updated CSP to support both ws:// and wss:// WebSocket connections
+    # When behind proxy (HTTPS), Socket.IO auto-upgrades to wss://
     csp = (
         "default-src 'self' https://esm.run https://fonts.googleapis.com https://fonts.gstatic.com; "
         "script-src 'self' 'unsafe-inline' https://esm.run https://cdn.jsdelivr.net https://cdn.socket.io; "
@@ -96,8 +111,12 @@ def add_security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    if not app.debug:
+
+    # Epic 22.4: Enable HSTS when running behind HTTPS proxy
+    behind_proxy = os.environ.get('BEHIND_PROXY', 'false').lower() == 'true'
+    if behind_proxy or not app.debug:
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+
     return response
 
 @app.errorhandler(429)

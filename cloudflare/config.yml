@@ -1,0 +1,33 @@
+# Cloudflare Tunnel Configuration
+# This file defines how traffic is routed through the tunnel
+
+# Tunnel name (set during tunnel creation)
+tunnel: <TUNNEL_ID>
+
+# Credentials file location (generated during tunnel creation)
+credentials-file: /etc/cloudflared/credentials.json
+
+# Ingress rules - route traffic to internal services
+ingress:
+  # Route all traffic to the web service
+  - hostname: "*.your-domain.com"
+    service: http://web:5000
+    originRequest:
+      # Enable WebSocket support
+      noTLSVerify: false
+      # Connection settings
+      connectTimeout: 30s
+      tlsTimeout: 10s
+      tcpKeepAlive: 30s
+      keepAliveConnections: 100
+      # HTTP/2 settings
+      http2Origin: true
+
+  # Default rule - required as last rule
+  - service: http_status:404
+
+# Logging
+loglevel: info
+
+# Metrics endpoint (optional)
+metrics: 0.0.0.0:2000

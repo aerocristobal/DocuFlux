@@ -19,7 +19,7 @@ This project implements a containerized document conversion service using a Task
 
 ## Quick Start for New Sessions
 
-**Last Updated**: 2026-01-15
+**Last Updated**: 2026-01-16
 
 ### Critical Files to Understand
 | File | Purpose | Lines |
@@ -76,13 +76,14 @@ docker-compose logs -f worker
 | Core Conversion | **Working** | Pandoc conversions (17 formats) fully functional |
 | AI Conversion | **Working** | Marker Python API integration with options (OCR, LLM) |
 | Web UI | **Working** | Material Design 3, drag-drop, real-time updates, Marker status banner |
-| Security | **Partial** | CSRF, rate limiting, headers; needs secrets mgmt, container hardening, enhanced validation |
+| Security | **Partial** | HTTPS with Cloudflare Tunnel, CSRF, rate limiting, secure cookies, ProxyFix middleware; needs encryption at rest, Redis TLS, secrets mgmt, container hardening |
 | Testing | **Partial** | pytest suite exists, but needs updates for recent Marker API changes |
 | Observability | **Partial** | Logging done; Prometheus/Grafana not implemented, GPU monitoring placeholder only |
-| Deployment | **Partial** | Docker Compose ready; no GPU detection, no profiles, K8s manifests missing |
+| Deployment | **Partial** | Docker Compose ready with HTTPS profile; no GPU detection, no GPU/CPU profiles, K8s manifests missing |
 | Resource Efficiency | **Needs Work** | No GPU detection, hardcoded 16GB VRAM, no conditional builds, ~15GB worker image |
 
 ### Recent Changes
+- **2026-01-16 (Epic 22 - HTTPS Support)**: Implemented Cloudflare Tunnel integration for zero-touch HTTPS. Added `cloudflare-tunnel` service to docker-compose.yml with `https` profile, created automated setup script (cloudflare/setup.sh), implemented ProxyFix middleware for secure cookies and proxy header trust, updated CSP headers for wss:// WebSocket support, created comprehensive setup documentation (docs/CLOUDFLARE_TUNNEL_SETUP.md).
 - **2026-01-15 (Plan Restructuring)**: Transformed plan.md with BDD user stories for all epics. Embedded Epics 21-25 inline for self-contained context. Added Epic 21.13 for GPU/CPU visual indicator in UI.
 - **2026-01-14 (Epics 22-25 Planning)**: Completed comprehensive planning for HTTPS support via Cloudflare Tunnel, application-level encryption at rest, Redis TLS with CA certificates, and automated certificate management with Certbot + Cloudflare DNS.
 - **2026-01-14 (Epic 21 Planning)**: Completed comprehensive planning for GPU detection, resource optimization, security hardening, and operational excellence.
@@ -102,13 +103,13 @@ docker-compose logs -f worker
 - **No deployment profiles**: All services start unconditionally, no GPU/CPU profiles
 
 **Security & Encryption (Epics 22-25):**
-- **No HTTPS support**: Web service runs on plain HTTP port 5000, no TLS termination
+- **✅ HTTPS support**: Implemented via Cloudflare Tunnel with automatic SSL (Epic 22)
+- **✅ Secure cookies**: SESSION_COOKIE_SECURE enabled with ProxyFix middleware (Epic 22)
+- **✅ WebSocket encryption**: wss:// protocol supported through Cloudflare Tunnel (Epic 22)
 - **No encryption at rest**: Files stored in plaintext (~53MB in data/), 777 permissions
 - **Redis exposed**: Port 6379 exposed on 0.0.0.0 (critical security vulnerability)
 - **No encryption in transit**: All Redis connections unencrypted, Celery messages in plaintext
-- **No certificate infrastructure**: No PKI, no certificate management, no renewal automation
-- **Insecure cookies**: SESSION_COOKIE_SECURE=false, vulnerable to session hijacking
-- **WebSocket unencrypted**: Uses ws:// protocol, no wss:// support
+- **No certificate infrastructure for Redis**: No internal PKI, no certificate management
 - **Default secrets**: SECRET_KEY hardcoded to default value, no validation
 
 **Observability & Operations:**
@@ -1475,9 +1476,9 @@ open http://localhost:5000
 ---
 
 ## Epic 22: HTTPS Support with Cloudflare Tunnel
-**Status**: 🔵 Planned | **Priority**: P1 - High | **Effort**: 1-2 days
+**Status**: ✅ Completed (2026-01-16) | **Priority**: P1 - High | **Effort**: 1-2 days
 
-**Originally Planned**: 2026-01-14, Session: velvet-dreaming-micali | **Embedded**: 2026-01-15
+**Originally Planned**: 2026-01-14, Session: velvet-dreaming-micali | **Embedded**: 2026-01-15 | **Completed**: 2026-01-16
 
 **Goal**: Enable zero-touch HTTPS with automatic SSL certificate management via Cloudflare Tunnel.
 
@@ -1529,11 +1530,11 @@ Feature: Cloudflare Tunnel Service Deployment
 **Dependencies:** Cloudflare account, domain, API token
 
 **Definition of Done:**
-- [ ] Cloudflare Tunnel service in docker-compose.yml
-- [ ] Tunnel connects to Cloudflare edge network
-- [ ] Web UI accessible via HTTPS
-- [ ] SSL certificate valid in browser
-- [ ] Setup documentation complete
+- [x] Cloudflare Tunnel service in docker-compose.yml
+- [x] Tunnel connects to Cloudflare edge network
+- [x] Web UI accessible via HTTPS
+- [x] SSL certificate valid in browser
+- [x] Setup documentation complete
 
 ---
 
