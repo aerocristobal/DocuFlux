@@ -76,13 +76,14 @@ docker-compose logs -f worker
 | Core Conversion | **Working** | Pandoc conversions (17 formats) fully functional |
 | AI Conversion | **Working** | Marker Python API integration with options (OCR, LLM), GPU/CPU detection |
 | Web UI | **Working** | Material Design 3, drag-drop, real-time updates, GPU status indicator |
-| Security | **Strong** | HTTPS (Cloudflare Tunnel), secrets management, non-root containers, capability dropping, input validation, secure cookies; needs encryption at rest, Redis TLS |
+| Security | **Strong** | HTTPS (Cloudflare Tunnel), secrets management, file encryption at rest (AES-256-GCM), non-root containers, capability dropping, input validation, secure cookies; needs Redis TLS |
 | Testing | **Partial** | pytest suite exists, but needs updates for recent Marker API changes |
 | Observability | **Working** | Prometheus metrics (/metrics), health checks (/healthz, /readyz, /api/health), alerting rules; needs Grafana dashboards |
 | Deployment | **Working** | Docker Compose with GPU/CPU/HTTPS profiles, conditional builds, K8s manifests missing |
 | Resource Efficiency | **Working** | GPU detection, lazy model loading, intelligent cleanup, 3GB CPU image, ~15GB GPU image |
 
 ### Recent Changes
+- **2026-01-16 (Epic 23 - Application-Level Encryption at Rest)**: Implemented comprehensive file encryption with AES-256-GCM. Created encryption service (encryption.py) with authenticated encryption (AEAD), per-job key manager (key_manager.py) with DEK generation and wrapping, transparent decryption on download (modified app.py and tasks.py), Redis metadata encryption helper (redis_encryption.py), and integrated master key management into secrets module with auto-generation for development and required configuration for production.
 - **2026-01-16 (Epic 21 - GPU Detection & Resource Optimization)**: Completed all 13 stories implementing GPU detection, Prometheus metrics, intelligent cleanup, secrets management, container hardening, input validation, health checks, alerting, and graceful shutdown. Added conditional Docker builds (GPU/CPU), lazy model loading, Prometheus /metrics endpoint, intelligent data retention with disk monitoring, Docker Swarm secrets support, non-root containers with capability dropping, comprehensive input validators/sanitizers, /healthz and /readyz probes, Prometheus alerting rules with runbooks, and SIGTERM handlers with GPU cleanup.
 - **2026-01-16 (Epic 22 - HTTPS Support)**: Implemented Cloudflare Tunnel integration for zero-touch HTTPS. Added `cloudflare-tunnel` service to docker-compose.yml with `https` profile, created automated setup script (cloudflare/setup.sh), implemented ProxyFix middleware for secure cookies and proxy header trust, updated CSP headers for wss:// WebSocket support, created comprehensive setup documentation (docs/CLOUDFLARE_TUNNEL_SETUP.md).
 - **2026-01-15 (Plan Restructuring)**: Transformed plan.md with BDD user stories for all epics. Embedded Epics 21-25 inline for self-contained context. Added Epic 21.13 for GPU/CPU visual indicator in UI.
@@ -114,13 +115,15 @@ docker-compose logs -f worker
 - **✅ HTTPS support**: Implemented via Cloudflare Tunnel with automatic SSL (Epic 22)
 - **✅ Secure cookies**: SESSION_COOKIE_SECURE enabled with ProxyFix middleware (Epic 22)
 - **✅ WebSocket encryption**: wss:// protocol supported through Cloudflare Tunnel (Epic 22)
-- **No encryption at rest**: Files stored in plaintext (~53MB in data/), 777 permissions
+- **✅ Encryption at rest**: AES-256-GCM encryption for all files and metadata (Epic 23)
+- **✅ Per-job encryption**: Unique DEKs per job wrapped with master key (Epic 23)
+- **✅ Transparent decryption**: Files automatically decrypted on download (Epic 23)
+- **✅ Master key management**: Integrated into secrets module with auto-generation for dev (Epic 23)
 - **Redis exposed**: Port 6379 exposed on 0.0.0.0 (security vulnerability, but mitigated by container network)
 - **No encryption in transit**: All Redis connections unencrypted, Celery messages in plaintext
 - **No certificate infrastructure for Redis**: No internal PKI, no certificate management
 
 **Remaining Work:**
-- **Epic 23**: Application-level encryption at rest (AES-256-GCM)
 - **Epic 24**: Redis TLS with CA certificates
 - **Epic 25**: Certbot integration for certificate management
 
@@ -1581,11 +1584,18 @@ Feature: Cloudflare Tunnel Service Deployment
 ---
 
 ## Epic 23: Application-Level Encryption at Rest
-**Status**: 🔵 Planned | **Priority**: P2 - Medium | **Effort**: 4-5 days
+**Status**: ✅ Completed (2026-01-16) | **Priority**: P2 - Medium | **Effort**: 4-5 days
 
 **Originally Planned**: 2026-01-14, Session: velvet-dreaming-micali | **Embedded**: 2026-01-15
 
 **Goal**: Implement AES-256-GCM encryption for all files and sensitive metadata with per-job encryption keys.
+
+**Implementation Summary**:
+- ✅ Story 23.1: File Encryption Service with AES-256-GCM (encryption.py)
+- ✅ Story 23.2: Per-job encryption key management (key_manager.py)
+- ✅ Story 23.3: Transparent decryption on download (app.py, tasks.py)
+- ✅ Story 23.4: Redis data encryption for sensitive metadata (redis_encryption.py)
+- ✅ Story 23.5: Master key and secrets management (secrets.py updated)
 
 #### Story 23.1: File Encryption Service with AES-256-GCM
 **As a** developer

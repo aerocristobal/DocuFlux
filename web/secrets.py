@@ -90,6 +90,21 @@ def load_secret(name, default=None, required=False, reject_default_in_prod=True)
     return None
 
 
+def generate_master_encryption_key():
+    """
+    Generate a new master encryption key for development use.
+
+    Epic 23.5: Auto-generate key in development if not provided
+
+    Returns:
+        Base64 URL-safe encoded 256-bit key
+    """
+    import secrets
+    key_bytes = secrets.token_bytes(32)  # 256 bits
+    import base64
+    return base64.urlsafe_b64encode(key_bytes).decode('utf-8')
+
+
 def load_all_secrets():
     """
     Load all application secrets required by DocuFlux.
@@ -115,12 +130,29 @@ def load_all_secrets():
         reject_default_in_prod=False
     )
 
-    # Future: Master encryption key (Epic 23)
-    # secrets['MASTER_ENCRYPTION_KEY'] = load_secret(
-    #     'master_encryption_key',
-    #     required=False,
-    #     reject_default_in_prod=True
-    # )
+    # Epic 23.5: Master encryption key
+    # Auto-generate in development, require explicit key in production
+    is_production = os.environ.get('FLASK_ENV', 'production') == 'production'
+
+    master_key_default = None
+    if not is_production:
+        # Development: Generate ephemeral key if none provided
+        master_key_default = generate_master_encryption_key()
+        logging.warning(
+            "Generated ephemeral master encryption key for development. "
+            "Set MASTER_ENCRYPTION_KEY environment variable for persistent encryption."
+        )
+
+    secrets['MASTER_ENCRYPTION_KEY'] = load_secret(
+        'master_encryption_key',
+        default=master_key_default,
+        required=is_production,  # Required in production
+        reject_default_in_prod=True
+    )
+
+    # Set as environment variable for EncryptionService to pick up
+    if secrets['MASTER_ENCRYPTION_KEY']:
+        os.environ['MASTER_ENCRYPTION_KEY'] = secrets['MASTER_ENCRYPTION_KEY']
 
     # Future: Celery signing key (Epic 24)
     # secrets['CELERY_SIGNING_KEY'] = load_secret(
@@ -183,11 +215,37 @@ def get_secret_rotation_instructions():
     1. Update .env file or docker-compose.yml
     2. Restart services: docker-compose restart web worker
 
+    Master Encryption Key Generation:
+    # Generate new 256-bit key:
+    python -c "import secrets, base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+
+    # Or use the built-in generator:
+    python -c "from secrets import generate_master_encryption_key; print(generate_master_encryption_key())"
+
+    # Then set in environment:
+    export MASTER_ENCRYPTION_KEY="<generated-key>"
+
+    IMPORTANT - Master Key Rotation:
+    WARNING: Rotating the master encryption key will make all existing encrypted
+    files UNRECOVERABLE unless you implement a re-encryption strategy.
+
+    Rotation Strategy (Advanced):
+    1. Generate new master key (MEK_v2)
+    2. Keep old key (MEK_v1) for decryption
+    3. Decrypt old DEKs with MEK_v1, re-wrap with MEK_v2
+    4. Update MASTER_ENCRYPTION_KEY to MEK_v2
+    5. Remove MEK_v1 only after all keys re-wrapped
+
+    Recommended: Do NOT rotate master key unless compromised.
+    Instead, rotate per-job DEKs using key_manager.rotate_job_key()
+
     Best Practices:
-    - Rotate secrets every 90 days
-    - Use strong random values: python -c "import secrets; print(secrets.token_hex(32))"
+    - Rotate Flask SECRET_KEY every 90 days
+    - Rotate master encryption key only if compromised
+    - Use strong random values for all secrets
     - Never commit secrets to version control
     - Use different secrets for dev/staging/production
+    - Back up master encryption key securely (encrypted, offline storage)
     """
 
 

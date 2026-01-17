@@ -24,6 +24,10 @@ from metrics import (
     start_metrics_server
 )
 
+# Epic 23.3: Import encryption modules
+from encryption import EncryptionService
+from key_manager import create_key_manager
+
 # Configure Structured Logging
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
@@ -159,6 +163,90 @@ atexit.register(cleanup_on_shutdown)
 
 logging.info("Graceful shutdown handlers registered (SIGTERM, SIGINT, atexit)")
 
+# Epic 23.3: Initialize encryption components (lazily to avoid startup delays)
+_encryption_service = None
+_key_manager = None
+
+def get_encryption_service():
+    """Get or create encryption service instance."""
+    global _encryption_service
+    if _encryption_service is None:
+        _encryption_service = EncryptionService()
+    return _encryption_service
+
+def get_key_manager():
+    """Get or create key manager instance."""
+    global _key_manager
+    if _key_manager is None:
+        _key_manager = create_key_manager(redis_client)
+    return _key_manager
+
+def encrypt_output_files(job_id, output_dir):
+    """
+    Encrypt all output files for a job after conversion completes.
+
+    Epic 23.3: Transparent file encryption
+
+    Args:
+        job_id: Job identifier
+        output_dir: Directory containing output files
+
+    Returns:
+        True if encryption succeeded, False otherwise
+    """
+    try:
+        encryption_service = get_encryption_service()
+        key_manager = get_key_manager()
+
+        # Generate DEK for this job
+        dek = key_manager.generate_job_key(job_id, metadata={
+            'created_at': str(time.time()),
+            'job_id': job_id
+        })
+
+        # Encrypt all files in output directory
+        encrypted_count = 0
+        for root, dirs, files in os.walk(output_dir):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+
+                # Skip already encrypted files
+                if file_path.endswith('.enc'):
+                    continue
+
+                # Encrypt file
+                encrypted_path = file_path + '.enc'
+                try:
+                    encryption_service.encrypt_file(
+                        input_path=file_path,
+                        output_path=encrypted_path,
+                        key=dek,
+                        associated_data=job_id
+                    )
+
+                    # Remove plaintext file
+                    os.remove(file_path)
+
+                    # Rename encrypted file to original name
+                    os.rename(encrypted_path, file_path)
+
+                    encrypted_count += 1
+                    logging.info(f"Encrypted file: {file_path}")
+
+                except Exception as e:
+                    logging.error(f"Failed to encrypt {file_path}: {e}")
+                    # Clean up partial encryption
+                    if os.path.exists(encrypted_path):
+                        os.remove(encrypted_path)
+                    return False
+
+        logging.info(f"Encrypted {encrypted_count} files for job {job_id}")
+        return True
+
+    except Exception as e:
+        logging.error(f"Encryption failed for job {job_id}: {e}")
+        return False
+
 
 def update_job_metadata(job_id, updates):
     """Update job metadata using Redis Hash (atomic operation) and broadcast via WebSocket."""
@@ -226,10 +314,32 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
     try:
         process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
         logging.info(f"Conversion successful: {output_path}")
+
+        # Epic 23.3: Encrypt output files
+        output_dir = os.path.dirname(output_path)
+        if not encrypt_output_files(job_id, output_dir):
+            error_msg = "File encryption failed"
+            logging.error(f"Encryption failed for job {job_id}")
+            update_job_metadata(job_id, {
+                'status': 'FAILURE',
+                'completed_at': str(time.time()),
+                'error': error_msg,
+                'progress': '0'
+            })
+
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='encryption_error').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+
+            raise Exception(error_msg)
+
         update_job_metadata(job_id, {
             'status': 'SUCCESS',
             'completed_at': str(time.time()),
-            'progress': '100'
+            'progress': '100',
+            'encrypted': 'true'
         })
 
         # Epic 21.5: Record success metrics
@@ -386,11 +496,31 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
 
         update_job_metadata(job_id, {'progress': '90'})
         logging.info(f"Marker conversion successful: {output_path}")
-        
+
+        # Epic 23.3: Encrypt output files
+        if not encrypt_output_files(job_id, output_dir):
+            error_msg = "File encryption failed"
+            logging.error(f"Encryption failed for job {job_id}")
+            update_job_metadata(job_id, {
+                'status': 'FAILURE',
+                'completed_at': str(time.time()),
+                'error': error_msg,
+                'progress': '0'
+            })
+
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='encryption_error').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+
+            raise Exception(error_msg)
+
         update_job_metadata(job_id, {
             'status': 'SUCCESS',
             'completed_at': str(time.time()),
-            'progress': '100'
+            'progress': '100',
+            'encrypted': 'true'
         })
 
         # Epic 21.5: Record success metrics

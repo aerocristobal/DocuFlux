@@ -25,6 +25,11 @@ from datetime import datetime, timezone, timedelta
 # Epic 21.7: Import secrets management
 from secrets import validate_secrets_at_startup, load_secret
 
+# Epic 23.3: Import encryption modules
+from encryption import EncryptionService
+from key_manager import create_key_manager
+import tempfile
+
 # Configure Structured Logging
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
@@ -151,6 +156,68 @@ celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
     'tasks.convert_with_marker': {'queue': 'default'},
 }
+
+# Epic 23.3: Initialize encryption components (lazily)
+_encryption_service = None
+_key_manager = None
+
+def get_encryption_service():
+    """Get or create encryption service instance."""
+    global _encryption_service
+    if _encryption_service is None:
+        _encryption_service = EncryptionService()
+    return _encryption_service
+
+def get_key_manager():
+    """Get or create key manager instance."""
+    global _key_manager
+    if _key_manager is None:
+        _key_manager = create_key_manager(redis_client)
+    return _key_manager
+
+def decrypt_file_to_temp(encrypted_path, job_id):
+    """
+    Decrypt an encrypted file to a temporary location.
+
+    Epic 23.3: Transparent decryption on download
+
+    Args:
+        encrypted_path: Path to encrypted file
+        job_id: Job identifier for key retrieval
+
+    Returns:
+        Path to decrypted temporary file, or None if decryption failed
+    """
+    try:
+        encryption_service = get_encryption_service()
+        key_manager = get_key_manager()
+
+        # Get DEK for this job
+        dek = key_manager.get_job_key(job_id)
+        if dek is None:
+            logging.error(f"No decryption key found for job {job_id}")
+            return None
+
+        # Create temporary file for decrypted content
+        temp_fd, temp_path = tempfile.mkstemp(suffix=os.path.splitext(encrypted_path)[1])
+        os.close(temp_fd)
+
+        # Decrypt file
+        encryption_service.decrypt_file(
+            input_path=encrypted_path,
+            output_path=temp_path,
+            key=dek,
+            associated_data=job_id
+        )
+
+        logging.info(f"Decrypted file for download: {encrypted_path} -> {temp_path}")
+        return temp_path
+
+    except Exception as e:
+        logging.error(f"Decryption failed for {encrypted_path}: {e}")
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            os.remove(temp_path)
+        return None
 
 def check_disk_space():
     try:
@@ -442,44 +509,103 @@ def download_file(job_id):
     if len(files) > 1:
         others = [f for f in files if f != 'metadata.json']
         if others: target_file = others[0]
-        
-    # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
-    current_time = str(time.time())
-    update_job_metadata(job_id, {
-        'downloaded_at': str(time.time()),
-        'last_viewed': current_time
-    })
-    return send_from_directory(job_dir, target_file, as_attachment=True)
+
+    # Epic 23.3: Decrypt file transparently before sending
+    encrypted_path = os.path.join(job_dir, target_file)
+
+    # Check if file is encrypted (has encrypted flag in metadata)
+    job_meta = redis_client.hgetall(f"job:{job_id}")
+    is_encrypted = job_meta.get('encrypted') == 'true'
+
+    if is_encrypted:
+        # Decrypt file to temporary location
+        decrypted_path = decrypt_file_to_temp(encrypted_path, job_id)
+        if decrypted_path is None:
+            return "Decryption failed", 500
+
+        # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
+        current_time = str(time.time())
+        update_job_metadata(job_id, {
+            'downloaded_at': str(time.time()),
+            'last_viewed': current_time
+        })
+
+        # Send decrypted file and clean up temp file after sending
+        try:
+            return send_file(
+                decrypted_path,
+                as_attachment=True,
+                download_name=target_file
+            )
+        finally:
+            # Clean up temporary decrypted file
+            if os.path.exists(decrypted_path):
+                os.remove(decrypted_path)
+    else:
+        # File not encrypted, send directly
+        # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
+        current_time = str(time.time())
+        update_job_metadata(job_id, {
+            'downloaded_at': str(time.time()),
+            'last_viewed': current_time
+        })
+        return send_from_directory(job_dir, target_file, as_attachment=True)
 
 @app.route('/download_zip/<job_id>')
 def download_zip(job_id):
     if not is_valid_uuid(job_id): return "Invalid", 400
     job_dir = os.path.join(OUTPUT_FOLDER, job_id)
     if not os.path.exists(job_dir): return "Not found", 404
-    
+
+    # Epic 23.3: Check if files are encrypted
+    job_meta = redis_client.hgetall(f"job:{job_id}")
+    is_encrypted = job_meta.get('encrypted') == 'true'
+
     memory_file = io.BytesIO()
-    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for root, dirs, files in os.walk(job_dir):
-            for file in files:
-                abs_path = os.path.join(root, file)
-                rel_path = os.path.relpath(abs_path, job_dir)
-                zf.write(abs_path, rel_path)
-    
-    memory_file.seek(0)
+    temp_files = []  # Track temporary decrypted files for cleanup
 
-    # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
-    current_time = str(time.time())
-    update_job_metadata(job_id, {
-        'downloaded_at': str(time.time()),
-        'last_viewed': current_time
-    })
+    try:
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(job_dir):
+                for file in files:
+                    abs_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(abs_path, job_dir)
 
-    return send_file(
-        memory_file,
-        mimetype='application/zip',
-        as_attachment=True,
-        download_name=f"conversion_{job_id}.zip"
-    )
+                    if is_encrypted:
+                        # Decrypt file to temporary location
+                        decrypted_path = decrypt_file_to_temp(abs_path, job_id)
+                        if decrypted_path is None:
+                            logging.error(f"Failed to decrypt {abs_path} for zip download")
+                            continue
+
+                        # Add decrypted file to zip with original relative path
+                        zf.write(decrypted_path, rel_path)
+                        temp_files.append(decrypted_path)
+                    else:
+                        # Add file directly to zip
+                        zf.write(abs_path, rel_path)
+
+        memory_file.seek(0)
+
+        # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
+        current_time = str(time.time())
+        update_job_metadata(job_id, {
+            'downloaded_at': str(time.time()),
+            'last_viewed': current_time
+        })
+
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f"conversion_{job_id}.zip"
+        )
+
+    finally:
+        # Clean up temporary decrypted files
+        for temp_file in temp_files:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
 
 
 # Epic 21.10: Enhanced Health Check Endpoints
