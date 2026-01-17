@@ -20,7 +20,7 @@ async function handleRequest(req, res) {
             let page = null;
             try {
                 const { action, args } = JSON.parse(body);
-                console.log(`Received action: ${action} with args:`, args);
+                console.log('Received action: %s with args:', action, args);
 
                 if (!browser) {
                     await startBrowser();
@@ -85,7 +85,7 @@ async function handleRequest(req, res) {
                                         throw new Error(`Unknown script action: ${currentAction}`);
                                 }
                             } catch (stepError) {
-                                console.error(`Error during script step '${currentAction}':`, stepError);
+                                console.error('Error during script step \'%s\':', currentAction, stepError);
                                 stepResult = { success: false, action: currentAction, error: stepError.message };
                                 // Decide whether to continue or break on error
                                 throw stepError; // Break the script execution on first error
@@ -123,7 +123,7 @@ async function main() {
     const server = http.createServer(handleRequest);
     const PORT = process.env.PORT || 8080;
     server.listen(PORT, () => {
-        console.log(`MCP server listening on port ${PORT}`);
+        console.log('MCP server listening on port %d', PORT);
     });
 }
 

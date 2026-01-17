@@ -484,11 +484,12 @@ def cancel_job(job_id):
 @app.route('/api/delete/<job_id>', methods=['POST'])
 def delete_job(job_id):
     if not is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
+    safe_job_id = secure_filename(job_id)
     session_id = session.get('session_id')
     if session_id: redis_client.lrem(f"history:{session_id}", 0, job_id)
     
     for base in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
-        p = os.path.join(base, job_id)
+        p = os.path.join(base, safe_job_id)
         if os.path.exists(p): shutil.rmtree(p)
     redis_client.delete(f"job:{job_id}")
     return jsonify({'status': 'deleted'})
@@ -496,10 +497,11 @@ def delete_job(job_id):
 @app.route('/api/retry/<job_id>', methods=['POST'])
 def retry_job(job_id):
     if not is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
+    safe_job_id = secure_filename(job_id)
     job_data = redis_client.hgetall(f"job:{job_id}")
     if not job_data: return jsonify({'error': 'Not found'}), 404
     input_filename = job_data.get('filename')
-    old_input_path = os.path.join(UPLOAD_FOLDER, job_id, input_filename)
+    old_input_path = os.path.join(UPLOAD_FOLDER, safe_job_id, input_filename)
     if not os.path.exists(old_input_path): return jsonify({'error': 'Cleaned up'}), 400
 
     new_job_id = str(uuid.uuid4())
@@ -537,7 +539,8 @@ def retry_job(job_id):
 @app.route('/download/<job_id>')
 def download_file(job_id):
     if not is_valid_uuid(job_id): return "Invalid", 400
-    job_dir = os.path.join(OUTPUT_FOLDER, job_id)
+    safe_job_id = secure_filename(job_id)
+    job_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
     if not os.path.exists(job_dir): return "Not found", 404
     files = [f for f in os.listdir(job_dir) if os.path.isfile(os.path.join(job_dir, f)) and not f.startswith('.')]
     if not files: return "Not found", 404
@@ -592,7 +595,8 @@ def download_file(job_id):
 @app.route('/download_zip/<job_id>')
 def download_zip(job_id):
     if not is_valid_uuid(job_id): return "Invalid", 400
-    job_dir = os.path.join(OUTPUT_FOLDER, job_id)
+    safe_job_id = secure_filename(job_id)
+    job_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
     if not os.path.exists(job_dir): return "Not found", 404
 
     # Epic 23.3: Check if files are encrypted
@@ -713,10 +717,11 @@ def health_detailed():
             'response_time_ms': 'OK'
         }
     except Exception as e:
+        logging.error(f"Health check failed for Redis: {e}")
         health_status['status'] = 'unhealthy'
         health_status['components']['redis'] = {
             'status': 'down',
-            'error': str(e)
+            'error': 'Could not connect to Redis'
         }
 
     # Check disk space
@@ -736,9 +741,10 @@ def health_detailed():
             health_status['status'] = 'degraded'
 
     except Exception as e:
+        logging.error(f"Health check failed for disk space: {e}")
         health_status['components']['disk'] = {
             'status': 'unknown',
-            'error': str(e)
+            'error': 'Could not read disk space'
         }
 
     # Check GPU status (from worker via Redis)
@@ -751,9 +757,10 @@ def health_detailed():
             'info': gpu_info if gpu_info else {}
         }
     except Exception as e:
+        logging.error(f"Health check failed for GPU status: {e}")
         health_status['components']['gpu'] = {
             'status': 'unknown',
-            'error': str(e)
+            'error': 'Could not query GPU status from Redis'
         }
 
     # Check Celery worker availability
@@ -775,9 +782,10 @@ def health_detailed():
             health_status['status'] = 'degraded'
 
     except Exception as e:
+        logging.error(f"Health check failed for Celery workers: {e}")
         health_status['components']['celery_workers'] = {
             'status': 'unknown',
-            'error': str(e)
+            'error': 'Could not inspect Celery workers'
         }
 
     # Overall status code

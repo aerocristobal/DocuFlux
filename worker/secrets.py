@@ -189,14 +189,6 @@ def validate_secrets_at_startup():
     try:
         secrets = load_all_secrets()
 
-        # Log which secrets were loaded (without values!)
-        loaded_secrets = [name for name, value in secrets.items() if value]
-        missing_secrets = [name for name, value in secrets.items() if not value]
-
-        logging.info(f"Loaded secrets: {', '.join(loaded_secrets)}")
-        if missing_secrets:
-            logging.warning(f"Missing optional secrets: {', '.join(missing_secrets)}")
-
         logging.info("✓ Secrets validation passed")
         return secrets
 

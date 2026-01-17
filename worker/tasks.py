@@ -9,9 +9,11 @@ import sys
 import threading
 import signal
 import atexit
+from urllib.parse import urlparse
 from celery import Celery
 from celery.schedules import crontab
 from flask_socketio import SocketIO
+from werkzeug.utils import secure_filename
 from warmup import get_slm_model # Epic 26: SLM model getter
 from PIL import Image # Epic 28: For image processing
 
@@ -349,9 +351,13 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         if not is_valid_uuid(job_id):
             logging.error(f"Invalid job_id received: {job_id}")
             return {"status": "error", "message": "Invalid job ID"}
+        
+        safe_job_id = secure_filename(job_id)
+        safe_input_filename = secure_filename(input_filename)
+        safe_output_filename = secure_filename(output_filename)
 
-        input_path = os.path.join(UPLOAD_FOLDER, job_id, input_filename)
-        output_path = os.path.join(OUTPUT_FOLDER, job_id, output_filename)
+        input_path = os.path.join(UPLOAD_FOLDER, safe_job_id, safe_input_filename)
+        output_path = os.path.join(OUTPUT_FOLDER, safe_job_id, safe_output_filename)
 
         logging.info(f"Starting conversion for job {job_id}: {from_format} -> {to_format}")
         update_job_metadata(job_id, {
@@ -493,12 +499,16 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         worker_tasks_active.dec()
         return {"status": "error", "message": "Invalid job ID"}
 
+    safe_job_id = secure_filename(job_id)
+    safe_input_filename = secure_filename(input_filename)
+    safe_output_filename = secure_filename(output_filename)
+
     if options is None:
         options = {}
 
-    input_path = os.path.join(UPLOAD_FOLDER, job_id, input_filename)
-    output_dir = os.path.join(OUTPUT_FOLDER, job_id)
-    output_path = os.path.join(output_dir, output_filename)
+    input_path = os.path.join(UPLOAD_FOLDER, safe_job_id, safe_input_filename)
+    output_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
+    output_path = os.path.join(output_dir, safe_output_filename)
 
     logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1}) with options: {options}")
     update_job_metadata(job_id, {
@@ -1044,7 +1054,9 @@ def test_amazon_session(job_id, encrypted_session_file_path):
 
         if mcp_response.get('success'):
             content = mcp_response.get('content', '')
-            # Verify if still on login page or redirected away
+            # CodeQL false positive: This is a check of the page's HTML content,
+            # not a URL sanitization check. We are looking for keywords that
+            # indicate a redirect to a login or store page.
             if "signin.amazon.com" in content or "kindle.amazon.com/store" in content:
                 logging.warning(f"Amazon session for job {job_id} is invalid: redirected to login/store.")
                 update_job_metadata(job_id, {
