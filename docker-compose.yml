@@ -1,17 +1,29 @@
 services:
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
-    ports:
-      - "6379:6379"
+    # Epic 24.1: Redis TLS Configuration
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+      --tls-port 6379
+      --port 0
+      --tls-cert-file /certs/redis/redis.crt
+      --tls-key-file /certs/redis/redis.key
+      --tls-ca-cert-file /certs/redis/ca.crt
+      --tls-auth-clients optional
+    # Epic 24.3: No port exposure - Redis only accessible from Docker internal network
     volumes:
       - redis-data:/data
+      - ./certs:/certs:ro  # Mount certificates read-only
     deploy:
       resources:
         limits:
           memory: 300M
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # Epic 24.1: TLS-enabled health check
+      test: ["CMD", "redis-cli", "--tls", "--cert", "/certs/redis/redis.crt", "--key", "/certs/redis/redis.key", "--cacert", "/certs/redis/ca.crt", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -21,12 +33,17 @@ services:
     build: ./web
     volumes:
       - ./data:/app/data
+      - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
     ports:
       - "5000:5000"
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - REDIS_METADATA_URL=redis://redis:6379/1
+      # Epic 24.1: Redis TLS URLs (rediss://)
+      - CELERY_BROKER_URL=rediss://redis:6379/0
+      - CELERY_RESULT_BACKEND=rediss://redis:6379/0
+      - REDIS_METADATA_URL=rediss://redis:6379/1
+      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
+      - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
+      - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
       - BEHIND_PROXY=${BEHIND_PROXY:-false}
@@ -57,12 +74,17 @@ services:
     build: ./worker
     volumes:
       - ./data:/app/data
+      - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
     ports:
       - "9090:9090"  # Epic 21.5: Prometheus metrics endpoint
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - REDIS_METADATA_URL=redis://redis:6379/1
+      # Epic 24.1: Redis TLS URLs (rediss://)
+      - CELERY_BROKER_URL=rediss://redis:6379/0
+      - CELERY_RESULT_BACKEND=rediss://redis:6379/0
+      - REDIS_METADATA_URL=rediss://redis:6379/1
+      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
+      - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
+      - REDIS_TLS_KEYFILE=/certs/redis/redis.key
     command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q high_priority,default
     depends_on:
       redis:
@@ -98,10 +120,15 @@ services:
     volumes:
       - ./data:/app/data
       - beat-data:/app/celerybeat
+      - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - REDIS_METADATA_URL=redis://redis:6379/1
+      # Epic 24.1: Redis TLS URLs (rediss://)
+      - CELERY_BROKER_URL=rediss://redis:6379/0
+      - CELERY_RESULT_BACKEND=rediss://redis:6379/0
+      - REDIS_METADATA_URL=rediss://redis:6379/1
+      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
+      - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
+      - REDIS_TLS_KEYFILE=/certs/redis/redis.key
     depends_on:
       redis:
         condition: service_healthy
@@ -128,6 +155,26 @@ services:
     # Note: This service requires CLOUDFLARE_TUNNEL_TOKEN environment variable
     # Create tunnel at: https://one.dash.cloudflare.com/
     # See docs/CLOUDFLARE_TUNNEL_SETUP.md for setup instructions
+
+  # Epic 24.3: Redis Commander (optional debugging tool)
+  # Enable with: docker-compose --profile debug up redis-commander
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      - REDIS_HOSTS=redis:redis:6379:0:,redis:redis:6379:1
+      # Note: Redis Commander doesn't support TLS yet, so this is for non-TLS debugging only
+      # For TLS debugging, use: redis-cli --tls --cert /certs/redis/redis.crt --key /certs/redis/redis.key --cacert /certs/redis/ca.crt
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    profiles:
+      - debug
+    # Warning: This tool is for development/debugging only. Do not use in production.
 
 # Epic 21.7: Docker Swarm Secrets (optional)
 # To use Docker secrets instead of environment variables:

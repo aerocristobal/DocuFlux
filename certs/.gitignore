@@ -1,0 +1,16 @@
+# Ignore all certificate files and private keys
+# Epic 24.1: Redis TLS Configuration
+
+# Private keys (NEVER commit these!)
+*.key
+*.pem
+
+# Certificate signing requests
+*.csr
+
+# Serial files
+*.srl
+
+# Keep only example/placeholder files
+!.gitignore
+!README.md

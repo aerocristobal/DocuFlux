@@ -76,13 +76,14 @@ docker-compose logs -f worker
 | Core Conversion | **Working** | Pandoc conversions (17 formats) fully functional |
 | AI Conversion | **Working** | Marker Python API integration with options (OCR, LLM), GPU/CPU detection |
 | Web UI | **Working** | Material Design 3, drag-drop, real-time updates, GPU status indicator |
-| Security | **Strong** | HTTPS (Cloudflare Tunnel), secrets management, file encryption at rest (AES-256-GCM), non-root containers, capability dropping, input validation, secure cookies; needs Redis TLS |
+| Security | **Strong** | HTTPS (Cloudflare Tunnel), secrets management, file encryption at rest (AES-256-GCM), Redis TLS with message signing, non-root containers, capability dropping, input validation, secure cookies |
 | Testing | **Partial** | pytest suite exists, but needs updates for recent Marker API changes |
 | Observability | **Working** | Prometheus metrics (/metrics), health checks (/healthz, /readyz, /api/health), alerting rules; needs Grafana dashboards |
 | Deployment | **Working** | Docker Compose with GPU/CPU/HTTPS profiles, conditional builds, K8s manifests missing |
 | Resource Efficiency | **Working** | GPU detection, lazy model loading, intelligent cleanup, 3GB CPU image, ~15GB GPU image |
 
 ### Recent Changes
+- **2026-01-16 (Epic 24 - Encryption in Transit with Redis TLS)**: Implemented Redis TLS with certificate-based encryption and Celery message signing. Created certificate generation script (generate-redis-certs.sh) with self-signed CA for development, configured Redis for TLS-only operation (rediss:// URLs), updated Redis client initialization in web/app.py and worker/tasks.py with TLS parameters, implemented Celery message signing with auth serializer and security_key, removed Redis port exposure from docker-compose.yml, added Redis Commander debug profile, created certificate management scripts (renew-redis-certs.sh, reload-services.sh) with automated expiration checking, and comprehensive certificate management documentation (docs/CERTIFICATE_MANAGEMENT.md).
 - **2026-01-16 (Epic 23 - Application-Level Encryption at Rest)**: Implemented comprehensive file encryption with AES-256-GCM. Created encryption service (encryption.py) with authenticated encryption (AEAD), per-job key manager (key_manager.py) with DEK generation and wrapping, transparent decryption on download (modified app.py and tasks.py), Redis metadata encryption helper (redis_encryption.py), and integrated master key management into secrets module with auto-generation for development and required configuration for production.
 - **2026-01-16 (Epic 21 - GPU Detection & Resource Optimization)**: Completed all 13 stories implementing GPU detection, Prometheus metrics, intelligent cleanup, secrets management, container hardening, input validation, health checks, alerting, and graceful shutdown. Added conditional Docker builds (GPU/CPU), lazy model loading, Prometheus /metrics endpoint, intelligent data retention with disk monitoring, Docker Swarm secrets support, non-root containers with capability dropping, comprehensive input validators/sanitizers, /healthz and /readyz probes, Prometheus alerting rules with runbooks, and SIGTERM handlers with GPU cleanup.
 - **2026-01-16 (Epic 22 - HTTPS Support)**: Implemented Cloudflare Tunnel integration for zero-touch HTTPS. Added `cloudflare-tunnel` service to docker-compose.yml with `https` profile, created automated setup script (cloudflare/setup.sh), implemented ProxyFix middleware for secure cookies and proxy header trust, updated CSP headers for wss:// WebSocket support, created comprehensive setup documentation (docs/CLOUDFLARE_TUNNEL_SETUP.md).
@@ -119,13 +120,13 @@ docker-compose logs -f worker
 - **✅ Per-job encryption**: Unique DEKs per job wrapped with master key (Epic 23)
 - **✅ Transparent decryption**: Files automatically decrypted on download (Epic 23)
 - **✅ Master key management**: Integrated into secrets module with auto-generation for dev (Epic 23)
-- **Redis exposed**: Port 6379 exposed on 0.0.0.0 (security vulnerability, but mitigated by container network)
-- **No encryption in transit**: All Redis connections unencrypted, Celery messages in plaintext
-- **No certificate infrastructure for Redis**: No internal PKI, no certificate management
+- **✅ Redis TLS**: All inter-service communication encrypted with TLS 1.2+ (Epic 24)
+- **✅ Celery message signing**: Task messages signed with HMAC-SHA256 (Epic 24)
+- **✅ Redis port secured**: No external port exposure, internal network only (Epic 24)
+- **✅ Certificate management**: Automated generation, renewal, and service reload (Epic 24)
 
 **Remaining Work:**
-- **Epic 24**: Redis TLS with CA certificates
-- **Epic 25**: Certbot integration for certificate management
+- **Epic 25**: Certbot integration for automated Let's Encrypt certificates (optional, for production)
 
 ---
 
@@ -1663,11 +1664,17 @@ Feature: Cloudflare Tunnel Service Deployment
 ---
 
 ## Epic 24: Encryption in Transit with Redis TLS
-**Status**: 🔵 Planned | **Priority**: P1 - High | **Effort**: 2-3 days
+**Status**: ✅ Completed (2026-01-16) | **Priority**: P1 - High | **Effort**: 2-3 days
 
 **Originally Planned**: 2026-01-14, Session: velvet-dreaming-micali | **Embedded**: 2026-01-15
 
 **Goal**: Secure all inter-service communication with Redis TLS and remove port exposure.
+
+**Implementation Summary**:
+- ✅ Story 24.1: Redis TLS configuration with CA certificates (generate-redis-certs.sh, docker-compose.yml, app.py, tasks.py)
+- ✅ Story 24.2: Celery task message encryption with message signing (secrets.py, app.py, tasks.py)
+- ✅ Story 24.3: Removed Redis port exposure, added Redis Commander debug profile
+- ✅ Story 24.4: Certificate management scripts (renew-redis-certs.sh, reload-services.sh, docs/CERTIFICATE_MANAGEMENT.md)
 
 #### Story 24.1: Redis TLS Configuration with CA Certificates
 **As a** security engineer

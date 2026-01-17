@@ -154,12 +154,22 @@ def load_all_secrets():
     if secrets['MASTER_ENCRYPTION_KEY']:
         os.environ['MASTER_ENCRYPTION_KEY'] = secrets['MASTER_ENCRYPTION_KEY']
 
-    # Future: Celery signing key (Epic 24)
-    # secrets['CELERY_SIGNING_KEY'] = load_secret(
-    #     'celery_signing_key',
-    #     required=False,
-    #     reject_default_in_prod=True
-    # )
+    # Epic 24.2: Celery signing key for task message authentication
+    celery_key_default = None
+    if not is_production:
+        # Development: Generate ephemeral signing key
+        celery_key_default = secrets.token_hex(32)
+        logging.warning(
+            "Generated ephemeral Celery signing key for development. "
+            "Set CELERY_SIGNING_KEY environment variable for persistent signing."
+        )
+
+    secrets['CELERY_SIGNING_KEY'] = load_secret(
+        'celery_signing_key',
+        default=celery_key_default,
+        required=is_production,  # Required in production
+        reject_default_in_prod=True
+    )
 
     return secrets
 

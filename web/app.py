@@ -139,12 +139,36 @@ def add_security_headers(response):
 def ratelimit_handler(e):
     return jsonify({"error": "Rate limit exceeded", "message": str(e.description)}), 429
 
-# Metadata Redis client (DB 1) with connection pooling optimization
-redis_client = redis.Redis.from_url(
-    os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1'),
-    max_connections=50,
-    decode_responses=True
-)
+# Epic 24.1: Redis TLS Configuration
+# Metadata Redis client (DB 1) with connection pooling optimization and TLS support
+redis_url = os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1')
+
+# Configure TLS parameters if using rediss://
+redis_kwargs = {
+    'max_connections': 50,
+    'decode_responses': True
+}
+
+if redis_url.startswith('rediss://'):
+    # Enable TLS
+    redis_kwargs['ssl'] = True
+    redis_kwargs['ssl_cert_reqs'] = 'required'
+
+    # Certificate paths from environment
+    ca_certs = os.environ.get('REDIS_TLS_CA_CERTS')
+    certfile = os.environ.get('REDIS_TLS_CERTFILE')
+    keyfile = os.environ.get('REDIS_TLS_KEYFILE')
+
+    if ca_certs:
+        redis_kwargs['ssl_ca_certs'] = ca_certs
+    if certfile:
+        redis_kwargs['ssl_certfile'] = certfile
+    if keyfile:
+        redis_kwargs['ssl_keyfile'] = keyfile
+
+    logging.info(f"Redis TLS enabled with CA: {ca_certs}")
+
+redis_client = redis.Redis.from_url(redis_url, **redis_kwargs)
 
 # Celery configuration
 celery = Celery(
@@ -156,6 +180,20 @@ celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
     'tasks.convert_with_marker': {'queue': 'default'},
 }
+
+# Epic 24.2: Celery Task Message Encryption
+# Enable message signing for task integrity and authentication
+celery_signing_key = app_secrets.get('CELERY_SIGNING_KEY')
+if celery_signing_key:
+    celery.conf.task_serializer = 'auth'
+    celery.conf.result_serializer = 'json'
+    celery.conf.accept_content = ['auth', 'application/json']
+    celery.conf.security_key = celery_signing_key
+    celery.conf.security_certificate = None  # Using symmetric key, not certificates
+    celery.conf.security_digest = 'sha256'
+    logging.info("Celery message signing enabled (task_serializer=auth)")
+else:
+    logging.warning("Celery signing key not set - messages not authenticated")
 
 # Epic 23.3: Initialize encryption components (lazily)
 _encryption_service = None
