@@ -1053,18 +1053,18 @@ def test_amazon_session(job_id, encrypted_session_file_path):
         )
 
         if mcp_response.get('success'):
-            content = mcp_response.get('content', '')
-            # CodeQL false positive: This is a check of the page's HTML content,
-            # not a URL sanitization check. We are looking for keywords that
-            # indicate a redirect to a login or store page.
-            if "signin.amazon.com" in content or "kindle.amazon.com/store" in content:
-                logging.warning(f"Amazon session for job {job_id} is invalid: redirected to login/store.")
+            final_url = mcp_response.get('url', '')
+            parsed_url = urlparse(final_url)
+            hostname = parsed_url.hostname
+
+            if hostname and (hostname.endswith('signin.amazon.com') or hostname.endswith('kindle.amazon.com')):
+                logging.warning(f"Amazon session for job {job_id} is invalid: redirected to {hostname}.")
                 update_job_metadata(job_id, {
                     'amazon_session_status': 'INVALID',
                     'amazon_session_completed_at': str(time.time()),
-                    'amazon_session_error': 'Redirected to login/store page'
+                    'amazon_session_error': f'Redirected to {hostname}'
                 })
-                return {"status": "invalid", "message": "Session invalid: redirected to login."}
+                return {"status": "invalid", "message": f"Session invalid: redirected to {hostname}."}
             else:
                 logging.info(f"Amazon session for job {job_id} is VALID: successfully accessed {target_url}.")
                 update_job_metadata(job_id, {

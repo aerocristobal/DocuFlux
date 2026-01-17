@@ -688,7 +688,7 @@ def readyz():
         logging.error(f"Readiness check failed: {e}")
         return jsonify({
             'status': 'not_ready',
-            'error': str(e),
+            'error': 'Could not connect to Redis',
             'timestamp': time.time()
         }), 503
 
