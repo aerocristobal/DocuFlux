@@ -19,5 +19,5 @@ marker-pdf[full]==1.10.1
 # torchvision with CUDA support is included via marker-pdf[full]
 
 llama-cpp-python[cuda]
-Pillow==10.2.0
+Pillow==10.3.0
 
