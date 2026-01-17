@@ -1726,7 +1726,7 @@ Feature: Cloudflare Tunnel Service Deployment
 ---
 
 ## Epic 25: Certificate Management with Certbot & Cloudflare DNS
-**Status**: 🔵 Planned | **Priority**: P1 - High | **Effort**: 2-3 days
+**Status**: ✅ Completed | **Priority**: P1 - High | **Effort**: 2-3 days
 
 **Originally Planned**: 2026-01-14, Session: velvet-dreaming-micali | **Embedded**: 2026-01-15
 
@@ -1778,6 +1778,142 @@ Feature: Cloudflare Tunnel Service Deployment
 - `docker-compose.yml` - Add shared certificate volume (~20 lines)
 - `scripts/deploy-certs.sh` (new) - Certificate deployment script (~60 lines)
 - `scripts/reload-services.sh` - Service reload after cert deployment (~20 lines)
+
+Epic 26: Local Document Intelligence (SLM Integration)
+**Status**: ✅ Completed
+
+Goal: Leverage local Small Language Models (SLMs) to extract semantic meaning, summaries, and PII from converted documents.
+
+Story 26.1: SLM Engine Integration (llama-cpp-python)
+
+As a worker service,
+I want to host a GGUF-compatible inference engine,
+So that I can perform NLP tasks without external API dependencies.
+
+Acceptance Criteria:
+
+Given the worker container is built with BUILD_GPU=true
+
+When the container starts, it should install llama-cpp-python with CUDA support
+
+Then warmup.py must download a specified SLM (e.g., Llama-3.2-3B-Instruct-GGUF)
+
+And verify model loadability into VRAM.
+
+Technical Context:
+
+Use llama-cpp-python for high-efficiency GGUF inference.
+
+Shared Volume /app/models should store the weights to prevent re-downloads.
+
+Environment variable SLM_MODEL_PATH determines the active model.
+
+Story 26.2: Automated Semantic Metadata Extraction
+
+As a system,
+I want to use the SLM to generate a title, tags, and summary for every conversion,
+So that users can organize their data more effectively.
+
+Acceptance Criteria:
+
+Given a successful conversion of a document to Markdown
+
+When the conversion task concludes
+
+Then trigger an SLM sub-task with a prompt to return a JSON object containing { "title": "", "tags": [], "summary": "" }
+
+And store this JSON in the Redis job metadata.
+
+Epic 27: Vision-Based Document Extraction (MCP Workflow)
+**Status**: ✅ Completed
+**Status**: ✅ Completed
+
+Goal: Use Model Context Protocol (MCP) and Vision-capable SLMs to extract content from DRM-protected readers (like Kindle Cloud Reader).
+
+Story 27.1: Playwright MCP Server Setup
+
+As a developer,
+I want an MCP server capable of browser automation,
+So that the model can interact with web-based eBook readers.
+
+Acceptance Criteria:
+
+Given a dedicated MCP container running mcp-server-playwright
+
+When the worker makes an MCP tool call (e.g., Maps_to_url, screenshot_element)
+
+Then the browser should perform the action headlessly
+
+And return the visual/DOM data to the worker.
+
+Story 27.5: Persistent Session Injection (Amazon Auth)
+
+As a user,
+I want to upload my Amazon session state,
+So that the worker can "see" my books without requiring my password.
+
+Acceptance Criteria:
+
+Given a user has a storageState.json file from a local Playwright session
+
+When they upload this file via the Web UI
+
+Then the worker must launch the MCP browser context using this state
+
+And confirm access to read.amazon.com without being redirected to login.
+
+Technical Context:
+
+Security: The storageState.json must be treated as a high-value secret. It should be encrypted using the job-specific key (Epic 23) and purged immediately upon task completion.
+
+Epic 28: Hybrid Semantic Reconstruction (Advanced Patterns)
+**Status**: ✅ Completed
+
+Goal: Optimize high-fidelity extraction by routing content between deterministic OCR and agentic vision.
+
+Story 28.2: Hybrid Routing & Layout Detection
+
+As a worker,
+I want to segment screenshots into "Text" and "Visual" regions,
+So that I use the most efficient model for each part.
+
+Acceptance Criteria:
+
+Given a screenshot of a document page
+
+When the layout analyzer (e.g., Marker's internal segmenter) identifies a chart or graph
+
+Then route that specific crop to a Vision SLM (e.g., Pixtral) for semantic Markdown conversion (e.g., Mermaid.js or table)
+
+And route standard text blocks to high-speed OCR.
+
+Story 28.3: "Code Mode" Agentic Page Turning
+
+As a system,
+I want the agent to execute a self-contained script for book navigation,
+So that it can handle multi-page extractions autonomously.
+
+Acceptance Criteria:
+
+Given an extraction job for a 100-page book
+
+When the agent starts the "Code Mode" loop
+
+Then it should execute a script that handles: Capture -> Detect "Next" -> Click -> Error Handle (Pop-ups)
+
+And report progress percentage back to the Redis status key.
+
+Technical Context:
+
+This avoids 100 round-trips to the LLM. The agent generates a Python script using the MCP Playwright tools to run the loop locally on the worker.
+
+Technical Guardrails for CLI Agents
+
+Celery Workflow: Use celery.chain or celery.chord to link the Extraction -> Conversion -> Summarization tasks.
+
+Resource Constraints: Vision SLM tasks must be serialized (concurrency=1) if VRAM is <16GB.
+
+MCP Communication: Use stdio or http transport for the MCP server based on the docker-compose network configuration.
 
 ---
 

@@ -13,3 +13,7 @@ prometheus-client==0.19.0
 # Note: Marker is NOT installed in CPU-only mode
 # The worker will detect GPU unavailable at runtime and skip Marker tasks
 # This significantly reduces image size from ~15GB to <3GB
+
+llama-cpp-python
+Pillow==10.2.0
+

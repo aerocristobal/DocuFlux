@@ -6,6 +6,7 @@ import logging
 import sys
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from llama_cpp import Llama
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,6 +15,9 @@ MODELS_READY_FILE = "/tmp/models_ready"
 STATUS_KEY = "service:marker:status"
 ETA_KEY = "service:marker:eta"
 VRAM_KEY = "service:marker:gpu_vram_free"
+
+slm_model = None
+
 
 # Connect to Redis
 redis_url = os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1')
@@ -114,34 +118,55 @@ def check_gpu_availability():
         return gpu_info
 
 def warmup():
-    logging.info("Starting Marker warmup...")
+    global slm_model
+    logging.info("Starting Marker and SLM warmup...")
     r.set(STATUS_KEY, "initializing")
     r.set(ETA_KEY, "Estimating...")
 
-    # Detect GPU availability
     gpu_info = check_gpu_availability()
 
+    if gpu_info["status"] == "available" and "vram_total" in gpu_info:
+        inference_ram = min(16, int(gpu_info["vram_total"]))
+        n_gpu_layers = -1
+    else:
+        inference_ram = 4
+        n_gpu_layers = 0
+
+    os.environ["INFERENCE_RAM"] = str(inference_ram)
+    logging.info(f"Set INFERENCE_RAM={inference_ram} (GPU status: {gpu_info['status']})")
+    
+    slm_status = "unavailable"
+    slm_model_path_env = os.environ.get("SLM_MODEL_PATH")
+    default_slm_model_path_dir = "/app/models/TinyLlama-1.1B-Chat-v1.0-GGUF"
+    default_slm_model_path_file = os.path.join(default_slm_model_path_dir, "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf")
+
+    model_to_load = None
+    if slm_model_path_env and os.path.exists(slm_model_path_env):
+        model_to_load = slm_model_path_env
+    elif os.path.exists(default_slm_model_path_file):
+        model_to_load = default_slm_model_path_file
+    
+    if model_to_load:
+        logging.info(f"Attempting to load SLM model from: {model_to_load} with n_gpu_layers: {n_gpu_layers}")
+        try:
+            slm_model = Llama(model_path=model_to_load, n_gpu_layers=n_gpu_layers, verbose=False)
+            logging.info("SLM model loaded successfully.")
+            slm_status = "ready"
+        except Exception as e:
+            logging.error(f"Failed to load SLM model: {e}")
+            slm_status = "error"
+            slm_model = None
+    else:
+        logging.warning(f"SLM model not found at {default_slm_model_path_file} or via SLM_MODEL_PATH. SLM features will be unavailable.")
+        slm_status = "not_found"
+
+    r.set("slm:status", slm_status)
+
     try:
-        # Set env var for marker based on detected GPU
-        if gpu_info["status"] == "available" and "vram_total" in gpu_info:
-            # Use detected VRAM, cap at 16GB for safety
-            inference_ram = min(16, int(gpu_info["vram_total"]))
-        else:
-            # CPU mode or detection failed, use minimal RAM
-            inference_ram = 4
-
-        os.environ["INFERENCE_RAM"] = str(inference_ram)
-        logging.info(f"Set INFERENCE_RAM={inference_ram} (GPU status: {gpu_info['status']})")
-
-        # Epic 21.4: Lazy model loading
-        # Only verify models exist, don't load them into memory yet
-        # Models will be loaded on-demand in tasks.py when first Marker task runs
         if gpu_info["status"] == "available":
             logging.info("Verifying Marker models are cached (lazy loading mode)...")
-            import os as os_check
-            # Models are pre-cached during Docker build, just verify cache dir exists
-            cache_dir = os_check.path.expanduser("~/.cache/huggingface")
-            if os_check.path.exists(cache_dir):
+            cache_dir = os.path.expanduser("~/.cache/huggingface")
+            if os.path.exists(cache_dir):
                 logging.info(f"Marker model cache verified at {cache_dir}")
                 logging.info("Models will be loaded on-demand when first PDF conversion is requested")
             else:
@@ -149,18 +174,20 @@ def warmup():
         else:
             logging.info("GPU unavailable - Marker tasks will be disabled")
         
-        # Signal ready
         with open(MODELS_READY_FILE, 'w') as f:
             f.write("ready")
             
         r.set(STATUS_KEY, "ready")
         r.set(ETA_KEY, "0s")
-        r.set(VRAM_KEY, "Checking...") # Placeholder
+        r.set(VRAM_KEY, "Checking...")
         
     except Exception as e:
-        logging.error(f"Warmup failed: {e}")
+        logging.error(f"Marker Warmup failed: {e}")
         r.set(STATUS_KEY, "error")
-        # Do not touch ready file
+
+def get_slm_model():
+    """Returns the globally loaded SLM model instance."""
+    return slm_model
 
 if __name__ == "__main__":
     # Start health server in background thread

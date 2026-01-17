@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+# Certbot and TLS certificate files
+cloudflare/credentials.ini
+certs/*.pem
+certs/live/
+certs/archive/

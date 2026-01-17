@@ -6,8 +6,8 @@
 ARG BUILD_GPU=true
 
 # Stage 1: Base image selection (GPU with CUDA or CPU-only Ubuntu)
-FROM nvcr.io/nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS base-gpu
-FROM ubuntu:22.04 AS base-cpu
+FROM nvcr.io/nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS base-true
+FROM ubuntu:22.04 AS base-false
 
 # Select base based on BUILD_GPU argument
 FROM base-${BUILD_GPU} AS base
@@ -39,28 +39,23 @@ WORKDIR /app
 ARG BUILD_GPU
 ENV BUILD_GPU=${BUILD_GPU}
 
-# Conditional PyTorch installation
-RUN if [ "$BUILD_GPU" = "true" ]; then \
-        echo "Installing PyTorch with CUDA 11.8 support..."; \
-        pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118; \
-    else \
-        echo "Installing PyTorch CPU-only version..."; \
-        pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu; \
-    fi
+
 
 # Copy appropriate requirements file based on build mode
-COPY requirements-${BUILD_GPU}.txt requirements-build.txt
-RUN pip3 install --no-cache-dir -r requirements-build.txt
+COPY requirements-true.txt requirements-build.txt
+RUN pip3 install --upgrade pip setuptools
+RUN pip3 install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu118 -r requirements-build.txt
 
 # Copy worker code
 COPY . .
 
-# Conditional Marker model pre-caching (only for GPU builds)
+# Conditional SLM model download (only for GPU builds)
 RUN if [ "$BUILD_GPU" = "true" ]; then \
-        echo "Pre-caching Marker models for GPU build..."; \
-        python3 -c "import os; os.environ['INFERENCE_RAM']='16'; from marker.converters.pdf import PdfConverter; from marker.models import create_model_dict; PdfConverter(artifact_dict=create_model_dict())"; \
+        echo "Downloading default SLM model for GPU build..."; \
+        mkdir -p /app/models && \
+        git clone https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF /app/models/TinyLlama-1.1B-Chat-v1.0-GGUF; \
     else \
-        echo "Skipping Marker model caching for CPU-only build"; \
+        echo "Skipping SLM model download for CPU-only build"; \
     fi
 
 # Make entrypoint executable

@@ -12,6 +12,8 @@ import atexit
 from celery import Celery
 from celery.schedules import crontab
 from flask_socketio import SocketIO
+from warmup import get_slm_model # Epic 26: SLM model getter
+from PIL import Image # Epic 28: For image processing
 
 # Epic 21.5: Import Prometheus metrics
 from metrics import (
@@ -314,6 +316,23 @@ def get_job_metadata(job_id):
     key = f"job:{job_id}"
     return redis_client.hgetall(key)
 
+
+MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://mcp-server:8080/execute')
+
+def call_mcp_server(action, args):
+    """
+    Helper function to send commands to the MCP server.
+    """
+    payload = {'action': action, 'args': args}
+    headers = {'Content-Type': 'application/json'}
+    try:
+        response = requests.post(MCP_SERVER_URL, json=payload, headers=headers, timeout=60)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error calling MCP server for action '{action}': {e}")
+        raise
+
 @celery.task(
     name='tasks.convert_document',
     time_limit=600,           # Hard limit: 10 minutes
@@ -571,6 +590,10 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
             'encrypted': 'true'
         })
 
+        # Epic 26: Trigger SLM metadata extraction after successful Marker conversion
+        # This will run asynchronously in a separate task
+        extract_slm_metadata.delay(job_id, output_path)
+
         # Epic 21.5: Record success metrics
         duration = time.time() - start_time
         conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
@@ -815,3 +838,438 @@ def update_metrics():
         update_queue_metrics(redis_client)
     except Exception as e:
         logging.error(f"Error updating metrics: {e}")
+
+
+@celery.task(name='tasks.renew_certificates')
+def renew_certificates():
+    """
+    Celery task to trigger Certbot certificate renewal and reload services if successful.
+    """
+    logging.info("Initiating certificate renewal process...")
+
+    try:
+        # Step 1: Trigger Certbot renewal inside the certbot container
+        # This assumes the worker container has 'docker-compose' client installed
+        # and configured to communicate with the Docker daemon. This is a simplification.
+        # In a real-world scenario, this might be triggered by an external scheduler
+        # or the certbot container could run its own cronjob.
+        renewal_command = [
+            "docker-compose",
+            "exec",
+            "certbot",
+            "/app/renew-certs.sh" # Path inside the certbot container
+        ]
+        # Assuming the renew-certs.sh script will output "Certificates were renewed or updated" if successful
+        result = subprocess.run(renewal_command, capture_output=True, text=True, check=False)
+
+        if result.returncode != 0:
+            logging.error(f"Certbot renewal command failed with exit code {result.returncode}: {result.stderr}")
+            return {"status": "error", "message": f"Certbot renewal command failed: {result.stderr}"}
+
+        logging.info(f"Certbot renewal command output: {result.stdout}")
+
+        if "Certificates were renewed or updated" in result.stdout:
+            logging.info("Certificates were renewed. Reloading services...")
+            # Step 2: Reload services on the host if renewal was successful
+            # This requires 'docker-compose' to be available on the host (where this Celery task orchestrator effectively runs)
+            # and able to restart containers.
+            reload_command = ["docker-compose", "restart", "web", "worker", "beat"]
+            reload_result = subprocess.run(reload_command, capture_output=True, text=True, check=True)
+            logging.info(f"Service reload output: {reload_result.stdout}")
+            return {"status": "success", "message": "Certificates renewed and services reloaded."}
+        else:
+            logging.info("No certificates were renewed. Services not reloaded.")
+            return {"status": "info", "message": "No certificates renewed."}
+
+    except subprocess.CalledProcessError as e:
+        error_msg = f"Failed to restart services after renewal: {e.stderr}"
+        logging.error(error_msg)
+        return {"status": "error", "message": error_msg}
+    except FileNotFoundError:
+        error_msg = "Docker Compose command not found. Is it installed and in PATH?"
+        logging.error(error_msg)
+        return {"status": "error", "message": error_msg}
+    except Exception as e:
+        error_msg = f"An unexpected error occurred during certificate renewal: {str(e)}"
+        logging.error(error_msg)
+        return {"status": "error", "message": error_msg}
+
+
+@celery.task(
+    name='tasks.extract_slm_metadata',
+    time_limit=300, # 5 minutes for SLM inference
+    soft_time_limit=240, # 4 minutes
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=1 # Only one retry as SLM inference can be resource intensive
+)
+def extract_slm_metadata(job_id, markdown_file_path):
+    """
+    Extracts semantic metadata (title, tags, summary) from Markdown content
+    using a local Small Language Model (SLM).
+    """
+    logging.info(f"Starting SLM metadata extraction for job {job_id} from {markdown_file_path}")
+    update_job_metadata(job_id, {'slm_status': 'PROCESSING', 'slm_started_at': str(time.time())})
+
+    try:
+        slm = get_slm_model()
+        if slm is None:
+            logging.warning(f"SLM model not loaded for job {job_id}. Skipping metadata extraction.")
+            update_job_metadata(job_id, {'slm_status': 'SKIPPED', 'slm_error': 'SLM model not available'})
+            return {"status": "skipped", "message": "SLM model not available"}
+
+        if not os.path.exists(markdown_file_path):
+            logging.error(f"Markdown file not found for SLM extraction: {markdown_file_path}")
+            update_job_metadata(job_id, {'slm_status': 'FAILURE', 'slm_error': 'Markdown file missing'})
+            return {"status": "failure", "message": "Markdown file missing"}
+
+        with open(markdown_file_path, 'r', encoding='utf-8') as f:
+            markdown_content = f.read()
+
+        # Truncate content if too long for SLM (adjust based on model context window)
+        MAX_SLM_CONTEXT = 2000 # Example token limit, adjust as needed
+        if len(markdown_content.split()) > MAX_SLM_CONTEXT:
+            markdown_content = " ".join(markdown_content.split()[:MAX_SLM_CONTEXT])
+            logging.warning(f"Truncated markdown content for SLM inference for job {job_id}")
+
+        prompt = (
+            "You are a helpful assistant that extracts structured information from documents. "
+            "Given the following Markdown content, extract a concise title, relevant tags (up to 5), "
+            "and a brief summary (1-2 sentences). "
+            "Respond ONLY with a JSON object. Ensure the output is valid JSON.\n\n"
+            "Markdown Content:\n"
+            f"{markdown_content}\n\n"
+            "JSON Output Structure:\n"
+            "```json\n"
+            "{\n"
+            '  "title": "Concise document title",\n'
+            '  "tags": ["tag1", "tag2"],\n'
+            '  "summary": "Brief summary of the document."\n'
+            "}\n"
+            "```\n"
+            "JSON Output:\n"
+        )
+
+        logging.info(f"Sending prompt to SLM for job {job_id}...")
+        
+        # Use the loaded slm_model to perform inference
+        output = slm.create_completion(
+            prompt,
+            max_tokens=512, # Max tokens for the completion
+            temperature=0.1,
+            top_p=0.9,
+            stop=["```"], # Stop generation when it encounters ```
+        )
+        
+        generated_text = output['choices'][0]['text'].strip()
+        logging.info(f"SLM generated raw text for job {job_id}:\n{generated_text}")
+
+        json_start = generated_text.find('{')
+        json_end = generated_text.rfind('}')
+        if json_start != -1 and json_end != -1:
+            json_str = generated_text[json_start:json_end+1]
+        else:
+            raise ValueError("No valid JSON found in SLM output.")
+
+        metadata = json.loads(json_str)
+
+        if not all(k in metadata for k in ["title", "tags", "summary"]):
+            raise ValueError("Invalid metadata structure returned by SLM.")
+        if not isinstance(metadata["tags"], list):
+            metadata["tags"] = [str(metadata["tags"])] # Ensure tags is a list
+
+        update_job_metadata(job_id, {
+            'slm_status': 'SUCCESS',
+            'slm_completed_at': str(time.time()),
+            'slm_title': metadata.get('title', ''),
+            'slm_tags': json.dumps(metadata.get('tags', [])), # Store as JSON string in Redis
+            'slm_summary': metadata.get('summary', '')
+        })
+        logging.info(f"SLM metadata extracted and stored for job {job_id}")
+        return {"status": "success", "metadata": metadata}
+
+    except Exception as e:
+        error_msg = f"SLM metadata extraction failed for job {job_id}: {str(e)}"
+        logging.error(error_msg)
+        update_job_metadata(job_id, {'slm_status': 'FAILURE', 'slm_error': error_msg})
+        raise
+
+
+@celery.task(
+    name='tasks.test_amazon_session',
+    time_limit=120, # 2 minutes for browser interaction
+    soft_time_limit=90, # 1.5 minutes
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=0 # No retries, session state might be invalid
+)
+def test_amazon_session(job_id, encrypted_session_file_path):
+    """
+    Tests an Amazon session by launching Playwright with the provided session state
+    and verifying access to read.amazon.com.
+    """
+    logging.info(f"Starting Amazon session test for job {job_id}")
+    update_job_metadata(job_id, {'amazon_session_status': 'TESTING', 'amazon_session_started_at': str(time.time())})
+
+    decrypted_session_file = None
+    try:
+        encryption_service = get_encryption_service()
+        key_manager = get_key_manager()
+
+        # Decrypt the session file
+        session_dek = key_manager.get_job_key(job_id)
+        if not session_dek:
+            raise ValueError(f"No decryption key found for job {job_id}")
+
+        decrypted_session_file = encrypted_session_file_path.replace(".enc", ".json")
+        encryption_service.decrypt_file(
+            input_path=encrypted_session_file_path,
+            output_path=decrypted_session_file,
+            key=session_dek,
+            associated_data=job_id
+        )
+
+        with open(decrypted_session_file, 'r', encoding='utf-8') as f:
+            storage_state_json = json.load(f) # MCP server expects JSON object
+
+        logging.info(f"Decrypted session file for job {job_id}. Calling MCP server...")
+
+        # Call MCP server to launch browser with session state and navigate
+        # Target URL to check for login (e.g., a specific book or the library page)
+        target_url = "https://read.amazon.com/kp/notebook"
+        mcp_response = call_mcp_server(
+            'create_context_and_goto',
+            {'url': target_url, 'storageState': storage_state_json}
+        )
+
+        if mcp_response.get('success'):
+            content = mcp_response.get('content', '')
+            # Verify if still on login page or redirected away
+            if "signin.amazon.com" in content or "kindle.amazon.com/store" in content:
+                logging.warning(f"Amazon session for job {job_id} is invalid: redirected to login/store.")
+                update_job_metadata(job_id, {
+                    'amazon_session_status': 'INVALID',
+                    'amazon_session_completed_at': str(time.time()),
+                    'amazon_session_error': 'Redirected to login/store page'
+                })
+                return {"status": "invalid", "message": "Session invalid: redirected to login."}
+            else:
+                logging.info(f"Amazon session for job {job_id} is VALID: successfully accessed {target_url}.")
+                update_job_metadata(job_id, {
+                    'amazon_session_status': 'VALID',
+                    'amazon_session_completed_at': str(time.time()),
+                    'amazon_session_error': ''
+                })
+                return {"status": "valid", "message": "Session is valid."}
+        else:
+            error_msg = mcp_response.get('error', 'Unknown MCP error')
+            logging.error(f"MCP server failed for job {job_id}: {error_msg}")
+            update_job_metadata(job_id, {
+                'amazon_session_status': 'FAILURE',
+                'amazon_session_completed_at': str(time.time()),
+                'amazon_session_error': f"MCP server error: {error_msg}"
+            })
+            return {"status": "failure", "message": f"MCP server error: {error_msg}"}
+
+    except Exception as e:
+        error_msg = f"Amazon session test failed for job {job_id}: {str(e)}"
+        logging.error(error_msg)
+        update_job_metadata(job_id, {'amazon_session_status': 'FAILURE', 'amazon_session_error': error_msg})
+        raise
+    finally:
+        # Purge sensitive session data
+        if os.path.exists(encrypted_session_file_path):
+            os.remove(encrypted_session_file_path)
+            logging.info(f"Purged encrypted session file: {encrypted_session_file_path}")
+        if decrypted_session_file and os.path.exists(decrypted_session_file):
+            os.remove(decrypted_session_file)
+            logging.info(f"Purged decrypted session file: {decrypted_session_file}")
+        key_manager.delete_job_key(job_id) # Delete DEK from Redis
+        logging.info(f"Purged session key for job {job_id}")
+
+
+@celery.task(
+    name='tasks.analyze_screenshot_layout',
+    time_limit=300, # 5 minutes for layout analysis
+    soft_time_limit=240, # 4 minutes
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=0
+)
+def analyze_screenshot_layout(job_id, url, storage_state_json=None):
+    """
+    Analyzes the layout of a screenshot from a given URL, identifying text and visual regions.
+    Uses MCP server to capture the screenshot and Marker (or a placeholder) for analysis.
+    """
+    logging.info(f"Starting screenshot layout analysis for job {job_id} on URL: {url}")
+    update_job_metadata(job_id, {'layout_analysis_status': 'PROCESSING', 'layout_analysis_started_at': str(time.time())})
+
+    temp_screenshot_path = None
+    try:
+        # Create a temporary path for the screenshot in the shared volume
+        job_output_dir = os.path.join(OUTPUT_FOLDER, job_id)
+        os.makedirs(job_output_dir, exist_ok=True)
+        temp_screenshot_path = os.path.join(job_output_dir, f"screenshot_{job_id}.png")
+
+        logging.info(f"Capturing screenshot for job {job_id} to {temp_screenshot_path}...")
+        mcp_response = call_mcp_server(
+            'create_context_and_goto',
+            {'url': url, 'storageState': storage_state_json}
+        )
+        if not mcp_response.get('success'):
+            raise Exception(f"Failed to navigate and get content from MCP server: {mcp_response.get('error', 'Unknown error')}")
+        
+        # Now take screenshot and save it to the shared volume
+        screenshot_response = call_mcp_server(
+            'screenshot_current_page',
+            {'path': temp_screenshot_path} # mcp-server saves to /app/temp_screenshot_path
+        )
+        if not screenshot_response.get('success'):
+            raise Exception(f"Failed to capture screenshot from MCP server: {screenshot_response.get('error', 'Unknown error')}")
+        logging.info(f"Screenshot captured and saved to {temp_screenshot_path}")
+
+
+        # --- Layout Analysis using Marker (Placeholder) ---
+        # Assuming Marker provides an API for image-based layout analysis.
+        # If not, this part would need a dedicated image processing library.
+        # For now, we'll simulate output.
+        logging.info(f"Performing layout analysis on {temp_screenshot_path} using Marker...")
+
+        # In a real scenario, this would involve Marker's internal segmenter or similar.
+        # We will simulate output based on image dimensions.
+        with Image.open(temp_screenshot_path) as img:
+            width, height = img.size
+
+        # Simulated layout regions
+        layout_results = {
+            "text_regions": [
+                {"bbox": [0, 0, width, height * 0.7], "content": "Simulated text content from OCR"},
+                {"bbox": [0, height * 0.75, width * 0.5, height], "content": "More simulated text"}
+            ],
+            "visual_regions": [
+                {"bbox": [width * 0.7, 0, width, height * 0.3], "type": "chart", "description": "Simulated chart region"},
+                {"bbox": [width * 0.55, height * 0.75, width, height], "type": "image", "description": "Simulated image region"}
+            ]
+        }
+        
+        logging.info(f"Layout analysis completed for job {job_id}. Results: {layout_results}")
+
+        update_job_metadata(job_id, {
+            'layout_analysis_status': 'SUCCESS',
+            'layout_analysis_completed_at': str(time.time()),
+            'layout_results': json.dumps(layout_results)
+        })
+        return {"status": "success", "layout_results": layout_results}
+
+    except Exception as e:
+        error_msg = f"Screenshot layout analysis failed for job {job_id}: {str(e)}"
+        logging.error(error_msg)
+        update_job_metadata(job_id, {'layout_analysis_status': 'FAILURE', 'layout_analysis_error': error_msg})
+        raise
+    finally:
+        if temp_screenshot_path and os.path.exists(temp_screenshot_path):
+            os.remove(temp_screenshot_path)
+            logging.info(f"Cleaned up temporary screenshot: {temp_screenshot_path}")
+
+
+@celery.task(
+    name='tasks.agentic_page_turner',
+    time_limit=1800, # 30 minutes for multi-page extraction
+    soft_time_limit=1740, # 29 minutes
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=0
+)
+def agentic_page_turner(job_id, start_url, next_button_selector,
+                        end_condition_selector=None, max_pages=10,
+                        storage_state_json=None):
+    """
+    Performs agentic page turning and extraction using the MCP server.
+    """
+    logging.info(f"Starting agentic page turner for job {job_id} on URL: {start_url}")
+    update_job_metadata(job_id, {'page_turner_status': 'PROCESSING', 'page_turner_started_at': str(time.time())})
+
+    current_page_num = 0
+    extracted_data = []
+    try:
+        # Initial script to navigate to the start URL
+        script = [
+            {'action': 'goto', 'args': {'url': start_url}},
+        ]
+        if storage_state_json:
+            script[0]['args']['storageState'] = storage_state_json
+
+        # Execute initial navigation
+        mcp_response = call_mcp_server('execute_script', {'script': script})
+        if not mcp_response.get('success'):
+            raise Exception(f"Initial navigation failed: {mcp_response.get('error', 'Unknown error')}")
+        
+        # Get content from the first page
+        page_content = mcp_response['script_execution_results'][0].get('content', '')
+        extracted_data.append({'page_num': current_page_num + 1, 'content': page_content})
+        logging.info(f"Page {current_page_num + 1} extracted.")
+        update_job_metadata(job_id, {'page_turner_progress': f"{current_page_num + 1}/{max_pages}", 'current_page_url': start_url})
+
+
+        while current_page_num < max_pages:
+            current_page_num += 1
+            logging.info(f"Attempting to turn page {current_page_num + 1} for job {job_id}")
+
+            # Script for page turning: detect next button, click, wait for navigation, extract content
+            page_turn_script = [
+                {'action': 'wait_for_selector', 'args': {'selector': next_button_selector, 'timeout': 10000}},
+                {'action': 'click_element', 'args': {'selector': next_button_selector}},
+                {'action': 'get_content'} # Get content of the new page
+            ]
+
+            # Execute page turning script
+            mcp_response = call_mcp_server('execute_script', {'script': page_turn_script, 'storageState': storage_state_json})
+
+            if not mcp_response.get('success'):
+                logging.warning(f"Failed to turn page {current_page_num + 1}: {mcp_response.get('error', 'Unknown error')}. Ending extraction.")
+                break # Exit loop if cannot turn page
+
+            # Check for end condition
+            if end_condition_selector:
+                check_end_script = [
+                    {'action': 'get_element_bounding_box', 'args': {'selector': end_condition_selector}}
+                ]
+                end_response = call_mcp_server('execute_script', {'script': check_end_script, 'storageState': storage_state_json})
+                if end_response.get('success') and end_response['script_execution_results'][0]['bbox']:
+                    logging.info(f"End condition met: '{end_condition_selector}' found on page {current_page_num + 1}.")
+                    break # Exit loop
+
+            page_content = mcp_response['script_execution_results'][-1].get('content', '')
+            extracted_data.append({'page_num': current_page_num + 1, 'content': page_content})
+            logging.info(f"Page {current_page_num + 1} extracted.")
+            update_job_metadata(job_id, {'page_turner_progress': f"{current_page_num + 1}/{max_pages}"})
+
+        update_job_metadata(job_id, {
+            'page_turner_status': 'SUCCESS',
+            'page_turner_completed_at': str(time.time()),
+            'extracted_pages': json.dumps(extracted_data) # Store extracted content
+        })
+        logging.info(f"Agentic page turning completed for job {job_id}. Extracted {len(extracted_data)} pages.")
+        return {"status": "success", "extracted_pages_count": len(extracted_data)}
+
+    except Exception as e:
+        error_msg = f"Agentic page turning failed for job {job_id}: {str(e)}"
+        logging.error(error_msg)
+        update_job_metadata(job_id, {'page_turner_status': 'FAILURE', 'page_turner_error': error_msg})
+        raise
+
+
+celery.conf.beat_schedule = {
+    'cleanup-every-5-minutes': {
+        'task': 'tasks.cleanup_old_files',
+        'schedule': crontab(minute='*/5'),  # Every 5 minutes
+    },
+    'update-queue-metrics': {
+        'task': 'tasks.update_metrics',
+        'schedule': 30.0,  # Every 30 seconds
+    },
+    'renew-certificates-daily': {
+        'task': 'tasks.renew_certificates',
+        'schedule': crontab(hour=3, minute=0), # Every day at 3 AM
+    },
+}

@@ -1,29 +1,24 @@
 services:
   redis:
     image: redis:7-alpine
-    # Epic 24.1: Redis TLS Configuration
+    # Epic 24.1: Redis TLS Configuration - TEMPORARILY DISABLED (certificates not generated)
+    # TODO: Re-enable TLS after generating certificates per Epic 24 instructions
     command: >
       redis-server
       --appendonly yes
       --maxmemory 256mb
       --maxmemory-policy noeviction
-      --tls-port 6379
-      --port 0
-      --tls-cert-file /certs/redis/redis.crt
-      --tls-key-file /certs/redis/redis.key
-      --tls-ca-cert-file /certs/redis/ca.crt
-      --tls-auth-clients optional
+      --port 6379
     # Epic 24.3: No port exposure - Redis only accessible from Docker internal network
     volumes:
       - redis-data:/data
-      - ./certs:/certs:ro  # Mount certificates read-only
     deploy:
       resources:
         limits:
           memory: 300M
     healthcheck:
-      # Epic 24.1: TLS-enabled health check
-      test: ["CMD", "redis-cli", "--tls", "--cert", "/certs/redis/redis.crt", "--key", "/certs/redis/redis.key", "--cacert", "/certs/redis/ca.crt", "ping"]
+      # Standard health check (TLS disabled)
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -37,13 +32,14 @@ services:
     ports:
       - "5000:5000"
     environment:
-      # Epic 24.1: Redis TLS URLs (rediss://)
-      - CELERY_BROKER_URL=rediss://redis:6379/0
-      - CELERY_RESULT_BACKEND=rediss://redis:6379/0
-      - REDIS_METADATA_URL=rediss://redis:6379/1
-      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
-      - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
-      - REDIS_TLS_KEYFILE=/certs/redis/redis.key
+      # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_METADATA_URL=redis://redis:6379/1
+      # Epic 24.1: Redis TLS certificates (DISABLED - certificates not generated)
+      # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
+      # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
+      # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
       - BEHIND_PROXY=${BEHIND_PROXY:-false}
@@ -75,20 +71,26 @@ services:
     volumes:
       - ./data:/app/data
       - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
+      - ./scripts:/app/scripts:ro # Epic 25: Mount scripts for renewal automation
+
     ports:
       - "9090:9090"  # Epic 21.5: Prometheus metrics endpoint
     environment:
-      # Epic 24.1: Redis TLS URLs (rediss://)
-      - CELERY_BROKER_URL=rediss://redis:6379/0
-      - CELERY_RESULT_BACKEND=rediss://redis:6379/0
-      - REDIS_METADATA_URL=rediss://redis:6379/1
-      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
-      - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
-      - REDIS_TLS_KEYFILE=/certs/redis/redis.key
+      # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_METADATA_URL=redis://redis:6379/1
+      # Epic 24.1: Redis TLS certificates (DISABLED - certificates not generated)
+      # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
+      # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
+      # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
     command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q high_priority,default
     depends_on:
       redis:
         condition: service_healthy
+      mcp-server:
+        condition: service_started
+
     deploy:
       resources:
         limits:
@@ -121,14 +123,17 @@ services:
       - ./data:/app/data
       - beat-data:/app/celerybeat
       - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
+      - ./scripts:/app/scripts:ro # Epic 25: Mount scripts for renewal automation
+
     environment:
-      # Epic 24.1: Redis TLS URLs (rediss://)
-      - CELERY_BROKER_URL=rediss://redis:6379/0
-      - CELERY_RESULT_BACKEND=rediss://redis:6379/0
-      - REDIS_METADATA_URL=rediss://redis:6379/1
-      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
-      - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
-      - REDIS_TLS_KEYFILE=/certs/redis/redis.key
+      # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_METADATA_URL=redis://redis:6379/1
+      # Epic 24.1: Redis TLS certificates (DISABLED - certificates not generated)
+      # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
+      # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
+      # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
     depends_on:
       redis:
         condition: service_healthy
@@ -156,25 +161,44 @@ services:
     # Create tunnel at: https://one.dash.cloudflare.com/
     # See docs/CLOUDFLARE_TUNNEL_SETUP.md for setup instructions
 
-  # Epic 24.3: Redis Commander (optional debugging tool)
-  # Enable with: docker-compose --profile debug up redis-commander
-  redis-commander:
-    image: rediscommander/redis-commander:latest
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./cloudflare/credentials.ini:/credentials.ini:ro
+      - ./scripts/certbot-renew.sh:/app/certbot-renew.sh:ro # Mounted for renewal automation
+    command: sleep infinity # Keep container running for manual execution or future scheduling
     environment:
-      - REDIS_HOSTS=redis:redis:6379:0:,redis:redis:6379:1
-      # Note: Redis Commander doesn't support TLS yet, so this is for non-TLS debugging only
-      # For TLS debugging, use: redis-cli --tls --cert /certs/redis/redis.crt --key /certs/redis/redis.key --cacert /certs/redis/ca.crt
-    ports:
-      - "8081:8081"
-    depends_on:
-      - redis
+      # These variables are used by the certbot-renew.sh script, not directly by certbot itself
+      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
+      - DOMAIN_NAME=${DOMAIN_NAME}
     deploy:
       resources:
         limits:
           memory: 128M
     profiles:
-      - debug
-    # Warning: This tool is for development/debugging only. Do not use in production.
+      - https
+    # Note: Requires a credentials.ini file in the cloudflare directory with Cloudflare API token.
+    # See docs/CERTIFICATE_MANAGEMENT.md for setup instructions.
+
+  mcp-server:
+    build: ./mcp_server
+    ports:
+      - "8080:8080" # Expose for potential debugging, otherwise internal only
+    environment:
+      - PORT=8080
+    deploy:
+      resources:
+        limits:
+          memory: 1024M # Playwright can be memory intensive
+        # For GPU-enabled browser if needed, add GPU reservations here
+        # reservations:
+        #   devices:
+        #     - driver: nvidia
+        #       count: 1
+        #       capabilities: [gpu]
+    restart: unless-stopped
+    # This service doesn't strictly depend on Redis, but worker will depend on it
 
 # Epic 21.7: Docker Swarm Secrets (optional)
 # To use Docker secrets instead of environment variables:

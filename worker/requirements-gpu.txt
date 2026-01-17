@@ -17,3 +17,7 @@ marker-pdf[full]==1.10.1
 # Explicit GPU dependencies (marker-pdf[full] should include these, but being explicit)
 # torch with CUDA support is included via marker-pdf[full]
 # torchvision with CUDA support is included via marker-pdf[full]
+
+llama-cpp-python[cuda]
+Pillow==10.2.0
+

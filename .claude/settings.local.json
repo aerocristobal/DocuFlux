@@ -24,7 +24,16 @@
       "Bash(docker-compose rm:*)",
       "Bash(docker-compose pull:*)",
       "Bash(docker-compose build:*)",
-      "Bash(docker-compose exec:*)"
+      "Bash(docker-compose exec:*)",
+      "Bash(du:*)",
+      "Bash(grep:*)",
+      "Bash(python3:*)",
+      "Bash(chmod:*)",
+      "Bash(gh api:*)",
+      "Bash(gh auth status:*)",
+      "Bash(gh auth login:*)",
+      "Bash(tee:*)",
+      "Bash(docker-compose:*)"
     ]
   }
 }

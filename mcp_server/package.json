@@ -1,0 +1,12 @@
+{
+  "name": "mcp-server-playwright",
+  "version": "1.0.0",
+  "description": "MCP Server using Playwright for browser automation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
