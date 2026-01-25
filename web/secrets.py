@@ -13,6 +13,11 @@ import os
 import sys
 import logging
 from pathlib import Path
+import base64
+import binascii
+
+# Note: We don't import the Python stdlib 'secrets' module to avoid naming conflict
+# with this file (secrets.py). Instead, we use os.urandom() directly.
 
 
 def load_secret(name, default=None, required=False, reject_default_in_prod=True):
@@ -99,9 +104,7 @@ def generate_master_encryption_key():
     Returns:
         Base64 URL-safe encoded 256-bit key
     """
-    import secrets
-    key_bytes = secrets.token_bytes(32)  # 256 bits
-    import base64
+    key_bytes = os.urandom(32)  # 256 bits
     return base64.urlsafe_b64encode(key_bytes).decode('utf-8')
 
 
@@ -158,7 +161,7 @@ def load_all_secrets():
     celery_key_default = None
     if not is_production:
         # Development: Generate ephemeral signing key
-        celery_key_default = secrets.token_hex(32)
+        celery_key_default = binascii.hexlify(os.urandom(32)).decode('ascii')
         logging.warning(
             "Generated ephemeral Celery signing key for development. "
             "Set CELERY_SIGNING_KEY environment variable for persistent signing."

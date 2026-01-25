@@ -40,6 +40,7 @@ services:
       # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
+      - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
       - BEHIND_PROXY=${BEHIND_PROXY:-false}
@@ -84,6 +85,8 @@ services:
       # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
     command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q high_priority,default
     depends_on:
       redis:
@@ -134,6 +137,8 @@ services:
       # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
     depends_on:
       redis:
         condition: service_healthy

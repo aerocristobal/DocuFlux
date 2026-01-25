@@ -15,3 +15,7 @@ cryptography==44.0.1
 # Note: marker-pdf[full] automatically installs compatible versions of all ML dependencies
 # Do NOT pin torch/transformers/torchvision/torchaudio - let marker-pdf manage them
 marker-pdf[full]==1.10.0
+
+# Epic 26: SLM (Small Language Model) support with CUDA
+llama-cpp-python[cuda]
+Pillow==10.3.0

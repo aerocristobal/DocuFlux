@@ -10,6 +10,7 @@ import threading
 import signal
 import atexit
 from urllib.parse import urlparse
+import celery as celery_module  # Import module to get version
 from celery import Celery
 from celery.schedules import crontab
 from flask_socketio import SocketIO
@@ -101,17 +102,22 @@ celery = Celery(
 )
 
 # Epic 24.2: Celery Task Message Encryption
-# Enable message signing for task integrity and authentication
+# Epic 24.2: Celery message signing configuration
+# Note: 'auth' serializer requires celery[auth] extra and proper configuration
+# For now, using standard JSON serialization. Message authentication can be
+# implemented using Celery's built-in security features or message signing.
 celery_signing_key = worker_secrets.get('CELERY_SIGNING_KEY')
 if celery_signing_key:
-    celery.conf.task_serializer = 'auth'
+    celery.conf.task_serializer = 'json'
     celery.conf.result_serializer = 'json'
-    celery.conf.accept_content = ['auth', 'application/json']
-    celery.conf.security_key = celery_signing_key
-    celery.conf.security_certificate = None  # Using symmetric key, not certificates
-    celery.conf.security_digest = 'sha256'
-    logging.info("Celery message signing enabled (task_serializer=auth)")
+    celery.conf.accept_content = ['json', 'application/json']
+    # TODO: Implement proper message signing/authentication
+    # celery.conf.security_key = celery_signing_key
+    logging.info("Celery signing key loaded (authentication implementation pending)")
 else:
+    celery.conf.task_serializer = 'json'
+    celery.conf.result_serializer = 'json'
+    celery.conf.accept_content = ['json', 'application/json']
     logging.warning("Celery signing key not set - messages not authenticated")
 
 celery.conf.beat_schedule = {
@@ -141,7 +147,7 @@ metrics_thread.start()
 worker_info.info({
     'version': '1.0.0',
     'python_version': sys.version.split()[0],
-    'celery_version': celery.VERSION
+    'celery_version': celery_module.__version__
 })
 
 # Epic 21.12: Graceful Shutdown Handling
