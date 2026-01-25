@@ -19,16 +19,21 @@ This project implements a containerized document conversion service using a Task
 
 ## Quick Start for New Sessions
 
-**Last Updated**: 2026-01-16
+**Last Updated**: 2026-01-24
 
 ### Critical Files to Understand
 | File | Purpose | Lines |
 |------|---------|-------|
-| `web/app.py` | Flask backend - routes, security, Redis integration, ZIP logic | ~350 |
-| `worker/tasks.py` | Celery tasks - Pandoc & Marker (Python API), cleanup | ~320 |
-| `worker/warmup.py` | Model pre-caching and health check server | ~80 |
-| `web/templates/index.html` | Material Design 3 UI - SPA with Socket.IO | ~290 |
-| `docker-compose.yml` | Service orchestration (web, worker, beat, redis) | ~100 |
+| `web/app.py` | Flask backend - routes, security, Redis integration, ZIP logic | ~802 |
+| `worker/tasks.py` | Celery tasks - Pandoc & Marker (Python API), cleanup, SLM, MCP | ~1293 |
+| `worker/warmup.py` | GPU detection, SLM model loading, health checks | ~202 |
+| `web/templates/index.html` | Material Design 3 UI - SPA with Socket.IO, GPU modal | ~477 |
+| `docker-compose.yml` | Service orchestration (web, worker, beat, redis, mcp-server) | ~228 |
+| `web/encryption.py` | AES-256-GCM encryption service | ~355 |
+| `web/key_manager.py` | Per-job DEK generation and wrapping | ~389 |
+| `worker/metrics.py` | Prometheus metric definitions | ~212 |
+| `web/secrets.py` | Docker Swarm secrets and credential management | ~267 |
+| `mcp_server/server.js` | Playwright browser automation via MCP | ~130 |
 
 ### Running the Application
 ```bash
@@ -76,17 +81,24 @@ docker-compose logs -f worker
 | Core Conversion | **Working** | Pandoc conversions (17 formats) fully functional |
 | AI Conversion | **Working** | Marker Python API integration with options (OCR, LLM), GPU/CPU detection |
 | Web UI | **Working** | Material Design 3, drag-drop, real-time updates, GPU status indicator |
-| Security | **Strong** | HTTPS (Cloudflare Tunnel), secrets management, file encryption at rest (AES-256-GCM), Redis TLS with message signing, non-root containers, capability dropping, input validation, secure cookies |
-| Testing | **Partial** | pytest suite exists, but needs updates for recent Marker API changes |
+| Security | **Strong** | HTTPS (Cloudflare Tunnel), secrets management, file encryption at rest (AES-256-GCM), Redis TLS ready (disabled pending cert generation), non-root containers, capability dropping, input validation, secure cookies |
+| Testing | **Broken** | pytest suite exists but mocks subprocess for Marker instead of PdfConverter class - needs urgent update |
 | Observability | **Working** | Prometheus metrics (/metrics), health checks (/healthz, /readyz, /api/health), alerting rules; needs Grafana dashboards |
-| Deployment | **Working** | Docker Compose with GPU/CPU/HTTPS profiles, conditional builds, K8s manifests missing |
+| Deployment | **Working** | Docker Compose with GPU/CPU/HTTPS profiles, conditional builds, MCP server for browser automation, K8s manifests missing |
 | Resource Efficiency | **Working** | GPU detection, lazy model loading, intelligent cleanup, 3GB CPU image, ~15GB GPU image |
+| **SLM Integration** | **Orphaned** | Backend tasks implemented (Epic 26) but no Web UI integration - metadata extraction not exposed to users |
+| **MCP Vision** | **Partial** | MCP server deployed, Playwright integration working, but browser automation tasks incomplete and not exposed via UI |
+| **Hybrid Reconstruction** | **Non-functional** | Skeleton code exists (Epic 28) but layout detection is placeholder, no vision SLM, no hybrid routing |
 
 ### Recent Changes
-- **2026-01-16 (Epic 24 - Encryption in Transit with Redis TLS)**: Implemented Redis TLS with certificate-based encryption and Celery message signing. Created certificate generation script (generate-redis-certs.sh) with self-signed CA for development, configured Redis for TLS-only operation (rediss:// URLs), updated Redis client initialization in web/app.py and worker/tasks.py with TLS parameters, implemented Celery message signing with auth serializer and security_key, removed Redis port exposure from docker-compose.yml, added Redis Commander debug profile, created certificate management scripts (renew-redis-certs.sh, reload-services.sh) with automated expiration checking, and comprehensive certificate management documentation (docs/CERTIFICATE_MANAGEMENT.md).
+- **2026-01-24 (Build System Fix)**: Disabled TinyLlama model pre-download in Dockerfile due to build timeouts. Models now download on first use instead of at build time.
+- **2026-01-16 (Epic 26 - SLM Integration - PARTIAL)**: Implemented llama-cpp-python integration, SLM model loading in warmup.py, and extract_slm_metadata task in worker. Backend infrastructure complete but NOT integrated with Web UI - no routes to trigger SLM extraction, no display of metadata. Feature is orphaned and inaccessible to users.
+- **2026-01-16 (Epic 27 - MCP Vision - PARTIAL)**: Deployed MCP server container with Playwright, implemented browser automation tasks (test_amazon_session, analyze_screenshot_layout, agentic_page_turner). Backend infrastructure working but MCP server missing critical action handlers, no Web UI integration for session uploads or job triggering. Feature incomplete and inaccessible.
+- **2026-01-16 (Epic 28 - Hybrid Reconstruction - NON-FUNCTIONAL)**: Created skeleton tasks for layout detection and agentic page turning, but implementation is placeholder only. No vision SLM integration, no hybrid routing logic, layout detection returns hardcoded simulated data. Feature not production-ready.
+- **2026-01-16 (Epic 24 - Encryption in Transit with Redis TLS)**: Implemented Redis TLS with certificate-based encryption and Celery message signing. Created certificate generation script (generate-redis-certs.sh) with self-signed CA for development, configured Redis for TLS-only operation (rediss:// URLs), updated Redis client initialization in web/app.py and worker/tasks.py with TLS parameters, implemented Celery message signing with auth serializer and security_key, removed Redis port exposure from docker-compose.yml, added Redis Commander debug profile, created certificate management scripts (renew-redis-certs.sh, reload-services.sh) with automated expiration checking, and comprehensive certificate management documentation (docs/CERTIFICATE_MANAGEMENT.md). **NOTE: TLS is DISABLED in docker-compose.yml pending certificate generation - infrastructure ready but not active.**
 - **2026-01-16 (Epic 23 - Application-Level Encryption at Rest)**: Implemented comprehensive file encryption with AES-256-GCM. Created encryption service (encryption.py) with authenticated encryption (AEAD), per-job key manager (key_manager.py) with DEK generation and wrapping, transparent decryption on download (modified app.py and tasks.py), Redis metadata encryption helper (redis_encryption.py), and integrated master key management into secrets module with auto-generation for development and required configuration for production.
-- **2026-01-16 (Epic 21 - GPU Detection & Resource Optimization)**: Completed all 13 stories implementing GPU detection, Prometheus metrics, intelligent cleanup, secrets management, container hardening, input validation, health checks, alerting, and graceful shutdown. Added conditional Docker builds (GPU/CPU), lazy model loading, Prometheus /metrics endpoint, intelligent data retention with disk monitoring, Docker Swarm secrets support, non-root containers with capability dropping, comprehensive input validators/sanitizers, /healthz and /readyz probes, Prometheus alerting rules with runbooks, and SIGTERM handlers with GPU cleanup.
 - **2026-01-16 (Epic 22 - HTTPS Support)**: Implemented Cloudflare Tunnel integration for zero-touch HTTPS. Added `cloudflare-tunnel` service to docker-compose.yml with `https` profile, created automated setup script (cloudflare/setup.sh), implemented ProxyFix middleware for secure cookies and proxy header trust, updated CSP headers for wss:// WebSocket support, created comprehensive setup documentation (docs/CLOUDFLARE_TUNNEL_SETUP.md).
+- **2026-01-16 (Epic 21 - GPU Detection & Resource Optimization)**: Completed all 13 stories implementing GPU detection, Prometheus metrics, intelligent cleanup, secrets management, container hardening, input validation, health checks, alerting, and graceful shutdown. Added conditional Docker builds (GPU/CPU), lazy model loading, Prometheus /metrics endpoint, intelligent data retention with disk monitoring, Docker Swarm secrets support, non-root containers with capability dropping, comprehensive input validators/sanitizers, /healthz and /readyz probes, Prometheus alerting rules with runbooks, and SIGTERM handlers with GPU cleanup.
 - **2026-01-15 (Plan Restructuring)**: Transformed plan.md with BDD user stories for all epics. Embedded Epics 21-25 inline for self-contained context. Added Epic 21.13 for GPU/CPU visual indicator in UI.
 - **2026-01-14 (Epics 22-25 Planning)**: Completed comprehensive planning for HTTPS support via Cloudflare Tunnel, application-level encryption at rest, Redis TLS with CA certificates, and automated certificate management with Certbot + Cloudflare DNS.
 - **2026-01-14 (Epic 21 Planning)**: Completed comprehensive planning for GPU detection, resource optimization, security hardening, and operational excellence.
@@ -96,7 +108,58 @@ docker-compose logs -f worker
 - **Status Reporting**: Added real-time Marker status polling (Initialization/Ready) to the UI.
 - **Bug Fixes**: Resolved worker hang by switching to `solo` pool and removing Gevent patching in worker. Fixed `TypeError` in `PdfConverter` call.
 
-### Known Gaps Identified in Planning
+### Known Gaps Identified in Code Analysis
+
+**Critical Bugs:**
+1. **Gevent Monkey-Patching in web/app.py** (Lines 1-2):
+   - CONTRADICTS CLAUDE.md: "Gevent monkey-patching removed from worker to prevent deadlocks with Marker AI"
+   - Monkey-patching still present in web/app.py: `from gevent import monkey; monkey.patch_all()`
+   - May cause deadlocks with PyTorch/Marker operations
+   - **Action Required**: Remove gevent patching from web module
+
+**Epic 24 (Redis TLS) - Infrastructure Ready but DISABLED:**
+- ✅ TLS configuration implemented in web/app.py and worker/tasks.py
+- ✅ Certificate generation scripts complete (generate-redis-certs.sh)
+- ✅ Certificate management automation (renew, reload, deploy scripts)
+- ❌ **TLS explicitly disabled** in docker-compose.yml (lines 4-42) with TODO comment "certificates not generated"
+- ❌ **Celery Message Signing Incomplete**: Web uses 'auth' serializer, worker uses 'json' - incompatible configurations
+- **Action Required**: Generate certificates via `./scripts/generate-redis-certs.sh`, update docker-compose.yml to use `rediss://` URLs, fix Celery serializer mismatch
+
+**Epic 26 (SLM Integration) - Backend Complete, Frontend Missing:**
+- ✅ llama-cpp-python dependency installed
+- ✅ SLM model loading in warmup.py (TinyLlama support)
+- ✅ extract_slm_metadata task implemented (title, tags, summary extraction)
+- ❌ **No Web UI integration** - no routes to trigger SLM extraction
+- ❌ **No model pre-caching** - Dockerfile download commented out due to build timeouts
+- ❌ **No user-facing features** - metadata extraction runs but results not displayed
+- ❌ **Orphaned feature** - backend works but inaccessible to users
+- **Action Required**: Add Web UI routes for SLM extraction, display metadata in UI, document model download process
+
+**Epic 27 (MCP Vision Workflow) - Infrastructure Partial, Integration Missing:**
+- ✅ MCP server container deployed (mcp-server service)
+- ✅ Playwright integration with execute_script action
+- ✅ Browser automation tasks defined (test_amazon_session, analyze_screenshot_layout, agentic_page_turner)
+- ❌ **MCP server incomplete** - missing action handlers (create_context_and_goto, screenshot_current_page)
+- ❌ **No Web UI integration** - no routes for session uploads or job triggering
+- ❌ **Screenshot handling broken** - MCP server doesn't implement screenshot actions that worker calls
+- ❌ **Session management incomplete** - decryption logic exists but upload routes missing
+- **Action Required**: Complete MCP server action handlers, add Web UI for session uploads, implement screenshot endpoints
+
+**Epic 28 (Hybrid Reconstruction) - Skeleton Only, Non-Functional:**
+- ⚠️ **Layout detection is placeholder** - returns hardcoded simulated regions
+- ❌ **No vision SLM integration** - Pixtral or vision models not implemented
+- ❌ **No hybrid routing** - no logic to choose between Marker OCR vs Vision SLM
+- ❌ **No agentic script generation** - page turner is sequential automation, not LLM-driven
+- ❌ **No error handling** - popup detection, form-filling, CAPTCHA handling missing
+- **Status**: 5% complete (skeleton functions exist but non-functional)
+- **Action Required**: Implement vision model integration, hybrid routing logic, actual layout detection
+
+**Testing Infrastructure - Broken:**
+- ✅ pytest suite exists (test_web.py, test_worker.py, conftest.py)
+- ❌ **Worker tests mock subprocess.run** but actual code uses PdfConverter class API
+- ❌ **Tests will fail** if executed - incorrect mocking target
+- ❌ **False confidence** - tests don't actually verify Marker integration
+- **Action Required**: Update test_worker.py to mock PdfConverter instead of subprocess.run
 
 **Epic 21 (GPU & Resource Management) - ✅ COMPLETED:**
 - **✅ GPU detection**: Implemented build-time and runtime detection (Stories 21.1, 21.2)
@@ -120,13 +183,69 @@ docker-compose logs -f worker
 - **✅ Per-job encryption**: Unique DEKs per job wrapped with master key (Epic 23)
 - **✅ Transparent decryption**: Files automatically decrypted on download (Epic 23)
 - **✅ Master key management**: Integrated into secrets module with auto-generation for dev (Epic 23)
-- **✅ Redis TLS**: All inter-service communication encrypted with TLS 1.2+ (Epic 24)
-- **✅ Celery message signing**: Task messages signed with HMAC-SHA256 (Epic 24)
+- **⚠️ Redis TLS**: Infrastructure ready but disabled pending certificate generation (Epic 24)
+- **⚠️ Celery message signing**: Implemented but incompatible serializers between web and worker (Epic 24)
 - **✅ Redis port secured**: No external port exposure, internal network only (Epic 24)
 - **✅ Certificate management**: Automated generation, renewal, and service reload (Epic 24)
 
 **Remaining Work:**
 - **Epic 25**: Certbot integration for automated Let's Encrypt certificates (optional, for production)
+
+---
+
+## Implementation Discrepancies Found (2026-01-24 Analysis)
+
+This section documents gaps discovered during comprehensive code analysis comparing plan.md claims against actual implementation.
+
+### File Size Discrepancies
+
+| File | Plan Claims | Actual | Variance | Reason |
+|------|------------|--------|----------|--------|
+| `web/app.py` | ~350 lines | **802 lines** | +452 (+129%) | Epic 23 encryption (+~200), Epic 22 ProxyFix (+~50), Epic 24 TLS config (+~100) |
+| `worker/tasks.py` | ~320 lines | **1293 lines** | +973 (+304%) | Epic 26 SLM tasks (+~100), Epic 27 MCP tasks (+~200), Epic 23 encryption (+~150), Epic 21 metrics (+~100) |
+| `worker/warmup.py` | ~80 lines | **202 lines** | +122 (+153%) | Epic 26 SLM model loading (+~80), Epic 21 GPU detection expanded (+~40) |
+| `web/templates/index.html` | ~290 lines | **477 lines** | +187 (+64%) | Epic 21.13 GPU modal (+~100), Enhanced Material Design (+~87) |
+| `docker-compose.yml` | ~100 lines | **228 lines** | +128 (+128%) | Epic 24 TLS cert mounts (+~50), Epic 27 MCP server (+~40), Epic 22 Cloudflare Tunnel (+~20) |
+
+**Root Cause**: Plan.md estimates are from early project phases (Epics 1-20) before encryption, advanced features, and security hardening were implemented.
+
+### Status Claim Corrections
+
+| Epic/Feature | Plan Claims | Actual Status | Evidence |
+|--------------|-------------|---------------|----------|
+| **Epic 24 (Redis TLS)** | ✅ Completed | ⚠️ **Infrastructure Ready, Disabled** | docker-compose.yml lines 4-42 have TLS commented out with "TEMPORARILY DISABLED" |
+| **Epic 24 (Celery Signing)** | ✅ Completed | ❌ **Incomplete/Broken** | Web uses 'auth' serializer (app.py:184), Worker uses 'json' (tasks.py:111) - incompatible! |
+| **Epic 26 (SLM Integration)** | ✅ Completed | ⚠️ **Backend Only, No UI** | Task exists (tasks.py:914-1012) but no web routes or frontend display |
+| **Epic 27 (MCP Vision)** | ✅ Completed | ⚠️ **Partial, Not Integrated** | MCP server deployed but missing action handlers, no Web UI integration |
+| **Epic 28 (Hybrid Reconstruction)** | ✅ Completed | ❌ **Non-Functional Skeleton** | Functions return hardcoded data (tasks.py:1162-1171), no vision model |
+| **Testing Suite** | Partial (needs updates) | ❌ **Broken** | Tests mock subprocess.run (test_worker.py:16,64,74) but code uses PdfConverter class |
+
+### Critical Bugs Discovered
+
+1. **Gevent Monkey-Patching** (web/app.py:1-2)
+   - Documented prohibition: CLAUDE.md says "Gevent monkey-patching removed from worker"
+   - Actual state: Still present in web/app.py
+   - Risk: Potential deadlocks with PyTorch/Marker operations
+
+2. **Test Suite Mocking Mismatch** (tests/unit/test_worker.py)
+   - Tests mock: `subprocess.run` for Marker conversions
+   - Code uses: `PdfConverter` class API (tasks.py:543-544)
+   - Impact: Tests will fail if run, provide false confidence
+
+3. **Celery Serializer Incompatibility** (Epic 24)
+   - Web: `task_serializer = 'auth'` with signing key
+   - Worker: `task_serializer = 'json'` without signing
+   - Impact: Messages won't deserialize if signing enabled
+
+### Undocumented Features
+
+| Feature | Location | Status | Notes |
+|---------|----------|--------|-------|
+| **SLM Model Support** | warmup.py:120-162 | Working | TinyLlama loading not mentioned in plan.md recent changes |
+| **MCP Server** | docker-compose.yml:189-206 | Deployed | Service exists but plan.md doesn't list it in Critical Files |
+| **Encryption Modules** | web/encryption.py, key_manager.py | Working | New modules (355, 389 lines) not in Critical Files table |
+| **Metrics Module** | worker/metrics.py | Working | 212-line module not documented in Critical Files |
+| **Model Pre-download Disabled** | worker/Dockerfile:52-59 | Commented out | Build timeout fix not in plan.md |
 
 ---
 
@@ -1780,7 +1899,30 @@ Feature: Cloudflare Tunnel Service Deployment
 - `scripts/reload-services.sh` - Service reload after cert deployment (~20 lines)
 
 Epic 26: Local Document Intelligence (SLM Integration)
-**Status**: ✅ Completed
+**Status**: ⚠️ Partial Implementation (Backend Complete, Frontend Missing)
+**Completed**: 2026-01-16 | **Issue Identified**: 2026-01-24
+
+**Implementation Status:**
+- ✅ Story 26.1 (SLM Engine Integration): llama-cpp-python[cuda] installed, model loading in warmup.py working
+- ⚠️ Story 26.2 (Metadata Extraction): Task implemented but not integrated with Web UI
+- ❌ **Critical Gap**: No Web UI routes to trigger SLM extraction
+- ❌ **Critical Gap**: No display of extracted metadata (title, tags, summary) in frontend
+- ❌ **Critical Gap**: Model pre-download disabled in Dockerfile (build timeouts)
+- ❌ **Critical Gap**: No documentation for users on how to download/manage SLM models
+
+**What Works:**
+- `extract_slm_metadata()` task in worker/tasks.py (lines 914-1012)
+- SLM model loading via llama-cpp-python in warmup.py (lines 120-162)
+- Automatic triggering after Marker conversion (line 611)
+- Redis metadata storage (slm_status, slm_title, slm_tags, slm_summary)
+
+**What's Missing:**
+- Web UI integration (no routes in web/app.py)
+- Frontend display of metadata
+- Model distribution mechanism
+- User-facing feature accessibility
+
+**Production Readiness**: 40% (orphaned backend feature)
 
 Goal: Leverage local Small Language Models (SLMs) to extract semantic meaning, summaries, and PII from converted documents.
 
@@ -1825,8 +1967,30 @@ Then trigger an SLM sub-task with a prompt to return a JSON object containing { 
 And store this JSON in the Redis job metadata.
 
 Epic 27: Vision-Based Document Extraction (MCP Workflow)
-**Status**: ✅ Completed
-**Status**: ✅ Completed
+**Status**: ⚠️ Partial Implementation (Infrastructure Ready, Integration Incomplete)
+**Completed**: 2026-01-16 | **Issue Identified**: 2026-01-24
+
+**Implementation Status:**
+- ✅ Story 27.1 (Playwright MCP Server): mcp-server container deployed with Playwright
+- ⚠️ Story 27.5 (Session Injection): Decryption logic exists but upload routes missing
+- ❌ **Critical Gap**: MCP server missing action handlers (create_context_and_goto, screenshot_current_page)
+- ❌ **Critical Gap**: No Web UI integration for session uploads or job triggering
+- ❌ **Critical Gap**: Browser automation tasks defined but not callable from frontend
+
+**What Works:**
+- MCP server container (docker-compose.yml lines 189-206)
+- Playwright browser automation via execute_script (mcp_server/server.js)
+- Worker tasks: test_amazon_session, analyze_screenshot_layout, agentic_page_turner
+- Session encryption/decryption logic
+
+**What's Missing:**
+- MCP server action handlers for all worker calls
+- Web UI routes for session file uploads
+- Frontend forms for configuring MCP jobs
+- Screenshot handling endpoints
+- End-to-end job flow
+
+**Production Readiness**: 25% (orphaned infrastructure)
 
 Goal: Use Model Context Protocol (MCP) and Vision-capable SLMs to extract content from DRM-protected readers (like Kindle Cloud Reader).
 
@@ -1867,7 +2031,37 @@ Technical Context:
 Security: The storageState.json must be treated as a high-value secret. It should be encrypted using the job-specific key (Epic 23) and purged immediately upon task completion.
 
 Epic 28: Hybrid Semantic Reconstruction (Advanced Patterns)
-**Status**: ✅ Completed
+**Status**: ❌ Non-Functional (Skeleton Only, Placeholder Implementation)
+**Started**: 2026-01-16 | **Issue Identified**: 2026-01-24
+
+**Implementation Status:**
+- ⚠️ Story 28.2 (Hybrid Routing): analyze_screenshot_layout() exists but returns hardcoded data
+- ⚠️ Story 28.3 (Agentic Page Turning): agentic_page_turner() is sequential automation, not AI-driven
+- ❌ **Critical Gap**: No vision SLM integration (Pixtral or vision models)
+- ❌ **Critical Gap**: No hybrid routing logic (Marker vs Vision decision)
+- ❌ **Critical Gap**: No actual layout detection (PIL Image dimensions only)
+- ❌ **Critical Gap**: No LLM-based script generation
+- ❌ **Critical Gap**: No error handling (popups, CAPTCHAs, forms)
+
+**What Exists:**
+- Function skeletons: analyze_screenshot_layout() (lines 1109-1191), agentic_page_turner() (lines 1193-1278)
+- MCP server integration for screenshot capture
+- Basic page navigation loop
+
+**What's Hardcoded/Simulated:**
+- Layout detection returns: `{"text_regions": [...], "visual_regions": [...]}` with fake coordinates
+- No actual image analysis
+- No model inference for region classification
+
+**What's Missing:**
+- Vision model loading and inference
+- Marker segmenter integration for layout analysis
+- Hybrid routing decision engine
+- Mermaid.js chart conversion
+- Agentic script generation via LLM
+- Error recovery and popup handling
+
+**Production Readiness**: 5% (skeleton functions, not functional)
 
 Goal: Optimize high-fidelity extraction by routing content between deterministic OCR and agentic vision.
 
