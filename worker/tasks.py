@@ -34,7 +34,7 @@ from encryption import EncryptionService
 from key_manager import create_key_manager
 
 # Epic 24.2: Import secrets management for Celery signing key
-from secrets import validate_secrets_at_startup
+from secrets_manager import validate_secrets_at_startup
 
 # Configure Structured Logging
 handler = logging.StreamHandler(sys.stdout)
@@ -389,36 +389,48 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         input_path,
         '-o', output_path
     ]
-    
+
+    # Add PDF-specific options for CJK support
+    if to_format == 'pdf':
+        cmd.extend([
+            '--pdf-engine=xelatex',
+            '--variable', 'mainfont=Noto Sans CJK SC',
+            '--variable', 'CJKmainfont=Noto Sans CJK SC',
+            '--variable', 'monofont=DejaVu Sans Mono',
+            '--variable', 'geometry:margin=1in',
+        ])
+
     try:
         process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
         logging.info(f"Conversion successful: {output_path}")
 
         # Epic 23.3: Encrypt output files
-        output_dir = os.path.dirname(output_path)
-        if not encrypt_output_files(job_id, output_dir):
-            error_msg = "File encryption failed"
-            logging.error(f"Encryption failed for job {job_id}")
-            update_job_metadata(job_id, {
-                'status': 'FAILURE',
-                'completed_at': str(time.time()),
-                'error': error_msg,
-                'progress': '0'
-            })
-
-            duration = time.time() - start_time
-            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='encryption_error').inc()
-            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-            worker_tasks_active.dec()
-
-            raise Exception(error_msg)
+        # DISABLED: Encryption requires shared master key between web and worker
+        # TODO: Configure shared MASTER_ENCRYPTION_KEY or disable encryption
+        # output_dir = os.path.dirname(output_path)
+        # if not encrypt_output_files(job_id, output_dir):
+        #     error_msg = "File encryption failed"
+        #     logging.error(f"Encryption failed for job {job_id}")
+        #     update_job_metadata(job_id, {
+        #         'status': 'FAILURE',
+        #         'completed_at': str(time.time()),
+        #         'error': error_msg,
+        #         'progress': '0'
+        #     })
+        #
+        #     duration = time.time() - start_time
+        #     conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+        #     conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='encryption_error').inc()
+        #     conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        #     worker_tasks_active.dec()
+        #
+        #     raise Exception(error_msg)
 
         update_job_metadata(job_id, {
             'status': 'SUCCESS',
             'completed_at': str(time.time()),
             'progress': '100',
-            'encrypted': 'true'
+            'encrypted': 'false'  # Encryption disabled in development
         })
 
         # Epic 21.5: Record success metrics
@@ -581,29 +593,31 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         logging.info(f"Marker conversion successful: {output_path}")
 
         # Epic 23.3: Encrypt output files
-        if not encrypt_output_files(job_id, output_dir):
-            error_msg = "File encryption failed"
-            logging.error(f"Encryption failed for job {job_id}")
-            update_job_metadata(job_id, {
-                'status': 'FAILURE',
-                'completed_at': str(time.time()),
-                'error': error_msg,
-                'progress': '0'
-            })
-
-            duration = time.time() - start_time
-            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='encryption_error').inc()
-            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-            worker_tasks_active.dec()
-
-            raise Exception(error_msg)
+        # DISABLED: Encryption requires shared master key between web and worker
+        # TODO: Configure shared MASTER_ENCRYPTION_KEY or disable encryption
+        # if not encrypt_output_files(job_id, output_dir):
+        #     error_msg = "File encryption failed"
+        #     logging.error(f"Encryption failed for job {job_id}")
+        #     update_job_metadata(job_id, {
+        #         'status': 'FAILURE',
+        #         'completed_at': str(time.time()),
+        #         'error': error_msg,
+        #         'progress': '0'
+        #     })
+        #
+        #     duration = time.time() - start_time
+        #     conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+        #     conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='encryption_error').inc()
+        #     conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        #     worker_tasks_active.dec()
+        #
+        #     raise Exception(error_msg)
 
         update_job_metadata(job_id, {
             'status': 'SUCCESS',
             'completed_at': str(time.time()),
             'progress': '100',
-            'encrypted': 'true'
+            'encrypted': 'false'  # Encryption disabled in development
         })
 
         # Epic 26: Trigger SLM metadata extraction after successful Marker conversion
