@@ -12,6 +12,7 @@ import logging
 import sys
 import zipfile
 import io
+import json
 from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -23,7 +24,7 @@ from flask_socketio import SocketIO
 from datetime import datetime, timezone, timedelta
 
 # Epic 21.7: Import secrets management
-from secrets import validate_secrets_at_startup, load_secret
+from secrets_manager import validate_secrets_at_startup, load_secret
 
 # Epic 23.3: Import encryption modules
 from encryption import EncryptionService
@@ -353,6 +354,28 @@ def update_job_metadata(job_id, updates):
         socketio.emit('job_update', full_meta, namespace='/')
     except Exception as e:
         logging.error(f"Error updating metadata for {job_id}: {e}")
+
+def get_job_metadata(job_id):
+    """Retrieve job metadata from Redis."""
+    try:
+        metadata = redis_client.hgetall(f"job:{job_id}")
+        if not metadata:
+            return None
+        # Convert bytes to strings if needed
+        return {k.decode('utf-8') if isinstance(k, bytes) else k:
+                v.decode('utf-8') if isinstance(v, bytes) else v
+                for k, v in metadata.items()}
+    except Exception as e:
+        logging.error(f"Error retrieving metadata for job {job_id}: {e}")
+        return None
+
+def detect_format_from_extension(ext):
+    """Helper to auto-detect format from file extension."""
+    ext = ext.lower().lstrip('.')
+    for fmt in FORMATS:
+        if fmt['extension'].lstrip('.') == ext:
+            return fmt['key']
+    return None
 
 @app.route('/')
 def index():
@@ -796,6 +819,291 @@ def health_detailed():
         status_code = 503
 
     return jsonify(health_status), status_code
+
+
+# ============================================================================
+# REST API v1 Endpoints (Issue #6: External Integration)
+# ============================================================================
+
+@app.route('/api/v1/convert', methods=['POST'])
+@csrf.exempt  # REST API exempt from CSRF
+@limiter.limit("200 per hour")
+def api_v1_convert():
+    """
+    REST API endpoint for document conversion submission.
+
+    Accepts multipart/form-data with:
+    - file: Document file (required)
+    - to_format: Target format key (required)
+    - from_format: Source format key (optional, auto-detected)
+    - engine: "pandoc" or "marker" (optional, default: pandoc)
+    - force_ocr: Boolean for Marker (optional, default: false)
+    - use_llm: Boolean for Marker (optional, default: false)
+
+    Returns 202 Accepted with job_id and status_url.
+    """
+    # Check disk space
+    if not check_disk_space():
+        return jsonify({'error': 'Server storage full'}), 507
+
+    # Validate file presence
+    if 'file' not in request.files:
+        return jsonify({'error': 'Missing required field: file'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    # Validate to_format
+    to_format = request.form.get('to_format')
+    if not to_format:
+        return jsonify({'error': 'Missing required field: to_format'}), 400
+
+    if to_format not in [f['key'] for f in FORMATS if f['direction'] in ['Both', 'Output Only']]:
+        return jsonify({'error': f'Unsupported output format: {to_format}'}), 422
+
+    # Get optional parameters
+    from_format = request.form.get('from_format')
+    engine = request.form.get('engine', 'pandoc')
+    force_ocr = request.form.get('force_ocr', 'false').lower() == 'true'
+    use_llm = request.form.get('use_llm', 'false').lower() == 'true'
+
+    # Validate engine
+    if engine not in ['pandoc', 'marker']:
+        return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc" or "marker"'}), 422
+
+    # Auto-detect from_format if not provided
+    if not from_format:
+        ext = os.path.splitext(file.filename)[1].lower()
+        from_format = detect_format_from_extension(ext)
+        if not from_format:
+            return jsonify({'error': f'Cannot auto-detect format from extension: {ext}'}), 422
+
+    # Map engine to internal format
+    if engine == 'marker' and from_format == 'pdf':
+        internal_from_format = 'pdf_marker'
+    else:
+        internal_from_format = from_format
+
+    # Generate job ID
+    job_id = str(uuid.uuid4())
+    timestamp = str(time.time())
+
+    # Save file
+    upload_dir = os.path.join(app.config['UPLOAD_FOLDER'], job_id)
+    output_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+    os.makedirs(upload_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    safe_filename = secure_filename(file.filename)
+    input_path = os.path.join(upload_dir, safe_filename)
+    file.save(input_path)
+
+    # Create output filename
+    output_filename = os.path.splitext(safe_filename)[0]
+    format_info = next((f for f in FORMATS if f['key'] == to_format), None)
+    if format_info:
+        output_filename += format_info['extension']
+
+    # Store metadata in Redis
+    metadata = {
+        'status': 'PENDING',
+        'filename': safe_filename,
+        'from': internal_from_format,
+        'to': to_format,
+        'engine': engine,
+        'created_at': timestamp,
+        'progress': '0'
+    }
+
+    if engine == 'marker':
+        metadata['force_ocr'] = str(force_ocr)
+        metadata['use_llm'] = str(use_llm)
+
+    update_job_metadata(job_id, metadata)
+
+    # Dispatch to Celery
+    file_size = os.path.getsize(input_path)
+    queue_name = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
+
+    if internal_from_format == 'pdf_marker':
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        celery.send_task(
+            'tasks.convert_with_marker',
+            args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
+            queue=queue_name
+        )
+    else:
+        celery.send_task(
+            'tasks.convert_document',
+            args=[job_id, safe_filename, output_filename, internal_from_format, to_format],
+            queue=queue_name
+        )
+
+    # Return 202 Accepted
+    return jsonify({
+        'job_id': job_id,
+        'status': 'queued',
+        'status_url': f'/api/v1/status/{job_id}',
+        'created_at': datetime.fromtimestamp(float(timestamp)).isoformat() + 'Z'
+    }), 202
+
+
+@app.route('/api/v1/status/<job_id>', methods=['GET'])
+@csrf.exempt
+def api_v1_status(job_id):
+    """
+    REST API endpoint for job status retrieval.
+
+    Returns job status with download URL when completed.
+    """
+    if not is_valid_uuid(job_id):
+        return jsonify({'error': 'Invalid job ID format'}), 400
+
+    # Retrieve metadata from Redis
+    metadata = get_job_metadata(job_id)
+    if not metadata:
+        return jsonify({'error': 'Job not found'}), 404
+
+    # Build response
+    response = {
+        'job_id': job_id,
+        'status': metadata.get('status', 'unknown').lower(),
+        'progress': int(metadata.get('progress', 0)),
+        'filename': metadata.get('filename'),
+        'from_format': metadata.get('from'),
+        'to_format': metadata.get('to'),
+        'engine': metadata.get('engine', 'pandoc'),
+        'created_at': datetime.fromtimestamp(float(metadata.get('created_at', 0))).isoformat() + 'Z'
+    }
+
+    # Add started_at if available
+    if 'started_at' in metadata:
+        response['started_at'] = datetime.fromtimestamp(float(metadata['started_at'])).isoformat() + 'Z'
+
+    # Add completed_at and download info if completed
+    if metadata.get('status') == 'SUCCESS':
+        if 'completed_at' in metadata:
+            response['completed_at'] = datetime.fromtimestamp(float(metadata['completed_at'])).isoformat() + 'Z'
+
+        # Check output files
+        output_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+        if os.path.exists(output_dir):
+            files = [f for f in os.listdir(output_dir) if f != 'metadata.json']
+            is_multifile = len(files) > 1 or os.path.exists(os.path.join(output_dir, 'images'))
+
+            response['download_url'] = f'/api/v1/download/{job_id}'
+            response['is_multifile'] = is_multifile
+            response['file_count'] = len(files)
+
+            # Include Marker metadata if available
+            metadata_file = os.path.join(output_dir, 'metadata.json')
+            if os.path.exists(metadata_file):
+                try:
+                    with open(metadata_file, 'r') as f:
+                        marker_meta = json.load(f)
+                        response['metadata'] = {
+                            'pages': marker_meta.get('pages', 0),
+                            'images_extracted': len(marker_meta.get('images', [])),
+                            'tables_detected': marker_meta.get('table_count', 0)
+                        }
+                except Exception as e:
+                    logging.error(f"Error reading Marker metadata for job {job_id}: {e}")
+
+    # Add error if failed
+    if metadata.get('status') == 'FAILURE':
+        if 'completed_at' in metadata:
+            response['completed_at'] = datetime.fromtimestamp(float(metadata['completed_at'])).isoformat() + 'Z'
+        if 'error' in metadata:
+            response['error'] = metadata['error']
+
+    return jsonify(response), 200
+
+
+@app.route('/api/v1/download/<job_id>', methods=['GET'])
+@csrf.exempt
+def api_v1_download(job_id):
+    """
+    REST API endpoint for downloading converted files.
+
+    Returns single file or ZIP for multi-file outputs.
+    Reuses existing download logic.
+    """
+    if not is_valid_uuid(job_id):
+        return jsonify({'error': 'Invalid job ID format'}), 400
+
+    # Check job exists
+    metadata = get_job_metadata(job_id)
+    if not metadata:
+        return jsonify({'error': 'Job not found'}), 404
+
+    # Check if completed
+    if metadata.get('status') != 'SUCCESS':
+        return jsonify({'error': 'Job not completed yet'}), 404
+
+    # Check output directory
+    output_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+    if not os.path.exists(output_dir):
+        return jsonify({'error': 'Output files not found or expired'}), 410
+
+    files = [f for f in os.listdir(output_dir) if f != 'metadata.json']
+    if not files:
+        return jsonify({'error': 'No output files found'}), 404
+
+    # Update last_viewed timestamp
+    update_job_metadata(job_id, {'last_viewed': str(time.time())})
+
+    # Determine if multi-file
+    is_multifile = len(files) > 1 or os.path.exists(os.path.join(output_dir, 'images'))
+
+    if is_multifile:
+        # Return ZIP (reuse existing download_zip logic)
+        return download_zip(job_id)
+    else:
+        # Return single file (reuse existing download logic)
+        return download_file(job_id)
+
+
+@app.route('/api/v1/formats', methods=['GET'])
+@csrf.exempt
+def api_v1_formats():
+    """
+    REST API endpoint to list supported formats and conversions.
+    """
+    input_formats = []
+    output_formats = []
+
+    for fmt in FORMATS:
+        if fmt['direction'] in ['Both', 'Input Only']:
+            input_formats.append({
+                'name': fmt['name'],
+                'key': fmt['key'],
+                'extension': fmt['extension'],
+                'mime_types': fmt.get('mime_types', []),
+                'supports_marker': fmt['key'] in ['pdf'],
+                'supports_pandoc': True
+            })
+
+        if fmt['direction'] in ['Both', 'Output Only']:
+            output_formats.append({
+                'name': fmt['name'],
+                'key': fmt['key'],
+                'extension': fmt['extension']
+            })
+
+    # Define common conversions
+    conversions = [
+        {'from': 'pdf', 'to': 'markdown', 'engines': ['pandoc', 'marker'], 'recommended_engine': 'marker'},
+        {'from': 'docx', 'to': 'markdown', 'engines': ['pandoc'], 'recommended_engine': 'pandoc'},
+        {'from': 'markdown', 'to': 'pdf', 'engines': ['pandoc'], 'recommended_engine': 'pandoc'},
+        {'from': 'markdown', 'to': 'docx', 'engines': ['pandoc'], 'recommended_engine': 'pandoc'},
+    ]
+
+    return jsonify({
+        'input_formats': input_formats,
+        'output_formats': output_formats,
+        'conversions': conversions
+    }), 200
 
 
 if __name__ == '__main__':

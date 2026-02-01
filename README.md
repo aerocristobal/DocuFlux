@@ -94,6 +94,66 @@ To maintain a clean and secure environment, DocuFlux enforces the following auto
 -   **Completed (Not Downloaded)**: Deleted **1 hour** after creation.
 -   **Failed Jobs**: Deleted **5 minutes** after failure.
 
+## REST API
+
+DocuFlux provides a REST API for programmatic integration with external tools and workflows. The API supports document conversion, job tracking, and result retrieval.
+
+### Quick Start
+
+```bash
+# Submit a conversion job
+curl -X POST http://localhost:5000/api/v1/convert \
+  -F "file=@document.pdf" \
+  -F "to_format=markdown" \
+  -F "engine=marker"
+
+# Response: {"job_id": "550e8400-...", "status": "queued", "status_url": "/api/v1/status/550e8400-..."}
+
+# Check job status
+curl http://localhost:5000/api/v1/status/550e8400-e29b-41d4-a716-446655440000
+
+# Download result when completed
+curl -O -J http://localhost:5000/api/v1/download/550e8400-e29b-41d4-a716-446655440000
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/convert` | POST | Submit document conversion job |
+| `/api/v1/status/{job_id}` | GET | Check job status and progress |
+| `/api/v1/download/{job_id}` | GET | Download converted file(s) |
+| `/api/v1/formats` | GET | List supported formats and conversions |
+
+### Parameters
+
+**POST /api/v1/convert:**
+- `file` (required): Document file to convert
+- `to_format` (required): Target format (e.g., "markdown", "pdf", "docx")
+- `from_format` (optional): Source format, auto-detected if omitted
+- `engine` (optional): "pandoc" or "marker" (default: "pandoc")
+- `force_ocr` (optional): Enable OCR for Marker (default: false)
+- `use_llm` (optional): Use LLM for Marker (default: false)
+
+**Response Codes:**
+- `202 Accepted`: Job queued successfully
+- `400 Bad Request`: Invalid request (missing file, format, etc.)
+- `422 Unprocessable Entity`: Unsupported format conversion
+- `507 Insufficient Storage`: Server storage full
+
+### Authentication
+
+The API uses the same IP-based rate limiting as the web UI (1000/day, 200/hour per IP). No authentication is required for basic usage. API endpoints are CSRF-exempt for REST compatibility.
+
+### Testing
+
+Run the integration test suite:
+```bash
+./tests/test_api_v1_integration.sh
+```
+
+For detailed API documentation, see [API Reference](docs/API.md).
+
 ## Documentation
 - [Deployment Guide](docs/DEPLOYMENT.md)
 - [API Reference (OpenAPI)](docs/openapi.yaml)
