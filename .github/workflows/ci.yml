@@ -46,11 +46,18 @@ jobs:
         pip install -r worker/requirements.txt
         pip install -r tests/requirements.txt
 
-    - name: Run Tests
+    - name: Run Tests with Coverage
       env:
         REDIS_METADATA_URL: redis://localhost:6379/1
         CELERY_BROKER_URL: redis://localhost:6379/0
         CELERY_RESULT_BACKEND: redis://localhost:6379/0
         SECRET_KEY: testing-key
       run: |
-        pytest
+        pytest --cov=web --cov=worker --cov-report=xml --cov-report=term-missing --cov-fail-under=60
+
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.xml

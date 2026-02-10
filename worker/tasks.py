@@ -310,9 +310,11 @@ def update_job_metadata(job_id, updates):
     """Update job metadata using Redis Hash (atomic operation) and broadcast via WebSocket."""
     key = f"job:{job_id}"
     try:
-        redis_client.hset(key, mapping=updates)
-        # Fetch full data to broadcast complete state
-        full_meta = redis_client.hgetall(key)
+        # Epic 30.3: Pipeline hset + hgetall into one round trip instead of two
+        pipe = redis_client.pipeline()
+        pipe.hset(key, mapping=updates)
+        pipe.hgetall(key)
+        _, full_meta = pipe.execute()
         full_meta['id'] = job_id
         socketio.emit('job_update', full_meta, namespace='/')
     except Exception as e:
@@ -426,11 +428,13 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         #
         #     raise Exception(error_msg)
 
+        # Epic 30.2: file_count=1 for single Pandoc output (enables list_jobs() cache)
         update_job_metadata(job_id, {
             'status': 'SUCCESS',
             'completed_at': str(time.time()),
             'progress': '100',
-            'encrypted': 'false'  # Encryption disabled in development
+            'encrypted': 'false',
+            'file_count': '1'
         })
 
         # Epic 21.5: Record success metrics
@@ -589,7 +593,10 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         with open(metadata_path, "w", encoding='utf-8') as f:
             json.dump(rendered.metadata, f, indent=2, default=str)
 
-        update_job_metadata(job_id, {'progress': '90'})
+        # Epic 30.2: Cache file_count in metadata so list_jobs() skips os.walk()
+        # Count: markdown file + metadata.json + images
+        file_count = 2 + saved_images_count  # output.md + metadata.json + N images
+        update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count)})
         logging.info(f"Marker conversion successful: {output_path}")
 
         # Epic 23.3: Encrypt output files

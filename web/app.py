@@ -346,8 +346,11 @@ FORMATS = [
 def update_job_metadata(job_id, updates):
     key = f"job:{job_id}"
     try:
-        redis_client.hset(key, mapping=updates)
-        full_meta = redis_client.hgetall(key)
+        # Epic 30.3: Use pipeline to batch hset + hgetall into one round trip
+        pipe = redis_client.pipeline()
+        pipe.hset(key, mapping=updates)
+        pipe.hgetall(key)
+        _, full_meta = pipe.execute()
         full_meta['id'] = job_id
         socketio.emit('job_update', full_meta, namespace='/')
     except Exception as e:
@@ -462,17 +465,20 @@ def list_jobs():
     jobs_data = []
     for jid, meta in zip(job_ids, results):
         if not meta: continue
-        
-        # Check output files for download type
-        job_dir = os.path.join(OUTPUT_FOLDER, jid)
+
+        # Epic 30.2: Use cached file_count from Redis metadata to avoid os.walk()
+        # Workers store file_count when job completes; fall back to filesystem only
+        # when the cached value is absent (e.g. legacy jobs).
         file_count = 0
         if meta.get('status') == 'SUCCESS':
-            if os.path.exists(job_dir):
-                for root, dirs, files in os.walk(job_dir):
-                    file_count += len(files)
-                logging.info(f"Job {jid}: Found {file_count} files. is_zip={file_count > 1}")
+            cached = meta.get('file_count')
+            if cached is not None:
+                file_count = int(cached)
             else:
-                logging.warning(f"Job {jid}: SUCCESS but dir {job_dir} missing")
+                job_dir = os.path.join(OUTPUT_FOLDER, jid)
+                if os.path.exists(job_dir):
+                    for root, dirs, files in os.walk(job_dir):
+                        file_count += len(files)
         
         is_zip = file_count > 1
         download_url = None
