@@ -1,3 +1,8 @@
+# Epic 30.4: eventlet monkey-patching for non-blocking I/O throughout web service.
+# Must be the very first import. Replaces gevent's monkey.patch_all() removed in Epic 30.1.
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import uuid
 import time
