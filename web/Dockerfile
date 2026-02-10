@@ -17,5 +17,5 @@ USER appuser
 
 EXPOSE 5000
 
-# Use gunicorn with gevent for WebSocket support
-CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "app:app"]
+# Use gunicorn with eventlet for WebSocket support (no monkey-patching conflicts with PyTorch)
+CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "app:app"]

@@ -1,6 +1,3 @@
-from gevent import monkey
-monkey.patch_all()
-
 import os
 import uuid
 import time
@@ -90,7 +87,8 @@ csrf = CSRFProtect(app)
 
 # WebSocket Initialization
 socketio = SocketIO(
-    app, 
+    app,
+    async_mode='eventlet',
     message_queue=os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1'),
     cors_allowed_origins="*"
 )

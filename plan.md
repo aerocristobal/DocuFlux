@@ -1,5 +1,15 @@
 # DocuFlux - Implementation Plan
 
+> **DEPRECATED**: This file is a historical reference only. All active planning is tracked via GitHub Issues.
+>
+> **Active Planning**: See GitHub Issues https://github.com/aerocristobal/DocuFlux/issues and Milestones:
+> - [Phase 1: Critical Foundations](https://github.com/aerocristobal/DocuFlux/milestone/1) (Epic 30+31, due 2026-02-16)
+> - [Phase 2: Security & Quality](https://github.com/aerocristobal/DocuFlux/milestone/2) (Epic 32+33, due 2026-02-23)
+> - [Phase 3: Optimization](https://github.com/aerocristobal/DocuFlux/milestone/3) (Epic 34+35, due 2026-03-02)
+>
+> **New work**: Create GitHub issues directly using the user-story template.
+> **Last Updated**: 2026-02-09 - Migrated to GitHub Issues for planning
+
 ## Architecture Overview
 This project implements a containerized document conversion service using a Task Queue pattern.
 

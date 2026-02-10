@@ -4,8 +4,9 @@ import pytest
 from unittest.mock import MagicMock
 
 # Add project roots to path so we can import app and tasks
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../web')))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../worker')))
+_tests_dir = os.path.dirname(__file__)
+sys.path.insert(0, os.path.abspath(os.path.join(_tests_dir, '../web')))
+sys.path.insert(0, os.path.abspath(os.path.join(_tests_dir, '../worker')))
 
 @pytest.fixture(scope='session', autouse=True)
 def mock_external_deps():
