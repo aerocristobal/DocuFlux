@@ -221,6 +221,36 @@ atexit.register(cleanup_on_shutdown)
 
 logging.info("Graceful shutdown handlers registered (SIGTERM, SIGINT, atexit)")
 
+
+def recover_orphaned_jobs():
+    """Mark any PROCESSING jobs as FAILED on worker startup.
+
+    Jobs stuck in PROCESSING state after a worker restart will never complete.
+    This function recovers them so users can see the failure and retry.
+    """
+    try:
+        keys = redis_client.keys("job:*")
+        recovered = 0
+        for key in keys:
+            meta = redis_client.hgetall(key)
+            if meta.get('status') == 'PROCESSING':
+                job_id = key.split(':', 1)[1] if ':' in key else key
+                redis_client.hset(key, mapping={
+                    'status': 'FAILURE',
+                    'error': 'Worker restarted during conversion. Please retry.',
+                    'completed_at': str(time.time()),
+                    'progress': '0',
+                })
+                logging.warning(f"Recovered orphaned PROCESSING job: {job_id}")
+                recovered += 1
+        if recovered:
+            logging.info(f"Startup recovery: marked {recovered} orphaned job(s) as FAILED")
+    except Exception as e:
+        logging.error(f"Error during orphaned job recovery: {e}")
+
+
+recover_orphaned_jobs()
+
 # Epic 23.3: Initialize encryption components (lazily to avoid startup delays)
 _encryption_service = None
 _key_manager = None
@@ -359,7 +389,14 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         if not is_valid_uuid(job_id):
             logging.error(f"Invalid job_id received: {job_id}")
             return {"status": "error", "message": "Invalid job ID"}
-        
+
+        # Abort if startup recovery already marked this job as failed.
+        current_status = redis_client.hget(f"job:{job_id}", 'status')
+        if current_status in ('FAILURE', 'REVOKED'):
+            logging.warning(f"Skipping re-queued task for already-{current_status} job {job_id}")
+            worker_tasks_active.dec()
+            return {"status": "skipped", "reason": current_status}
+
         safe_job_id = secure_filename(job_id)
         safe_input_filename = secure_filename(input_filename)
         safe_output_filename = secure_filename(output_filename)
@@ -520,6 +557,15 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         logging.error(f"Invalid job_id received: {job_id}")
         worker_tasks_active.dec()
         return {"status": "error", "message": "Invalid job ID"}
+
+    # Abort if the job was already marked as FAILURE or REVOKED by startup recovery.
+    # This breaks the crash-loop: reject_on_worker_lost re-queues the task, but
+    # recover_orphaned_jobs() marks it FAILURE on startup, so we skip re-processing.
+    current_status = redis_client.hget(f"job:{job_id}", 'status')
+    if current_status in ('FAILURE', 'REVOKED'):
+        logging.warning(f"Skipping re-queued task for already-{current_status} job {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "skipped", "reason": current_status}
 
     safe_job_id = secure_filename(job_id)
     safe_input_filename = secure_filename(input_filename)
