@@ -589,8 +589,31 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
+    # Reject PDFs that are too large for Marker AI to process reliably.
+    # Marker takes ~20-30 seconds per page on GPU; 300 pages ≈ 2 hours max.
+    MAX_MARKER_PAGES = int(os.environ.get('MAX_MARKER_PAGES', '300'))
+    try:
+        import pypdfium2 as pdfium
+        pdf_doc = pdfium.PdfDocument(input_path)
+        page_count = len(pdf_doc)
+        pdf_doc.close()
+        if page_count > MAX_MARKER_PAGES:
+            error_msg = (
+                f"PDF has {page_count} pages, which exceeds the {MAX_MARKER_PAGES}-page "
+                f"limit for AI conversion. Split the document into smaller parts."
+            )
+            update_job_metadata(job_id, {
+                'status': 'FAILURE', 'completed_at': str(time.time()),
+                'error': error_msg, 'progress': '0'
+            })
+            worker_tasks_active.dec()
+            return {"status": "error", "message": error_msg}
+        logging.info(f"PDF page count: {page_count} (limit: {MAX_MARKER_PAGES})")
+    except Exception as e:
+        logging.warning(f"Could not check PDF page count: {e}")
+
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Create images subdirectory
     images_dir = os.path.join(output_dir, 'images')
     os.makedirs(images_dir, exist_ok=True)
