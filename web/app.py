@@ -1089,7 +1089,7 @@ def api_v1_formats():
                 'key': fmt['key'],
                 'extension': fmt['extension'],
                 'mime_types': fmt.get('mime_types', []),
-                'supports_marker': fmt['key'] in ['pdf'],
+                'supports_marker': fmt['key'] in ['pdf_marker'],
                 'supports_pandoc': True
             })
 

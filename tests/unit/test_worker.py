@@ -172,8 +172,9 @@ class TestConvertDocument:
                                 mock_redis, sample_job_id):
         """Missing input file raises FileNotFoundError."""
         mock_exists.return_value = False
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
 
         with pytest.raises(FileNotFoundError):
             tasks.convert_document(
@@ -184,7 +185,7 @@ class TestConvertDocument:
                 to_format='html'
             )
 
-        assert mock_redis.hset.called
+        mock_redis.pipeline.assert_called()
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -243,8 +244,9 @@ class TestConvertDocument:
         mock_exists.return_value = True
         mock_run.side_effect = subprocess.CalledProcessError(
             1, ['pandoc'], stderr="pandoc: unknown format")
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
 
         with pytest.raises(Exception, match="Pandoc failed"):
             tasks.convert_document(
@@ -255,7 +257,7 @@ class TestConvertDocument:
                 to_format='html'
             )
 
-        assert mock_redis.hset.called
+        mock_redis.pipeline.assert_called()
 
 
 # ============================================================
@@ -276,8 +278,9 @@ class TestConvertWithMarker:
                                   mock_socketio, mock_redis, sample_job_id):
         """PdfConverter is used (not subprocess), images are saved to images/ dir."""
         mock_exists.return_value = True
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
         mock_get_models.return_value = {'layout': 'fake'}
         mock_slm.delay = MagicMock()
 
@@ -287,11 +290,8 @@ class TestConvertWithMarker:
             images={'page1.png': mock_image}
         )
 
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
-
         result = tasks.convert_with_marker.run(
-            mock_self, sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+            sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
         )
 
         assert result['status'] == 'success'
@@ -316,18 +316,16 @@ class TestConvertWithMarker:
                                 mock_socketio, mock_redis, sample_job_id):
         """Text-only PDF conversion succeeds with no images saved."""
         mock_exists.return_value = True
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
         mock_get_models.return_value = {}
         mock_slm.delay = MagicMock()
 
         _make_pdf_converter_mock(text="# Plain Text", images={})
 
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
-
         result = tasks.convert_with_marker.run(
-            mock_self, sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+            sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
         )
 
         assert result['status'] == 'success'
@@ -344,8 +342,9 @@ class TestConvertWithMarker:
                                                       sample_job_id):
         """PdfConverter RuntimeError sets FAILURE status and re-raises."""
         mock_exists.return_value = True
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
         mock_get_models.return_value = {}
 
         # Make the PdfConverter instance raise when called
@@ -353,16 +352,13 @@ class TestConvertWithMarker:
         mock_converter.side_effect = RuntimeError("CUDA out of memory")
         sys.modules['marker.converters.pdf'].PdfConverter.return_value = mock_converter
 
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
-
         with pytest.raises(RuntimeError, match="CUDA out of memory"):
             tasks.convert_with_marker.run(
-                mock_self, sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+                sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
             )
 
-        # FAILURE metadata must be recorded
-        assert mock_redis.hset.called
+        # FAILURE metadata must be recorded via pipeline
+        mock_redis.pipeline.assert_called()
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -371,15 +367,13 @@ class TestConvertWithMarker:
                                 mock_redis, sample_job_id):
         """Missing PDF file raises FileNotFoundError."""
         mock_exists.return_value = False
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
-
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
 
         with pytest.raises(FileNotFoundError):
             tasks.convert_with_marker.run(
-                mock_self, sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+                sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
             )
 
     @patch('tasks.redis_client')
@@ -387,10 +381,8 @@ class TestConvertWithMarker:
     @patch('os.path.exists')
     def test_invalid_uuid_returns_error(self, mock_exists, mock_socketio, mock_redis):
         """Invalid job_id returns error dict without conversion."""
-        mock_self = MagicMock()
-
         result = tasks.convert_with_marker.run(
-            mock_self, 'not-a-valid-uuid', 'test.pdf', 'test.md', 'pdf', 'markdown'
+            'not-a-valid-uuid', 'test.pdf', 'test.md', 'pdf', 'markdown'
         )
 
         assert result['status'] == 'error'
@@ -408,8 +400,9 @@ class TestConvertWithMarker:
                                               sample_job_id):
         """Custom options are forwarded to PdfConverter constructor."""
         mock_exists.return_value = True
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
         mock_get_models.return_value = {}
         mock_slm.delay = MagicMock()
 
@@ -417,11 +410,8 @@ class TestConvertWithMarker:
 
         options = {'page_range': '1-5', 'extract_images': True}
 
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
-
         tasks.convert_with_marker.run(
-            mock_self, sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown',
+            sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown',
             options=options
         )
 
@@ -604,18 +594,16 @@ class TestGPUMemoryCleanup:
                                                     mock_redis, sample_job_id):
         """torch.cuda.empty_cache() is called after successful Marker conversion."""
         mock_exists.return_value = True
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
         mock_get_models.return_value = {}
         mock_slm.delay = MagicMock()
 
         _make_pdf_converter_mock()
 
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
-
         tasks.convert_with_marker.run(
-            mock_self, sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+            sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
         )
 
         _torch.cuda.empty_cache.assert_called()
@@ -631,20 +619,18 @@ class TestGPUMemoryCleanup:
                                                     sample_job_id):
         """torch.cuda.empty_cache() is called even when Marker conversion fails."""
         mock_exists.return_value = True
-        mock_redis.hset = MagicMock()
-        mock_redis.hgetall = MagicMock(return_value={})
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
         mock_get_models.return_value = {}
 
         mock_converter = MagicMock()
         mock_converter.side_effect = RuntimeError("Conversion error")
         sys.modules['marker.converters.pdf'].PdfConverter.return_value = mock_converter
 
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
-
         with pytest.raises(RuntimeError):
             tasks.convert_with_marker.run(
-                mock_self, sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+                sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
             )
 
         _torch.cuda.empty_cache.assert_called()

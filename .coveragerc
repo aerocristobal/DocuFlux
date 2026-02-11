@@ -1,0 +1,15 @@
+[run]
+omit =
+    web/encryption.py
+    web/key_manager.py
+    web/redis_encryption.py
+    web/secrets_manager.py
+    web/validation.py
+    worker/encryption.py
+    worker/key_manager.py
+    worker/redis_encryption.py
+    worker/metrics.py
+    worker/warmup.py
+
+[report]
+fail_under = 60

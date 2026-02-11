@@ -62,6 +62,8 @@ def flask_app():
     web_app.app.config['OUTPUT_FOLDER'] = '/tmp/docuflux_test_outputs'
     os.makedirs('/tmp/docuflux_test_uploads', exist_ok=True)
     os.makedirs('/tmp/docuflux_test_outputs', exist_ok=True)
+    # Disable rate limiting to prevent 429 errors from accumulated test requests
+    web_app.limiter.enabled = False
     return web_app.app
 
 
@@ -226,11 +228,8 @@ class TestJobListing:
                                             success_job_meta):
         """GET /api/jobs returns jobs for current session using Redis pipeline."""
         mock_redis.lrange.return_value = [sample_job_id]
-        # Pipeline returns: first result hset (ignored), second hgetall
-        mock_redis.pipeline.return_value.execute.return_value = [
-            1,  # hset result
-            success_job_meta  # hgetall result
-        ]
+        # list_jobs pipeline has only hgetall calls (one per job) - no hset
+        mock_redis.pipeline.return_value.execute.return_value = [success_job_meta]
 
         response = client.get('/api/jobs')
         assert response.status_code == 200
@@ -238,8 +237,8 @@ class TestJobListing:
     def test_list_jobs_uses_cached_file_count(self, client, mock_redis, sample_job_id):
         """Job listing uses file_count from metadata, not os.walk."""
         mock_redis.lrange.return_value = [sample_job_id]
+        # list_jobs pipeline has only hgetall calls - one dict per job
         mock_redis.pipeline.return_value.execute.return_value = [
-            1,
             {
                 'status': 'SUCCESS',
                 'filename': 'doc.md',
@@ -269,8 +268,8 @@ class TestJobListing:
                                                                sample_job_id):
         """Jobs with file_count > 1 get download_zip URL."""
         mock_redis.lrange.return_value = [sample_job_id]
+        # list_jobs pipeline has only hgetall calls - one dict per job
         mock_redis.pipeline.return_value.execute.return_value = [
-            1,
             {
                 'status': 'SUCCESS',
                 'filename': 'report.pdf',
@@ -367,9 +366,11 @@ class TestDownloadEndpoints:
             f.write('<html><body>Test</body></html>')
 
         mock_redis.hgetall.return_value = {'encrypted': 'false', 'status': 'SUCCESS'}
-        mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'SUCCESS'}]
+        mock_redis.pipeline.return_value.execute.return_value = [1, {}]
 
-        response = client.get(f'/download/{sample_job_id}')
+        # Patch module-level OUTPUT_FOLDER to match where test files are created
+        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'):
+            response = client.get(f'/download/{sample_job_id}')
 
         assert response.status_code == 200
         # Cleanup
@@ -402,7 +403,9 @@ class TestDownloadEndpoints:
         mock_redis.hgetall.return_value = {'encrypted': 'false'}
         mock_redis.pipeline.return_value.execute.return_value = [1, {}]
 
-        response = client.get(f'/download_zip/{sample_job_id}')
+        # Patch module-level OUTPUT_FOLDER to match where test files are created
+        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'):
+            response = client.get(f'/download_zip/{sample_job_id}')
 
         assert response.status_code == 200
         assert response.content_type == 'application/zip'

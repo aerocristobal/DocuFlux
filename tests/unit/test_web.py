@@ -14,14 +14,22 @@ def test_index(client):
     assert response.status_code == 200
     assert b"DocuFlux" in response.data or b"format" in response.data
 
-def test_service_status(client):
-    with patch('requests.get') as mock_get:
-        mock_get.return_value.status_code = 200
-        response = client.get('/api/status/services')
-        assert response.status_code == 200
-        data = response.json
-        assert data['marker_api'] == 'available'
-        assert data['disk_space'] == 'ok'
+@patch('app.redis_client')
+def test_service_status(mock_redis, client):
+    # Return bytes strings as real Redis would
+    mock_redis.get.side_effect = lambda key: {
+        'service:marker:status': 'ready',
+        'service:marker:eta': 'done',
+        'marker:gpu_status': 'available',
+    }.get(key)
+    mock_redis.hgetall.return_value = {}
+
+    response = client.get('/api/status/services')
+    assert response.status_code == 200
+    data = response.json
+    assert data['disk_space'] == 'ok'
+    assert data['marker'] == 'ready'
+    assert data['gpu_status'] == 'available'
 
 def test_convert_no_file(client):
     response = client.post('/convert', data={})
@@ -48,36 +56,36 @@ def test_convert_invalid_extension(client):
     }
     response = client.post('/convert', data=data, content_type='multipart/form-data')
     assert response.status_code == 400
-    # .txt is not .md
-    assert b"does not match selected format" in response.data
+    # Error message: "Extension .txt mismatch."
+    assert b"mismatch" in response.data
 
+@patch('os.path.getsize')
 @patch('magic.Magic')
 @patch('app.check_disk_space')
 @patch('app.redis_client')
 @patch('app.celery')
-def test_convert_success(mock_celery, mock_redis, mock_disk, mock_magic, client):
+def test_convert_success(mock_celery, mock_redis, mock_disk, mock_magic, mock_getsize, client):
     mock_disk.return_value = True
-    
-    # Mock magic to return text/markdown
-    mock_mime = MagicMock()
-    mock_mime.from_buffer.return_value = "text/markdown"
-    mock_magic.return_value = mock_mime
+    mock_getsize.return_value = 100  # Small file, goes to high_priority queue
+
+    # Mock pipeline for update_job_metadata
+    mock_pipe = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipe
+    mock_pipe.execute.return_value = [1, {'status': 'PENDING'}]
 
     data = {
         'file': (io.BytesIO(b"# Hello"), "test.md"),
         'from_format': 'markdown',
         'to_format': 'html'
     }
-    
-    # Need to mock os.makedirs and file.save to avoid writing to disk
+
     with patch('os.makedirs'), patch('werkzeug.datastructures.FileStorage.save'):
         response = client.post('/convert', data=data, content_type='multipart/form-data')
-    
+
     assert response.status_code == 200
-    assert 'job_id' in response.json
+    assert 'job_ids' in response.json
     assert response.json['status'] == 'queued'
-    
-    # Verify celery task was called
+
     mock_celery.send_task.assert_called_once()
     args, kwargs = mock_celery.send_task.call_args
     assert args[0] == 'tasks.convert_document'
@@ -89,36 +97,30 @@ def test_convert_disk_full(mock_disk, client):
     assert response.status_code == 507
     assert b"Server storage is full" in response.data
 
-def test_list_jobs_empty(client):
-    with client.session_transaction() as sess:
-        sess['jobs'] = []
+@patch('app.redis_client')
+def test_list_jobs_empty(mock_redis, client):
+    mock_redis.lrange.return_value = []
     response = client.get('/api/jobs')
     assert response.status_code == 200
     assert response.json == []
 
 @patch('app.redis_client')
 def test_list_jobs_with_data(mock_redis, client, valid_job_id):
-    # Setup session with a recent timestamp
-    now_iso = datetime.now(timezone.utc).isoformat()
-    with client.session_transaction() as sess:
-        sess['jobs'] = [{
-            'id': valid_job_id,
-            'filename': 'test.md',
-            'from': 'markdown',
-            'to': 'html',
-            'created_at': now_iso,
-            'input_path': 'data/uploads/test.md',
-            'output_path': 'data/outputs/test.html'
-        }]
-    
-    # Setup Redis pipeline mock
-    mock_pipeline = MagicMock()
-    mock_redis.pipeline.return_value = mock_pipeline
-    mock_pipeline.execute.return_value = [{
-        'status': 'SUCCESS', 
-        'filename': 'test.md'
+    # decode_responses=True means Redis returns strings, not bytes
+    mock_redis.lrange.return_value = [valid_job_id]
+
+    mock_pipe = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipe
+    mock_pipe.execute.return_value = [{
+        'status': 'SUCCESS',
+        'filename': 'test.md',
+        'from': 'markdown',
+        'to': 'html',
+        'created_at': '1700000000.0',
+        'progress': '100',
+        'file_count': '1',
     }]
-    
+
     response = client.get('/api/jobs')
     assert response.status_code == 200
     assert len(response.json) == 1
@@ -128,25 +130,21 @@ def test_list_jobs_with_data(mock_redis, client, valid_job_id):
 @patch('app.celery')
 @patch('app.redis_client')
 def test_cancel_job(mock_redis, mock_celery, client, valid_job_id):
+    mock_pipe = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipe
+    mock_pipe.execute.return_value = [1, {'status': 'REVOKED'}]
+
     response = client.post(f'/api/cancel/{valid_job_id}')
     assert response.status_code == 200
     mock_celery.control.revoke.assert_called_with(valid_job_id, terminate=True)
-    mock_redis.hset.assert_called()
+    mock_redis.pipeline.assert_called()
 
 @patch('shutil.rmtree')
 @patch('app.redis_client')
 def test_delete_job(mock_redis, mock_rmtree, client, valid_job_id):
-    with client.session_transaction() as sess:
-        sess['jobs'] = [{'id': valid_job_id}]
-        
     response = client.post(f'/api/delete/{valid_job_id}')
     assert response.status_code == 200
     assert response.json['status'] == 'deleted'
-    
-    # Check session is cleared
-    with client.session_transaction() as sess:
-        assert len(sess['jobs']) == 0
-        
     mock_redis.delete.assert_called_with(f'job:{valid_job_id}')
 
 @patch('os.path.exists')
@@ -154,26 +152,26 @@ def test_delete_job(mock_redis, mock_rmtree, client, valid_job_id):
 @patch('app.redis_client')
 @patch('app.celery')
 def test_retry_job(mock_celery, mock_redis, mock_copy, mock_exists, client, valid_job_id):
-    mock_exists.return_value = True # input file exists
-    
-    now_iso = datetime.now(timezone.utc).isoformat()
-    with client.session_transaction() as sess:
-        sess['jobs'] = [{
-            'id': valid_job_id,
-            'filename': 'test.md',
-            'from': 'markdown',
-            'to': 'html',
-            'created_at': now_iso,
-            'input_path': f'data/uploads/{valid_job_id}/test.md',
-            'output_path': f'data/outputs/{valid_job_id}/test.html'
-        }]
+    mock_exists.return_value = True
+
+    # decode_responses=True means all values are strings
+    mock_redis.hgetall.return_value = {
+        'filename': 'test.md',
+        'from': 'markdown',
+        'to': 'html',
+        'force_ocr': 'False',
+        'use_llm': 'False',
+    }
+    mock_pipe = MagicMock()
+    mock_redis.pipeline.return_value = mock_pipe
+    mock_pipe.execute.return_value = [1, {'status': 'PENDING'}]
 
     with patch('os.makedirs'):
         response = client.post(f'/api/retry/{valid_job_id}')
-    
+
     assert response.status_code == 200
     assert response.json['status'] == 'retried'
     assert 'new_job_id' in response.json
-    
+
     mock_celery.send_task.assert_called()
-    mock_redis.hset.assert_called()
+    mock_redis.pipeline.assert_called()

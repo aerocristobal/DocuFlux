@@ -14,11 +14,15 @@ import time
 @pytest.fixture
 def client():
     """Create test client for Flask app."""
-    from web.app import app
+    from web.app import app, limiter
     app.config['TESTING'] = True
     app.config['WTF_CSRF_ENABLED'] = False  # Disable CSRF for testing
+    # Disable rate limiting to prevent 429 errors from accumulated test requests
+    original_enabled = limiter.enabled
+    limiter.enabled = False
     with app.test_client() as client:
         yield client
+    limiter.enabled = original_enabled
 
 
 @pytest.fixture
@@ -296,8 +300,11 @@ def test_api_v1_status_success(client, mock_redis):
         'progress': '100'
     })
 
-    # Mock output directory
-    with patch('os.path.exists', return_value=True):
+    # Mock output directory - exists=True for output dir, False for images subdir
+    def exists_side_effect(path):
+        return 'images' not in path
+
+    with patch('os.path.exists', side_effect=exists_side_effect):
         with patch('os.listdir', return_value=['test.md']):
             response = client.get(f'/api/v1/status/{job_id}')
 
@@ -373,23 +380,29 @@ def test_api_v1_download_success_single_file(client, mock_redis):
     job_id = '550e8400-e29b-41d4-a716-446655440000'
 
     # Mock Redis metadata
+    mock_pipe = Mock()
+    mock_redis.pipeline.return_value = mock_pipe
+    mock_pipe.execute.return_value = [1, {}]
     mock_redis.hgetall = Mock(return_value={
         'status': 'SUCCESS',
         'filename': 'test.pdf',
         'encrypted': 'false'
     })
-    mock_redis.hset = Mock()
 
-    # Mock file system
-    with patch('os.path.exists', return_value=True):
-        with patch('os.listdir', return_value=['test.md']):
-            with patch('web.app.send_from_directory') as mock_send:
-                mock_send.return_value = 'file_content'
+    # Mock file system - exists True for dirs but False for images subdir
+    def exists_side_effect(path):
+        return 'images' not in path
 
-                response = client.get(f'/api/v1/download/{job_id}')
+    with patch('os.path.exists', side_effect=exists_side_effect):
+        with patch('os.path.isfile', return_value=True):
+            with patch('os.listdir', return_value=['test.md']):
+                with patch('web.app.send_from_directory') as mock_send:
+                    mock_send.return_value = 'file_content'
 
-                # Verify send_from_directory was called
-                mock_send.assert_called_once()
+                    response = client.get(f'/api/v1/download/{job_id}')
+
+                    # Verify send_from_directory was called
+                    mock_send.assert_called_once()
 
 
 def test_api_v1_download_not_found(client, mock_redis):
@@ -492,10 +505,10 @@ def test_api_v1_formats(client):
     assert 'engines' in conversion
     assert 'recommended_engine' in conversion
 
-    # Verify PDF supports Marker
-    pdf_format = next((f for f in json_data['input_formats'] if f['key'] == 'pdf'), None)
-    assert pdf_format is not None
-    assert pdf_format['supports_marker'] == True
+    # Verify pdf_marker format supports Marker (pdf is output-only)
+    pdf_marker_format = next((f for f in json_data['input_formats'] if f['key'] == 'pdf_marker'), None)
+    assert pdf_marker_format is not None
+    assert pdf_marker_format['supports_marker'] == True
 
 
 # ============================================================================
