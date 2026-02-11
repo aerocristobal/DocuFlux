@@ -269,6 +269,7 @@ def check_disk_space():
         return True
 
 @app.route('/api/status/services')
+@limiter.exempt
 def service_status():
     status = {'disk_space': 'ok'}
     if not check_disk_space():
@@ -685,6 +686,7 @@ def download_zip(job_id):
 # Epic 21.10: Enhanced Health Check Endpoints
 
 @app.route('/healthz')
+@limiter.exempt
 def healthz():
     """
     Liveness probe - is the process alive?

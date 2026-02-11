@@ -60,7 +60,7 @@ services:
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=100m
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -110,7 +110,7 @@ services:
     cap_drop:
       - ALL
     tmpfs:
-      - /tmp:noexec,nosuid,nodev,size=500m
+      - /tmp:noexec,nosuid,nodev,size=3g  # Increased for Marker model downloads
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 10s
