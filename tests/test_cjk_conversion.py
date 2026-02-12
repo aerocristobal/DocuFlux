@@ -6,7 +6,6 @@ This tests that XeLaTeX and Noto CJK fonts are properly configured.
 
 import subprocess
 import sys
-import os
 
 def test_xelatex_installed():
     """Test that XeLaTeX is installed in the worker container"""

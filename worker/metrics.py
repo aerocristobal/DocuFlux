@@ -8,7 +8,6 @@ Epic 21.5: Prometheus Metrics Endpoint
 """
 
 import logging
-import time
 from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest, CONTENT_TYPE_LATEST
 from flask import Flask, Response
 
@@ -138,7 +137,6 @@ def update_disk_metrics(data_path='/app/data'):
         data_path: Path to the data directory to monitor
     """
     try:
-        import os
         import shutil
 
         # Get disk usage stats

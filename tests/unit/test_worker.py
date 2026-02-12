@@ -13,7 +13,6 @@ rather than patching a non-existent tasks.PdfConverter attribute.
 """
 import pytest
 import sys
-import os
 import uuid
 import time
 from unittest.mock import patch, MagicMock, mock_open

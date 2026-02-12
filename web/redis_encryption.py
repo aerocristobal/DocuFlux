@@ -193,7 +193,6 @@ def decrypt_field(encrypted_value: str, dek: str, field_name: str, job_id: str) 
 
 if __name__ == '__main__':
     # Test Redis encryption helper
-    import redis
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     import base64
 

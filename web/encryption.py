@@ -11,9 +11,6 @@ Epic 23.1: File Encryption Service with AES-256-GCM
 import os
 import logging
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.backends import default_backend
 import base64
 
 
@@ -318,7 +315,7 @@ def decrypt_string(encrypted_data, key):
 
 if __name__ == '__main__':
     # Test encryption service
-    import secrets
+    pass
 
     print("Testing EncryptionService...")
 

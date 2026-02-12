@@ -17,10 +17,9 @@ import pytest
 import io
 import os
 import uuid
-import json
 import time
 import sys
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 # Mock heavy web dependencies before importing app
 _web_mocks = {

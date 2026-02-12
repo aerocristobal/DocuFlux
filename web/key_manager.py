@@ -330,7 +330,6 @@ def create_key_manager(redis_client: redis.Redis, master_key: Optional[str] = No
 
 if __name__ == '__main__':
     # Test key manager
-    import secrets
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     import base64
 

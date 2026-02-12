@@ -8,8 +8,6 @@ import uuid
 import time
 import redis
 import shutil
-import magic
-import requests
 import logging
 import sys
 import zipfile
@@ -23,10 +21,10 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from flask_socketio import SocketIO
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 # Epic 21.7: Import secrets management
-from secrets_manager import validate_secrets_at_startup, load_secret
+from secrets_manager import validate_secrets_at_startup
 
 # Epic 23.3: Import encryption modules
 from encryption import EncryptionService

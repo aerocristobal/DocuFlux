@@ -3,8 +3,6 @@ import time
 import redis
 import threading
 import logging
-import sys
-import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from llama_cpp import Llama
 

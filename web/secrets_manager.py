@@ -14,7 +14,6 @@ import sys
 import logging
 from pathlib import Path
 import base64
-import binascii
 
 # Note: We don't import the Python stdlib 'secrets' module to avoid naming conflict
 # with this file (secrets.py). Instead, we use os.urandom() directly.

@@ -5,9 +5,8 @@ Tests the /api/v1/* endpoints for external integration.
 """
 
 import pytest
-import json
 import io
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import time
 
 
@@ -399,7 +398,7 @@ def test_api_v1_download_success_single_file(client, mock_redis):
                 with patch('web.app.send_from_directory') as mock_send:
                     mock_send.return_value = 'file_content'
 
-                    response = client.get(f'/api/v1/download/{job_id}')
+                    client.get(f'/api/v1/download/{job_id}')
 
                     # Verify send_from_directory was called
                     mock_send.assert_called_once()

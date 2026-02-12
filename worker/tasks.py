@@ -410,7 +410,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
             'started_at': str(time.time()),
             'progress': '10'
         })
-    except Exception as e:
+    except Exception:
         worker_tasks_active.dec()
         raise
     
