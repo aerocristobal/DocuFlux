@@ -8,4 +8,4 @@ flask-limiter==3.5.0
 flask-wtf==1.2.1
 flask-socketio==5.3.6
 eventlet==0.40.3
-cryptography==44.0.1
+cryptography==46.0.5
