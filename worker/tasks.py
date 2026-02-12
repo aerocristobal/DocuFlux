@@ -18,6 +18,8 @@ from werkzeug.utils import secure_filename
 from warmup import get_slm_model # Epic 26: SLM model getter
 from PIL import Image # Epic 28: For image processing
 
+from config import Config
+
 # Epic 21.5: Import Prometheus metrics
 from metrics import (
     conversion_total,
@@ -50,8 +52,8 @@ except ValueError as e:
     logging.error(f"Failed to load secrets: {e}")
     sys.exit(1)
 
-UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
-OUTPUT_FOLDER = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
+UPLOAD_FOLDER = Config.UPLOAD_FOLDER
+OUTPUT_FOLDER = Config.OUTPUT_FOLDER
 
 def is_valid_uuid(val):
     try:
@@ -62,11 +64,11 @@ def is_valid_uuid(val):
         return False
 
 # WebSocket Emitter (Standalone for worker)
-socketio = SocketIO(message_queue=os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1'))
+socketio = SocketIO(message_queue=Config.SOCKETIO_MESSAGE_QUEUE)
 
 # Epic 24.1: Redis TLS Configuration
 # Metadata Redis client (DB 1) with connection pooling optimization and TLS support
-redis_url = os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1')
+redis_url = Config.REDIS_METADATA_URL
 
 # Configure TLS parameters if using rediss://
 redis_kwargs = {
@@ -80,9 +82,9 @@ if redis_url.startswith('rediss://'):
     redis_kwargs['ssl_cert_reqs'] = 'required'
 
     # Certificate paths from environment
-    ca_certs = os.environ.get('REDIS_TLS_CA_CERTS')
-    certfile = os.environ.get('REDIS_TLS_CERTFILE')
-    keyfile = os.environ.get('REDIS_TLS_KEYFILE')
+    ca_certs = Config.REDIS_TLS_CA_CERTS
+    certfile = Config.REDIS_TLS_CERTFILE
+    keyfile = Config.REDIS_TLS_KEYFILE
 
     if ca_certs:
         redis_kwargs['ssl_ca_certs'] = ca_certs
@@ -97,8 +99,8 @@ redis_client = redis.Redis.from_url(redis_url, **redis_kwargs)
 
 celery = Celery(
     'tasks',
-    broker=os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0'),
-    backend=os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+    broker=Config.CELERY_BROKER_URL,
+    backend=Config.CELERY_RESULT_BACKEND
 )
 
 # Epic 24.2: Celery Task Message Encryption
@@ -136,7 +138,7 @@ def _start_metrics_background():
     """Start metrics server in a daemon thread."""
     try:
         logging.info("Starting Prometheus metrics server on port 9090")
-        start_metrics_server(port=9090, host='0.0.0.0')
+        start_metrics_server(port=Config.METRICS_PORT, host='0.0.0.0')
     except Exception as e:
         logging.error(f"Failed to start metrics server: {e}")
 
@@ -374,7 +376,7 @@ def get_job_metadata(job_id):
     return redis_client.hgetall(key)
 
 
-MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://mcp-server:8080/execute')
+MCP_SERVER_URL = Config.MCP_SERVER_URL
 
 def call_mcp_server(action, args):
     """
@@ -608,7 +610,7 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
 
     # Reject PDFs that are too large for Marker AI to process reliably.
     # Marker takes ~20-30 seconds per page on GPU; 300 pages ≈ 2 hours max.
-    MAX_MARKER_PAGES = int(os.environ.get('MAX_MARKER_PAGES', '300'))
+    MAX_MARKER_PAGES = Config.MAX_MARKER_PAGES
     try:
         import pypdfium2 as pdfium
         pdf_doc = pdfium.PdfDocument(input_path)
@@ -1062,7 +1064,7 @@ def extract_slm_metadata(job_id, markdown_file_path):
             markdown_content = f.read()
 
         # Truncate content if too long for SLM (adjust based on model context window)
-        MAX_SLM_CONTEXT = 2000 # Example token limit, adjust as needed
+        MAX_SLM_CONTEXT = Config.MAX_SLM_CONTEXT # Example token limit, adjust as needed
         if len(markdown_content.split()) > MAX_SLM_CONTEXT:
             markdown_content = " ".join(markdown_content.split()[:MAX_SLM_CONTEXT])
             logging.warning(f"Truncated markdown content for SLM inference for job {job_id}")

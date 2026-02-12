@@ -21,7 +21,9 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from flask_socketio import SocketIO
-from datetime import datetime, timedelta
+from datetime import datetime
+
+from config import Config
 
 # Epic 21.7: Import secrets management
 from secrets_manager import validate_secrets_at_startup
@@ -51,7 +53,7 @@ app.secret_key = app_secrets['SECRET_KEY']
 
 # Epic 22.4: ProxyFix middleware for Cloudflare Tunnel / reverse proxy support
 # Trust proxy headers (X-Forwarded-For, X-Forwarded-Proto, etc.)
-if os.environ.get('BEHIND_PROXY', 'false').lower() == 'true':
+if Config.BEHIND_PROXY:
     app.wsgi_app = ProxyFix(
         app.wsgi_app,
         x_for=1,      # Trust 1 proxy for X-Forwarded-For
@@ -65,8 +67,8 @@ if os.environ.get('BEHIND_PROXY', 'false').lower() == 'true':
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
-    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
+    PERMANENT_SESSION_LIFETIME=Config.PERMANENT_SESSION_LIFETIME,
+    SESSION_COOKIE_SECURE=Config.SESSION_COOKIE_SECURE
 )
 
 @app.before_request
@@ -80,8 +82,8 @@ def ensure_session_id():
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["1000 per day", "200 per hour"],
-    storage_uri=os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1'),
+    default_limits=Config.DEFAULT_LIMITS,
+    storage_uri=Config.STORAGE_URI,
     strategy="fixed-window",
 )
 
@@ -91,23 +93,23 @@ csrf = CSRFProtect(app)
 # WebSocket Initialization
 socketio = SocketIO(
     app,
-    async_mode='eventlet',
-    message_queue=os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1'),
-    cors_allowed_origins="*"
+    async_mode=Config.SOCKETIO_ASYNC_MODE,
+    message_queue=Config.SOCKETIO_MESSAGE_QUEUE,
+    cors_allowed_origins=Config.SOCKETIO_CORS_ALLOWED_ORIGINS
 )
 
-UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
-OUTPUT_FOLDER = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
+UPLOAD_FOLDER = Config.UPLOAD_FOLDER
+OUTPUT_FOLDER = Config.OUTPUT_FOLDER
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024 # 100MB limit
+app.config['UPLOAD_FOLDER'] = Config.UPLOAD_FOLDER
+app.config['OUTPUT_FOLDER'] = Config.OUTPUT_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH # 100MB limit
 
 # Minimum free space required (in bytes) - 500MB
-MIN_FREE_SPACE = 500 * 1024 * 1024 
+MIN_FREE_SPACE = Config.MIN_FREE_SPACE 
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
@@ -131,8 +133,7 @@ def add_security_headers(response):
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
 
     # Epic 22.4: Enable HSTS when running behind HTTPS proxy
-    behind_proxy = os.environ.get('BEHIND_PROXY', 'false').lower() == 'true'
-    if behind_proxy or not app.debug:
+    if Config.BEHIND_PROXY or not app.debug:
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
 
     return response
@@ -143,7 +144,7 @@ def ratelimit_handler(e):
 
 # Epic 24.1: Redis TLS Configuration
 # Metadata Redis client (DB 1) with connection pooling optimization and TLS support
-redis_url = os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1')
+redis_url = Config.REDIS_METADATA_URL
 
 # Configure TLS parameters if using rediss://
 redis_kwargs = {
@@ -157,9 +158,9 @@ if redis_url.startswith('rediss://'):
     redis_kwargs['ssl_cert_reqs'] = 'required'
 
     # Certificate paths from environment
-    ca_certs = os.environ.get('REDIS_TLS_CA_CERTS')
-    certfile = os.environ.get('REDIS_TLS_CERTFILE')
-    keyfile = os.environ.get('REDIS_TLS_KEYFILE')
+    ca_certs = Config.REDIS_TLS_CA_CERTS
+    certfile = Config.REDIS_TLS_CERTFILE
+    keyfile = Config.REDIS_TLS_KEYFILE
 
     if ca_certs:
         redis_kwargs['ssl_ca_certs'] = ca_certs
@@ -175,8 +176,8 @@ redis_client = redis.Redis.from_url(redis_url, **redis_kwargs)
 # Celery configuration
 celery = Celery(
     'tasks',
-    broker=os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0'),
-    backend=os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+    broker=Config.CELERY_BROKER_URL,
+    backend=Config.CELERY_RESULT_BACKEND
 )
 celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
@@ -1136,5 +1137,5 @@ def api_v1_formats():
 
 
 if __name__ == '__main__':
-    debug_mode = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+    debug_mode = Config.FLASK_DEBUG
     app.run(host='0.0.0.0', port=5000, debug=debug_mode)
