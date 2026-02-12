@@ -1,12 +1,23 @@
-# CLAUDE.md
+# User Instructions
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+- **CLAUDE.md Bloat Prevention:** Before adding ANY content to CLAUDE.md (global or project), run a size check first. If the file exceeds **150 lines or 8KB**, you MUST extract existing content to a skill or docs before adding new content. Never just append to a bloated CLAUDE.md.
+- Never use the WebFetch tool. Always use curl via Bash for fetching URLs.
+- **Always maximize parallelization.** See `rules/parallel-execution.md` for mandatory parallel execution patterns. Sequential execution of independent tasks is a VIOLATION.
 
 ## Project Overview
 
 **DocuFlux** is a containerized document conversion service combining Pandoc (universal converter) with Marker AI (deep learning PDF processor). It uses a microservices architecture with asynchronous task processing.
 
 **Core Pattern**: Web UI (Flask) → Task Queue (Redis/Celery) → Worker (Pandoc + Marker AI) → Shared Volume Storage
+
+### Critical Rules
+
+1. **Always update github issues in the same commit** as the implementation
+2. **Use Behavior Driven Design format** for issues
+3. **Include clear and specific Definition of Done** for issues
+4. **Use consistent formatting** - follow the three-tier approach (A/B/C)
+5. **Document what changed, not just what was done** - include files, line counts, verification
+6. **Validate Definition of Done** for each issues before marking it closed
 
 ## Essential Commands
 
@@ -602,29 +613,6 @@ Feature: [Feature Name]
 ```markdown
 | Deployment | **Working** | Conditional GPU/CPU builds, deployment profiles |
 ```
-
-#### Critical Rules
-
-1. **Always update plan.md in the same commit** as the implementation
-2. **Update "Last Updated" date** in Quick Start section (line 21)
-3. **Keep self-contained** - all epic details inline, no external file references
-4. **Use consistent formatting** - follow the three-tier approach (A/B/C)
-5. **Document what changed, not just what was done** - include files, line counts, verification
-6. **Preserve context** - future Claude sessions must understand current state without reading all code
-
-#### Verification Checklist
-
-Before committing plan.md updates:
-- [ ] "Last Updated" date is current
-- [ ] "Recent Changes" list includes new work (chronological)
-- [ ] "Status Summary" table reflects new capabilities
-- [ ] "Known Gaps" section updated (issues removed or added)
-- [ ] Epic status indicators match reality (✅/🔵/🟡)
-- [ ] All completed tasks have checkmarks and dates
-- [ ] "Next Steps" section updated with new priorities
-- [ ] Format follows established conventions (Option A/B/C)
-- [ ] No broken references to external files
-- [ ] Gherkin scenarios use proper Given/When/Then format
 
 ## Verification and Troubleshooting
 
