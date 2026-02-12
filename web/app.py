@@ -9,7 +9,6 @@ import time
 import redis
 import shutil
 import logging
-import sys
 import zipfile
 import io
 import json
@@ -23,37 +22,42 @@ from flask_wtf.csrf import CSRFProtect
 from flask_socketio import SocketIO
 from datetime import datetime
 
-from config import Config
+from config import settings
 
-# Epic 21.7: Import secrets management
-from secrets_manager import validate_secrets_at_startup
+from secrets_manager import load_all_secrets
 
-# Epic 23.3: Import encryption modules
 from encryption import EncryptionService
 from key_manager import create_key_manager
 import tempfile
 
 # Configure Structured Logging
-handler = logging.StreamHandler(sys.stdout)
+handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
 root_logger = logging.getLogger()
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 
-# Epic 21.7: Validate secrets at startup
+# Load secrets using the secrets_manager and then initialize the settings object with them
 try:
-    app_secrets = validate_secrets_at_startup()
+    loaded_secrets = load_all_secrets()
+    # Override settings with secrets loaded by secrets_manager, if they are not None
+    settings_override_data = {
+        k.lower(): v for k, v in loaded_secrets.items() if v is not None
+    }
+    # Create a new settings instance with secrets taking precedence
+    app_settings = settings.model_copy(update=settings_override_data)
+
 except ValueError as e:
     logging.error(f"Failed to load secrets: {e}")
-    sys.exit(1)
+    exit(1) # Use exit() instead of sys.exit()
 
 app = Flask(__name__)
-# Epic 21.7: Use validated secret from secrets module
-app.secret_key = app_secrets['SECRET_KEY']
+# Use validated secret from secrets module
+app.secret_key = app_settings.secret_key.get_secret_value() if app_settings.secret_key else 'default-insecure-key' # Fallback for dev/testing if SecretStr is None
 
 # Epic 22.4: ProxyFix middleware for Cloudflare Tunnel / reverse proxy support
 # Trust proxy headers (X-Forwarded-For, X-Forwarded-Proto, etc.)
-if Config.BEHIND_PROXY:
+if app_settings.behind_proxy:
     app.wsgi_app = ProxyFix(
         app.wsgi_app,
         x_for=1,      # Trust 1 proxy for X-Forwarded-For
@@ -67,8 +71,8 @@ if Config.BEHIND_PROXY:
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    PERMANENT_SESSION_LIFETIME=Config.PERMANENT_SESSION_LIFETIME,
-    SESSION_COOKIE_SECURE=Config.SESSION_COOKIE_SECURE
+    PERMANENT_SESSION_LIFETIME=app_settings.permanent_session_lifetime,
+    SESSION_COOKIE_SECURE=app_settings.session_cookie_secure
 )
 
 @app.before_request
@@ -82,8 +86,8 @@ def ensure_session_id():
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=Config.DEFAULT_LIMITS,
-    storage_uri=Config.STORAGE_URI,
+    default_limits=app_settings.default_limits,
+    storage_uri=app_settings.storage_uri,
     strategy="fixed-window",
 )
 
@@ -93,27 +97,27 @@ csrf = CSRFProtect(app)
 # WebSocket Initialization
 socketio = SocketIO(
     app,
-    async_mode=Config.SOCKETIO_ASYNC_MODE,
-    message_queue=Config.SOCKETIO_MESSAGE_QUEUE,
-    cors_allowed_origins=Config.SOCKETIO_CORS_ALLOWED_ORIGINS
+    async_mode=app_settings.socketio_async_mode,
+    message_queue=app_settings.socketio_message_queue,
+    cors_allowed_origins=app_settings.socketio_cors_allowed_origins
 )
 
-UPLOAD_FOLDER = Config.UPLOAD_FOLDER
-OUTPUT_FOLDER = Config.OUTPUT_FOLDER
+UPLOAD_FOLDER = app_settings.upload_folder
+OUTPUT_FOLDER = app_settings.output_folder
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-app.config['UPLOAD_FOLDER'] = Config.UPLOAD_FOLDER
-app.config['OUTPUT_FOLDER'] = Config.OUTPUT_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH # 100MB limit
+app.config['UPLOAD_FOLDER'] = app_settings.upload_folder
+app.config['OUTPUT_FOLDER'] = app_settings.output_folder
+app.config['MAX_CONTENT_LENGTH'] = app_settings.max_content_length # 100MB limit
 
 # Minimum free space required (in bytes) - 500MB
-MIN_FREE_SPACE = Config.MIN_FREE_SPACE 
+MIN_FREE_SPACE = app_settings.min_free_space 
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
-    return jsonify({'error': 'File too large. Maximum size is 100MB.'}), 413
+    return jsonify({'error': f'File too large. Maximum size is {app_settings.max_content_length / (1024 * 1024):.0f}MB.'}), 413
 
 @app.after_request
 def add_security_headers(response):
@@ -133,7 +137,7 @@ def add_security_headers(response):
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
 
     # Epic 22.4: Enable HSTS when running behind HTTPS proxy
-    if Config.BEHIND_PROXY or not app.debug:
+    if app_settings.behind_proxy or not app.debug:
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
 
     return response
@@ -144,7 +148,7 @@ def ratelimit_handler(e):
 
 # Epic 24.1: Redis TLS Configuration
 # Metadata Redis client (DB 1) with connection pooling optimization and TLS support
-redis_url = Config.REDIS_METADATA_URL
+redis_url = app_settings.redis_metadata_url
 
 # Configure TLS parameters if using rediss://
 redis_kwargs = {
@@ -158,9 +162,9 @@ if redis_url.startswith('rediss://'):
     redis_kwargs['ssl_cert_reqs'] = 'required'
 
     # Certificate paths from environment
-    ca_certs = Config.REDIS_TLS_CA_CERTS
-    certfile = Config.REDIS_TLS_CERTFILE
-    keyfile = Config.REDIS_TLS_KEYFILE
+    ca_certs = app_settings.redis_tls_ca_certs
+    certfile = app_settings.redis_tls_certfile
+    keyfile = app_settings.redis_tls_keyfile
 
     if ca_certs:
         redis_kwargs['ssl_ca_certs'] = ca_certs
@@ -176,8 +180,8 @@ redis_client = redis.Redis.from_url(redis_url, **redis_kwargs)
 # Celery configuration
 celery = Celery(
     'tasks',
-    broker=Config.CELERY_BROKER_URL,
-    backend=Config.CELERY_RESULT_BACKEND
+    broker=app_settings.celery_broker_url,
+    backend=app_settings.celery_result_backend
 )
 celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
@@ -186,7 +190,7 @@ celery.conf.task_routes = {
 
 # Epic 24.2: Celery Task Message Encryption
 # Enable message signing for task integrity and authentication
-celery_signing_key = app_secrets.get('CELERY_SIGNING_KEY')
+celery_signing_key = app_settings.celery_signing_key.get_secret_value() if app_settings.celery_signing_key else None
 if celery_signing_key:
     celery.conf.task_serializer = 'auth'
     celery.conf.result_serializer = 'json'
@@ -1137,5 +1141,5 @@ def api_v1_formats():
 
 
 if __name__ == '__main__':
-    debug_mode = Config.FLASK_DEBUG
+    debug_mode = app_settings.flask_debug
     app.run(host='0.0.0.0', port=5000, debug=debug_mode)

@@ -37,6 +37,15 @@ DocuFlux is a modern, containerized document conversion service that bridges the
     -   [Cloudflare Tunnel](https://www.cloudflare.com/products/tunnel/) (for HTTPS).
     -   [Certbot](https://certbot.eff.org/) (for automated certificate management).
 
+### Configuration Management
+
+DocuFlux now uses **Pydantic Settings** for robust and centralized configuration management. This provides:
+-   **Type Safety**: All configuration variables are type-hinted and validated.
+-   **Hierarchical Loading**: Settings are loaded from environment variables, `.env` files, and Docker secrets (via `secrets_manager.py`).
+-   **Readability & Maintainability**: Reduces boilerplate and improves code clarity.
+
+All application-wide settings are defined in `config.py` within the `Settings` class. It is recommended to use environment variables (prefixed with the corresponding Pydantic field name) or a `.env` file for local development.
+
 ## Prerequisites
 
 -   **Docker** & **Docker Compose**
@@ -51,7 +60,7 @@ DocuFlux is a modern, containerized document conversion service that bridges the
     ```
 
 2.  **Configure Environment**:
-    Create a `.env` file from the example and fill in the required values:
+    Create a `.env` file from the example and fill in the required values. Pydantic Settings will automatically load variables from this file.
     ```bash
     cp .env.example .env
     # Edit .env and provide your details, especially for Cloudflare and Certbot.
@@ -155,6 +164,7 @@ Run the integration test suite:
 For detailed API documentation, see [API Reference](docs/API.md).
 
 ## Documentation
+- [Configuration Management](docs/CONFIGURATION.md)
 - [Deployment Guide](docs/DEPLOYMENT.md)
 - [API Reference (OpenAPI)](docs/openapi.yaml)
 - [Supported Formats](docs/FORMATS.md)

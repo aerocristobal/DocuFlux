@@ -10,16 +10,12 @@ Epic 21.7: Secrets Management and Rotation
 """
 
 import os
-import sys
 import logging
 from pathlib import Path
 import base64
+from typing import Dict, Any, Optional
 
-# Note: We don't import the Python stdlib 'secrets' module to avoid naming conflict
-# with this file (secrets.py). Instead, we use os.urandom() directly.
-
-
-def load_secret(name, default=None, required=False, reject_default_in_prod=True):
+def load_secret(name: str, default: Optional[str] = None, required: bool = False, reject_default_in_prod: bool = True) -> Optional[str]:
     """
     Load a secret from multiple sources with priority order.
 
@@ -94,7 +90,7 @@ def load_secret(name, default=None, required=False, reject_default_in_prod=True)
     return None
 
 
-def generate_master_encryption_key():
+def generate_master_encryption_key() -> str:
     """
     Generate a new master encryption key for development use.
 
@@ -107,14 +103,14 @@ def generate_master_encryption_key():
     return base64.urlsafe_b64encode(key_bytes).decode('utf-8')
 
 
-def load_all_secrets():
+def load_all_secrets() -> Dict[str, Any]:
     """
     Load all application secrets required by DocuFlux.
 
     Returns:
         Dictionary of secret names to values
     """
-    secrets = {}
+    secrets: Dict[str, Any] = {}
 
     # Flask secret key
     secrets['SECRET_KEY'] = load_secret(
@@ -152,11 +148,7 @@ def load_all_secrets():
         reject_default_in_prod=True
     )
 
-    # Set as environment variable for EncryptionService to pick up
-    if secrets['MASTER_ENCRYPTION_KEY']:
-        os.environ['MASTER_ENCRYPTION_KEY'] = secrets['MASTER_ENCRYPTION_KEY']
-
-    # Epic 24.2: Celery signing key for task message authentication
+    # Celery signing key for task message authentication
     # NOTE: Disabled in development - requires celery[auth] extras and additional setup
     # TODO: Properly configure celery.security module or install celery[auth]
     celery_key_default = None

@@ -10,17 +10,13 @@ Epic 21.7: Secrets Management and Rotation
 """
 
 import os
-import sys
 import logging
 from pathlib import Path
 import base64
 import binascii
+from typing import Dict, Any, Optional
 
-# Note: We don't import the Python stdlib 'secrets' module to avoid naming conflict
-# with this file (secrets.py). Instead, we use os.urandom() directly.
-
-
-def load_secret(name, default=None, required=False, reject_default_in_prod=True):
+def load_secret(name: str, default: Optional[str] = None, required: bool = False, reject_default_in_prod: bool = True) -> Optional[str]:
     """
     Load a secret from multiple sources with priority order.
 
@@ -95,7 +91,7 @@ def load_secret(name, default=None, required=False, reject_default_in_prod=True)
     return None
 
 
-def generate_master_encryption_key():
+def generate_master_encryption_key() -> str:
     """
     Generate a new master encryption key for development use.
 
@@ -108,14 +104,14 @@ def generate_master_encryption_key():
     return base64.urlsafe_b64encode(key_bytes).decode('utf-8')
 
 
-def load_all_secrets():
+def load_all_secrets() -> Dict[str, Any]:
     """
     Load all application secrets required by DocuFlux.
 
     Returns:
         Dictionary of secret names to values
     """
-    secrets = {}
+    secrets: Dict[str, Any] = {}
 
     # Flask secret key
     secrets['SECRET_KEY'] = load_secret(
@@ -153,10 +149,6 @@ def load_all_secrets():
         reject_default_in_prod=True
     )
 
-    # Set as environment variable for EncryptionService to pick up
-    if secrets['MASTER_ENCRYPTION_KEY']:
-        os.environ['MASTER_ENCRYPTION_KEY'] = secrets['MASTER_ENCRYPTION_KEY']
-
     # Epic 24.2: Celery signing key for task message authentication
     celery_key_default = None
     if not is_production:
@@ -175,93 +167,3 @@ def load_all_secrets():
     )
 
     return secrets
-
-
-def validate_secrets_at_startup():
-    """
-    Validate all secrets at application startup.
-
-    This function should be called during app initialization to fail fast
-    if secrets are missing or insecure in production.
-
-    Raises:
-        ValueError: If any required secret is invalid
-    """
-    logging.info("Validating secrets at startup...")
-
-    try:
-        secrets = load_all_secrets()
-
-        logging.info("✓ Secrets validation passed")
-        return secrets
-
-    except ValueError as e:
-        logging.error(f"✗ Secrets validation failed: {e}")
-        raise
-
-
-def get_secret_rotation_instructions():
-    """
-    Get instructions for rotating secrets.
-
-    Returns:
-        String with rotation instructions
-    """
-    return """
-    Secret Rotation Instructions
-    =============================
-
-    Docker Swarm Secrets:
-    1. Create new secret: docker secret create secret_key_v2 secret_key.txt
-    2. Update service: docker service update --secret-rm secret_key --secret-add secret_key_v2 docuflux_web
-    3. Remove old secret: docker secret rm secret_key
-
-    Environment Variables:
-    1. Update .env file or docker-compose.yml
-    2. Restart services: docker-compose restart web worker
-
-    Master Encryption Key Generation:
-    # Generate new 256-bit key:
-    python -c "import secrets, base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
-
-    # Or use the built-in generator:
-    python -c "from secrets import generate_master_encryption_key; print(generate_master_encryption_key())"
-
-    # Then set in environment:
-    export MASTER_ENCRYPTION_KEY="<generated-key>"
-
-    IMPORTANT - Master Key Rotation:
-    WARNING: Rotating the master encryption key will make all existing encrypted
-    files UNRECOVERABLE unless you implement a re-encryption strategy.
-
-    Rotation Strategy (Advanced):
-    1. Generate new master key (MEK_v2)
-    2. Keep old key (MEK_v1) for decryption
-    3. Decrypt old DEKs with MEK_v1, re-wrap with MEK_v2
-    4. Update MASTER_ENCRYPTION_KEY to MEK_v2
-    5. Remove MEK_v1 only after all keys re-wrapped
-
-    Recommended: Do NOT rotate master key unless compromised.
-    Instead, rotate per-job DEKs using key_manager.rotate_job_key()
-
-    Best Practices:
-    - Rotate Flask SECRET_KEY every 90 days
-    - Rotate master encryption key only if compromised
-    - Use strong random values for all secrets
-    - Never commit secrets to version control
-    - Use different secrets for dev/staging/production
-    - Back up master encryption key securely (encrypted, offline storage)
-    """
-
-
-if __name__ == '__main__':
-    # Test secrets loading
-    logging.basicConfig(level=logging.INFO)
-    print("Testing secrets loading...")
-    try:
-        secrets = validate_secrets_at_startup()
-        print("\n✓ Secrets loaded successfully")
-        print(f"Loaded {len(secrets)} secrets")
-    except Exception as e:
-        print(f"\n✗ Failed to load secrets: {e}")
-        sys.exit(1)

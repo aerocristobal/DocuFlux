@@ -5,7 +5,6 @@ import shutil
 import redis
 import requests
 import logging
-import sys
 import threading
 import signal
 import atexit
@@ -18,7 +17,7 @@ from werkzeug.utils import secure_filename
 from warmup import get_slm_model # Epic 26: SLM model getter
 from PIL import Image # Epic 28: For image processing
 
-from config import Config
+from config import settings
 
 # Epic 21.5: Import Prometheus metrics
 from metrics import (
@@ -36,24 +35,31 @@ from encryption import EncryptionService
 from key_manager import create_key_manager
 
 # Epic 24.2: Import secrets management for Celery signing key
-from secrets_manager import validate_secrets_at_startup
+from secrets_manager import load_all_secrets
 
 # Configure Structured Logging
-handler = logging.StreamHandler(sys.stdout)
+handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
 root_logger = logging.getLogger()
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 
-# Epic 24.2: Validate secrets at startup
+# Load secrets using the secrets_manager and then initialize the settings object with them
 try:
-    worker_secrets = validate_secrets_at_startup()
+    loaded_secrets = load_all_secrets()
+    # Override settings with secrets loaded by secrets_manager, if they are not None
+    settings_override_data = {
+        k.lower(): v for k, v in loaded_secrets.items() if v is not None
+    }
+    # Create a new settings instance with secrets taking precedence
+    app_settings = settings.model_copy(update=settings_override_data)
+
 except ValueError as e:
     logging.error(f"Failed to load secrets: {e}")
-    sys.exit(1)
+    exit(1) # Use exit() instead of sys.exit()
 
-UPLOAD_FOLDER = Config.UPLOAD_FOLDER
-OUTPUT_FOLDER = Config.OUTPUT_FOLDER
+UPLOAD_FOLDER = app_settings.upload_folder
+OUTPUT_FOLDER = app_settings.output_folder
 
 def is_valid_uuid(val):
     try:
@@ -64,11 +70,11 @@ def is_valid_uuid(val):
         return False
 
 # WebSocket Emitter (Standalone for worker)
-socketio = SocketIO(message_queue=Config.SOCKETIO_MESSAGE_QUEUE)
+socketio = SocketIO(message_queue=app_settings.socketio_message_queue)
 
 # Epic 24.1: Redis TLS Configuration
 # Metadata Redis client (DB 1) with connection pooling optimization and TLS support
-redis_url = Config.REDIS_METADATA_URL
+redis_url = app_settings.redis_metadata_url
 
 # Configure TLS parameters if using rediss://
 redis_kwargs = {
@@ -82,9 +88,9 @@ if redis_url.startswith('rediss://'):
     redis_kwargs['ssl_cert_reqs'] = 'required'
 
     # Certificate paths from environment
-    ca_certs = Config.REDIS_TLS_CA_CERTS
-    certfile = Config.REDIS_TLS_CERTFILE
-    keyfile = Config.REDIS_TLS_KEYFILE
+    ca_certs = app_settings.redis_tls_ca_certs
+    certfile = app_settings.redis_tls_certfile
+    keyfile = app_settings.redis_tls_keyfile
 
     if ca_certs:
         redis_kwargs['ssl_ca_certs'] = ca_certs
@@ -99,8 +105,8 @@ redis_client = redis.Redis.from_url(redis_url, **redis_kwargs)
 
 celery = Celery(
     'tasks',
-    broker=Config.CELERY_BROKER_URL,
-    backend=Config.CELERY_RESULT_BACKEND
+    broker=app_settings.celery_broker_url,
+    backend=app_settings.celery_result_backend
 )
 
 # Epic 24.2: Celery Task Message Encryption
@@ -108,7 +114,7 @@ celery = Celery(
 # Note: 'auth' serializer requires celery[auth] extra and proper configuration
 # For now, using standard JSON serialization. Message authentication can be
 # implemented using Celery's built-in security features or message signing.
-celery_signing_key = worker_secrets.get('CELERY_SIGNING_KEY')
+celery_signing_key = app_settings.celery_signing_key.get_secret_value() if app_settings.celery_signing_key else None
 if celery_signing_key:
     celery.conf.task_serializer = 'json'
     celery.conf.result_serializer = 'json'
@@ -138,7 +144,7 @@ def _start_metrics_background():
     """Start metrics server in a daemon thread."""
     try:
         logging.info("Starting Prometheus metrics server on port 9090")
-        start_metrics_server(port=Config.METRICS_PORT, host='0.0.0.0')
+        start_metrics_server(port=app_settings.metrics_port, host='0.0.0.0')
     except Exception as e:
         logging.error(f"Failed to start metrics server: {e}")
 
@@ -376,7 +382,7 @@ def get_job_metadata(job_id):
     return redis_client.hgetall(key)
 
 
-MCP_SERVER_URL = Config.MCP_SERVER_URL
+MCP_SERVER_URL = app_settings.mcp_server_url
 
 def call_mcp_server(action, args):
     """
@@ -610,7 +616,7 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
 
     # Reject PDFs that are too large for Marker AI to process reliably.
     # Marker takes ~20-30 seconds per page on GPU; 300 pages ≈ 2 hours max.
-    MAX_MARKER_PAGES = Config.MAX_MARKER_PAGES
+    MAX_MARKER_PAGES = app_settings.max_marker_pages
     try:
         import pypdfium2 as pdfium
         pdf_doc = pdfium.PdfDocument(input_path)
@@ -1064,7 +1070,7 @@ def extract_slm_metadata(job_id, markdown_file_path):
             markdown_content = f.read()
 
         # Truncate content if too long for SLM (adjust based on model context window)
-        MAX_SLM_CONTEXT = Config.MAX_SLM_CONTEXT # Example token limit, adjust as needed
+        MAX_SLM_CONTEXT = app_settings.max_slm_context # Example token limit, adjust as needed
         if len(markdown_content.split()) > MAX_SLM_CONTEXT:
             markdown_content = " ".join(markdown_content.split()[:MAX_SLM_CONTEXT])
             logging.warning(f"Truncated markdown content for SLM inference for job {job_id}")
