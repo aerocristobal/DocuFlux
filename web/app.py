@@ -260,6 +260,13 @@ def decrypt_file_to_temp(encrypted_path, job_id):
         return None
 
 def check_disk_space():
+    """
+    Checks if there is sufficient free disk space in the UPLOAD_FOLDER.
+
+    Returns:
+        bool: True if free disk space is greater than or equal to MIN_FREE_SPACE,
+              False otherwise. Returns True if an error occurs during disk usage check.
+    """
     try:
         total, used, free = shutil.disk_usage(UPLOAD_FOLDER)
         return free >= MIN_FREE_SPACE
@@ -269,6 +276,19 @@ def check_disk_space():
 @app.route('/api/status/services')
 @limiter.exempt
 def service_status():
+    """
+    Retrieves the current status of various application services.
+
+    This endpoint provides a health overview, including disk space,
+    Marker service status (LLM download ETA, models cached), and
+    GPU status/information.
+
+    Returns:
+        jsonify: A JSON response containing the status of different
+                 services. Keys include 'disk_space', 'marker',
+                 'llm_download_eta', 'models_cached', 'gpu_status',
+                 and 'gpu_info'.
+    """
     status = {'disk_space': 'ok'}
     if not check_disk_space():
         status['disk_space'] = 'low'

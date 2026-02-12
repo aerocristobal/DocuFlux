@@ -337,7 +337,24 @@ def encrypt_output_files(job_id, output_dir):
 
 
 def update_job_metadata(job_id, updates):
-    """Update job metadata using Redis Hash (atomic operation) and broadcast via WebSocket."""
+    """
+    Updates a job's metadata in Redis and broadcasts the full metadata via WebSocket.
+
+    This function performs an atomic update by using a Redis pipeline
+    to first set the provided `updates` in the job's hash and then
+    retrieve the complete, updated metadata. The updated metadata,
+    including the job_id, is then emitted via a WebSocket event
+    to notify connected clients of the job's status change.
+
+    Args:
+        job_id (str): The unique identifier of the job.
+        updates (dict): A dictionary containing key-value pairs of metadata
+                        fields to update for the specified job.
+
+    Returns:
+        None: This function does not return any value directly. It updates
+              Redis and emits a WebSocket event.
+    """
     key = f"job:{job_id}"
     try:
         # Epic 30.3: Pipeline hset + hgetall into one round trip instead of two
@@ -783,12 +800,24 @@ def _get_directory_size(path):
 @celery.task(name='tasks.cleanup_old_files')
 def cleanup_old_files():
     """
-    Intelligent cleanup with prioritization by file size and recency.
+    Performs intelligent cleanup of old job files based on retention policies, size, and recency.
 
-    Epic 21.6: Intelligent Data Retention
-    - Prioritizes large files for deletion
-    - Preserves recently viewed files
-    - Implements emergency cleanup at >95% disk usage
+    This task is designed to manage disk space by:
+    - Prioritizing the deletion of larger files.
+    - Preserving recently viewed or downloaded files.
+    - Implementing emergency cleanup procedures when disk usage exceeds 95%.
+
+    It processes job files from both UPLOAD_FOLDER and OUTPUT_FOLDER.
+    Jobs are categorized by status (FAILURE, SUCCESS, PENDING) and retention
+    periods are applied accordingly. Orphaned jobs (files without metadata)
+    are also handled.
+
+    The cleanup process sorts deletion candidates by priority (e.g., failed jobs,
+    then un-downloaded successful jobs) and then by size (largest first),
+    stopping if disk usage returns to a healthy level.
+
+    Returns:
+        None: This function does not return any value directly. It logs its actions.
     """
     now = time.time()
 
