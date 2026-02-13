@@ -18,4 +18,4 @@ marker-pdf[full]==1.10.0
 
 # Epic 26: SLM (Small Language Model) support with CUDA
 llama-cpp-python[cuda]
-Pillow==10.3.0
+Pillow==12.1.1
