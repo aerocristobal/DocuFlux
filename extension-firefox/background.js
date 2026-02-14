@@ -3,21 +3,54 @@
  *
  * Manages session state in chrome.storage.local and communicates with
  * the DocuFlux REST API on behalf of the popup and content scripts.
+ *
+ * All chrome.storage calls use the callback form for Firefox MV2 compatibility
+ * (Firefox's chrome shim does not always promisify storage APIs).
  */
 
 const DEFAULT_SERVER_URL = 'http://localhost:5000';
 
+// ─── Storage Helpers (callback → Promise wrappers) ───────────────────────────
+
+function storageGet(keys) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(keys, result => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      resolve(result || {});
+    });
+  });
+}
+
+function storageSet(items) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set(items, () => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      resolve();
+    });
+  });
+}
+
+function storageRemove(keys) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.remove(keys, () => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      resolve();
+    });
+  });
+}
+
 // ─── API Client ──────────────────────────────────────────────────────────────
 
 async function getServerUrl() {
-  const { serverUrl } = await chrome.storage.sync.get({ serverUrl: DEFAULT_SERVER_URL });
-  return serverUrl.replace(/\/$/, '');
+  const result = await storageGet({ serverUrl: DEFAULT_SERVER_URL });
+  return (result.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, '');
 }
 
 async function apiPost(path, body) {
   const base = await getServerUrl();
-  const { clientId } = await chrome.storage.local.get({ clientId: generateId() });
-  await chrome.storage.local.set({ clientId });
+  const result = await storageGet({ clientId: generateId() });
+  const clientId = result.clientId;
+  await storageSet({ clientId });
 
   const response = await fetch(`${base}${path}`, {
     method: 'POST',
@@ -50,46 +83,50 @@ async function apiGet(path) {
 async function createSession(title, toFormat, sourceUrl) {
   const data = await apiPost('/api/v1/capture/sessions', { title, to_format: toFormat, source_url: sourceUrl });
   const session = { sessionId: data.session_id, title, toFormat, pageCount: 0, status: 'active' };
-  await chrome.storage.local.set({ activeSession: session });
+  await storageSet({ activeSession: session });
   return session;
 }
 
 async function submitPage(pageData) {
-  const { activeSession } = await chrome.storage.local.get('activeSession');
+  const result = await storageGet('activeSession');
+  const activeSession = result.activeSession;
   if (!activeSession) throw new Error('No active session');
 
-  const result = await apiPost(
+  const apiResult = await apiPost(
     `/api/v1/capture/sessions/${activeSession.sessionId}/pages`,
     pageData
   );
-  activeSession.pageCount = result.page_count;
-  await chrome.storage.local.set({ activeSession });
-  return result;
+  activeSession.pageCount = apiResult.page_count;
+  await storageSet({ activeSession });
+  return apiResult;
 }
 
 async function finishSession() {
-  const { activeSession } = await chrome.storage.local.get('activeSession');
+  const result = await storageGet('activeSession');
+  const activeSession = result.activeSession;
   if (!activeSession) throw new Error('No active session');
 
-  const result = await apiPost(`/api/v1/capture/sessions/${activeSession.sessionId}/finish`, {});
+  const apiResult = await apiPost(`/api/v1/capture/sessions/${activeSession.sessionId}/finish`, {});
   activeSession.status = 'assembling';
-  activeSession.jobId = result.job_id;
-  await chrome.storage.local.set({ activeSession });
-  return result;
+  activeSession.jobId = apiResult.job_id;
+  await storageSet({ activeSession });
+  return apiResult;
 }
 
-async function pollJobStatus(jobId) {
-  return apiGet(`/api/v1/status/${jobId}`);
+async function pollJobStatus() {
+  const result = await storageGet('activeSession');
+  const activeSession = result.activeSession;
+  if (!activeSession?.jobId) throw new Error('No job in progress');
+  return apiGet(`/api/v1/status/${activeSession.jobId}`);
 }
 
 async function clearSession() {
-  await chrome.storage.local.remove('activeSession');
+  await storageRemove('activeSession');
 }
 
 // ─── Auto-capture coordination ────────────────────────────────────────────────
 
 function triggerContentCapture(tabId) {
-  // Use tabs.sendMessage (MV2-compatible); content.js handles CAPTURE_PAGE.
   return new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_PAGE' }, response => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
@@ -117,15 +154,12 @@ async function handleMessage(message) {
     case 'FINISH_SESSION':
       return finishSession();
 
-    case 'POLL_STATUS': {
-      const { activeSession } = await chrome.storage.local.get('activeSession');
-      if (!activeSession?.jobId) throw new Error('No job in progress');
-      return pollJobStatus(activeSession.jobId);
-    }
+    case 'POLL_STATUS':
+      return pollJobStatus();
 
     case 'GET_SESSION': {
-      const { activeSession } = await chrome.storage.local.get('activeSession');
-      return activeSession || null;
+      const result = await storageGet('activeSession');
+      return result.activeSession || null;
     }
 
     case 'CLEAR_SESSION':
@@ -133,16 +167,18 @@ async function handleMessage(message) {
       return { ok: true };
 
     case 'GET_CONFIG': {
-      const { serverUrl } = await chrome.storage.sync.get({ serverUrl: DEFAULT_SERVER_URL });
-      return { serverUrl };
+      const result = await storageGet({ serverUrl: DEFAULT_SERVER_URL });
+      return { serverUrl: result.serverUrl || DEFAULT_SERVER_URL };
     }
 
     case 'SET_CONFIG':
-      await chrome.storage.sync.set({ serverUrl: message.serverUrl });
+      await storageSet({ serverUrl: message.serverUrl });
       return { ok: true };
 
     case 'TRIGGER_CAPTURE': {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tabs = await new Promise(resolve =>
+        chrome.tabs.query({ active: true, currentWindow: true }, t => resolve(t || []))
+      );
       if (!tabs[0]) throw new Error('No active tab');
       await triggerContentCapture(tabs[0].id);
       return { ok: true };

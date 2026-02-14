@@ -221,22 +221,28 @@ els.toggleAutoBtn.addEventListener('click', async () => {
   }
 });
 
-els.pauseBtn.addEventListener('click', async () => {
-  const { activeSession } = await chrome.storage.local.get('activeSession');
-  if (!activeSession) return;
-  activeSession.status = 'paused';
-  await chrome.storage.local.set({ activeSession });
-  showPausedSection(activeSession);
-  showStatus('Session paused', 'info');
+els.pauseBtn.addEventListener('click', () => {
+  chrome.storage.local.get('activeSession', result => {
+    const activeSession = result && result.activeSession;
+    if (!activeSession) return;
+    activeSession.status = 'paused';
+    chrome.storage.local.set({ activeSession }, () => {
+      showPausedSection(activeSession);
+      showStatus('Session paused', 'info');
+    });
+  });
 });
 
-els.resumeBtn.addEventListener('click', async () => {
-  const { activeSession } = await chrome.storage.local.get('activeSession');
-  if (!activeSession) return;
-  activeSession.status = 'active';
-  await chrome.storage.local.set({ activeSession });
-  showActiveSection(activeSession);
-  showStatus('Session resumed', 'success');
+els.resumeBtn.addEventListener('click', () => {
+  chrome.storage.local.get('activeSession', result => {
+    const activeSession = result && result.activeSession;
+    if (!activeSession) return;
+    activeSession.status = 'active';
+    chrome.storage.local.set({ activeSession }, () => {
+      showActiveSection(activeSession);
+      showStatus('Session resumed', 'success');
+    });
+  });
 });
 
 async function doFinishSession(buttonEl) {
