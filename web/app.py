@@ -1,5 +1,4 @@
-# Epic 30.4: eventlet monkey-patching for non-blocking I/O throughout web service.
-# Must be the very first import. Replaces gevent's monkey.patch_all() removed in Epic 30.1.
+import sys
 import eventlet
 eventlet.monkey_patch()
 
@@ -20,69 +19,59 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from flask_socketio import SocketIO
+from flask_cors import CORS
 from datetime import datetime
 
 from config import settings
-
 from secrets_manager import load_all_secrets
-
 from encryption import EncryptionService
 from key_manager import create_key_manager
 import tempfile
 
 # Configure Structured Logging
-handler = logging.StreamHandler()
+handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
 root_logger = logging.getLogger()
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 
-# Load secrets using the secrets_manager and then initialize the settings object with them
+# Load secrets and settings
 try:
     loaded_secrets = load_all_secrets()
-    # Override settings with secrets loaded by secrets_manager, if they are not None
     settings_override_data = {
         k.lower(): v for k, v in loaded_secrets.items() if v is not None
     }
-    # Create a new settings instance with secrets taking precedence
     app_settings = settings.model_copy(update=settings_override_data)
+    
+    if app_settings.storage_uri is None:
+        app_settings.storage_uri = app_settings.redis_metadata_url
+    if app_settings.socketio_message_queue is None:
+        app_settings.socketio_message_queue = app_settings.redis_metadata_url
 
 except ValueError as e:
     logging.error(f"Failed to load secrets: {e}")
-    exit(1) # Use exit() instead of sys.exit()
+    sys.exit(1)
 
 app = Flask(__name__)
-# Use validated secret from secrets module
-app.secret_key = app_settings.secret_key.get_secret_value() if app_settings.secret_key else 'default-insecure-key' # Fallback for dev/testing if SecretStr is None
+app.secret_key = app_settings.secret_key if app_settings.secret_key else 'default-insecure-key'
 
-# Epic 22.4: ProxyFix middleware for Cloudflare Tunnel / reverse proxy support
-# Trust proxy headers (X-Forwarded-For, X-Forwarded-Proto, etc.)
 if app_settings.behind_proxy:
     app.wsgi_app = ProxyFix(
         app.wsgi_app,
-        x_for=1,      # Trust 1 proxy for X-Forwarded-For
-        x_proto=1,    # Trust 1 proxy for X-Forwarded-Proto (http/https)
-        x_host=1,     # Trust 1 proxy for X-Forwarded-Host
-        x_prefix=1    # Trust 1 proxy for X-Forwarded-Prefix
+        x_for=1, x_proto=1, x_host=1, x_prefix=1
     )
     logging.info("ProxyFix middleware enabled - trusting proxy headers")
 
-# Security Hardening for Cookies
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=app_settings.permanent_session_lifetime,
-    SESSION_COOKIE_SECURE=app_settings.session_cookie_secure
+    SESSION_COOKIE_SECURE=app_settings.session_cookie_secure,
+    UPLOAD_FOLDER=app_settings.upload_folder,
+    OUTPUT_FOLDER=app_settings.output_folder,
+    MAX_CONTENT_LENGTH=app_settings.max_content_length
 )
 
-@app.before_request
-def ensure_session_id():
-    session.permanent = True
-    if 'session_id' not in session:
-        session['session_id'] = str(uuid.uuid4())
-        logging.info(f"New session created: {session['session_id']}")
-
-# Rate Limiting Configuration
 limiter = Limiter(
     get_remote_address,
     app=app,
@@ -90,30 +79,26 @@ limiter = Limiter(
     storage_uri=app_settings.storage_uri,
     strategy="fixed-window",
 )
-
-# CSRF Protection
 csrf = CSRFProtect(app)
-
-# WebSocket Initialization
 socketio = SocketIO(
     app,
     async_mode=app_settings.socketio_async_mode,
     message_queue=app_settings.socketio_message_queue,
     cors_allowed_origins=app_settings.socketio_cors_allowed_origins
 )
+CORS(app, resources={r"/api/v1/capture/*": {
+    "origins": app_settings.capture_allowed_origins,
+    "supports_credentials": False,
+    "methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": ["Content-Type", "X-Client-ID"]
+}})
 
 UPLOAD_FOLDER = app_settings.upload_folder
 OUTPUT_FOLDER = app_settings.output_folder
+MIN_FREE_SPACE = app_settings.min_free_space
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
-app.config['UPLOAD_FOLDER'] = app_settings.upload_folder
-app.config['OUTPUT_FOLDER'] = app_settings.output_folder
-app.config['MAX_CONTENT_LENGTH'] = app_settings.max_content_length # 100MB limit
-
-# Minimum free space required (in bytes) - 500MB
-MIN_FREE_SPACE = app_settings.min_free_space 
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
@@ -186,11 +171,13 @@ celery = Celery(
 celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
     'tasks.convert_with_marker': {'queue': 'default'},
+    'tasks.assemble_capture_session': {'queue': 'default'},
 }
 
 # Epic 24.2: Celery Task Message Encryption
 # Enable message signing for task integrity and authentication
-celery_signing_key = app_settings.celery_signing_key.get_secret_value() if app_settings.celery_signing_key else None
+_cskey = app_settings.celery_signing_key
+celery_signing_key = (_cskey.get_secret_value() if hasattr(_cskey, 'get_secret_value') else _cskey) if _cskey else None
 if celery_signing_key:
     celery.conf.task_serializer = 'auth'
     celery.conf.result_serializer = 'json'
@@ -1138,6 +1125,169 @@ def api_v1_formats():
         'output_formats': output_formats,
         'conversions': conversions
     }), 200
+
+
+# ============================================================================
+# Browser Extension Capture API Endpoints
+# ============================================================================
+
+@app.route('/api/v1/capture/sessions', methods=['POST'])
+@csrf.exempt
+@limiter.limit("200 per hour")
+def capture_create_session():
+    """Create a new capture session for the browser extension."""
+    data = request.get_json(silent=True) or {}
+    title = data.get('title', 'Captured Document')
+    to_format = data.get('to_format', 'markdown')
+    source_url = data.get('source_url', '')
+    force_ocr = data.get('force_ocr', False)
+    client_id = request.headers.get('X-Client-ID', 'unknown')
+
+    if to_format not in [f['key'] for f in FORMATS]:
+        to_format = 'markdown'
+
+    session_id = str(uuid.uuid4())
+    now = str(time.time())
+
+    session_key = f"capture:session:{session_id}"
+    redis_client.hset(session_key, mapping={
+        'status': 'active',
+        'created_at': now,
+        'title': title[:200],
+        'to_format': to_format,
+        'source_url': source_url[:500],
+        'force_ocr': str(force_ocr),
+        'page_count': '0',
+        'client_id': client_id,
+    })
+    redis_client.expire(session_key, app_settings.capture_session_ttl)
+
+    client_sessions_key = f"capture:sessions:{client_id}"
+    redis_client.lpush(client_sessions_key, session_id)
+    redis_client.expire(client_sessions_key, app_settings.capture_session_ttl)
+
+    return jsonify({
+        'session_id': session_id,
+        'status': 'active',
+        'max_pages': app_settings.max_capture_pages,
+    }), 201
+
+
+@app.route('/api/v1/capture/sessions/<session_id>/pages', methods=['POST'])
+@csrf.exempt
+@limiter.limit("200 per hour")
+def capture_add_page(session_id):
+    """Submit a captured page to an existing session."""
+    if not is_valid_uuid(session_id):
+        return jsonify({'error': 'Invalid session ID'}), 400
+
+    session_key = f"capture:session:{session_id}"
+    session_meta = redis_client.hgetall(session_key)
+    if not session_meta:
+        return jsonify({'error': 'Session not found or expired'}), 404
+    if session_meta.get('status') != 'active':
+        return jsonify({'error': 'Session is not active'}), 409
+
+    page_count = int(session_meta.get('page_count', 0))
+    if page_count >= app_settings.max_capture_pages:
+        return jsonify({'error': f'Maximum pages ({app_settings.max_capture_pages}) reached'}), 422
+
+    data = request.get_json(silent=True) or {}
+    page_data = {
+        'url': data.get('url', '')[:500],
+        'title': data.get('title', '')[:200],
+        'text': data.get('text', ''),
+        'images': data.get('images', []),
+        'extraction_method': data.get('extraction_method', 'generic'),
+        'page_hint': data.get('page_hint', page_count),
+    }
+
+    pages_key = f"capture:session:{session_id}:pages"
+    redis_client.rpush(pages_key, json.dumps(page_data))
+    redis_client.expire(pages_key, app_settings.capture_session_ttl)
+
+    new_count = page_count + 1
+    redis_client.hset(session_key, 'page_count', str(new_count))
+
+    return jsonify({'status': 'accepted', 'page_count': new_count}), 200
+
+
+@app.route('/api/v1/capture/sessions/<session_id>/finish', methods=['POST'])
+@csrf.exempt
+@limiter.limit("200 per hour")
+def capture_finish_session(session_id):
+    """Finalize a session and queue assembly into a document."""
+    if not is_valid_uuid(session_id):
+        return jsonify({'error': 'Invalid session ID'}), 400
+
+    session_key = f"capture:session:{session_id}"
+    session_meta = redis_client.hgetall(session_key)
+    if not session_meta:
+        return jsonify({'error': 'Session not found or expired'}), 404
+    if session_meta.get('status') != 'active':
+        return jsonify({'error': 'Session already finished'}), 409
+
+    page_count = int(session_meta.get('page_count', 0))
+    if page_count == 0:
+        return jsonify({'error': 'No pages captured in session'}), 422
+
+    job_id = str(uuid.uuid4())
+    timestamp = str(time.time())
+
+    output_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+    os.makedirs(output_dir, exist_ok=True)
+
+    update_job_metadata(job_id, {
+        'status': 'PENDING',
+        'created_at': timestamp,
+        'filename': session_meta.get('title', 'capture')[:200],
+        'from': 'capture',
+        'to': session_meta.get('to_format', 'markdown'),
+        'session_id': session_id,
+        'progress': '0',
+    })
+
+    redis_client.hset(session_key, mapping={'status': 'assembling', 'job_id': job_id})
+
+    celery.send_task(
+        'tasks.assemble_capture_session',
+        args=[session_id, job_id],
+        queue='default'
+    )
+
+    return jsonify({
+        'job_id': job_id,
+        'status': 'assembling',
+        'status_url': f'/api/v1/status/{job_id}',
+    }), 202
+
+
+@app.route('/api/v1/capture/sessions/<session_id>/status', methods=['GET'])
+@csrf.exempt
+def capture_session_status(session_id):
+    """Poll the status of a capture session."""
+    if not is_valid_uuid(session_id):
+        return jsonify({'error': 'Invalid session ID'}), 400
+
+    session_key = f"capture:session:{session_id}"
+    session_meta = redis_client.hgetall(session_key)
+    if not session_meta:
+        return jsonify({'error': 'Session not found or expired'}), 404
+
+    response = {
+        'session_id': session_id,
+        'status': session_meta.get('status', 'unknown'),
+        'page_count': int(session_meta.get('page_count', 0)),
+        'title': session_meta.get('title', ''),
+        'to_format': session_meta.get('to_format', 'markdown'),
+    }
+
+    job_id = session_meta.get('job_id')
+    if job_id:
+        response['job_id'] = job_id
+        response['status_url'] = f'/api/v1/status/{job_id}'
+
+    return jsonify(response), 200
 
 
 if __name__ == '__main__':
