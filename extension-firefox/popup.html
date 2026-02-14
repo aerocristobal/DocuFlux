@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocuFlux Capture</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>DocuFlux Capture</h1>
+    <div id="capture-toggle" class="capture-toggle off">&#9679; Capture OFF</div>
+  </header>
+
+  <!-- No Session Section -->
+  <section id="no-session-section" class="section hidden">
+    <label for="session-title">Document Title</label>
+    <input type="text" id="session-title" placeholder="My Captured Document">
+
+    <label for="target-format">Output Format</label>
+    <select id="target-format">
+      <option value="markdown">Markdown</option>
+      <option value="docx">Word (DOCX)</option>
+      <option value="epub3">EPUB</option>
+      <option value="html">HTML</option>
+      <option value="pdf">PDF</option>
+    </select>
+
+    <label class="checkbox-label">
+      <input type="checkbox" id="force-ocr"> Force OCR
+    </label>
+
+    <button id="start-capture-btn" class="btn-primary">&#9654; Start Capture</button>
+  </section>
+
+  <!-- Active Section -->
+  <section id="active-section" class="section hidden">
+    <div class="session-info">
+      <span id="session-title-display" class="session-title"></span>
+      <span id="page-count" class="badge">0 pages</span>
+    </div>
+
+    <button id="capture-page-btn" class="btn-primary">Capture This Page</button>
+
+    <button id="toggle-auto-btn" class="btn-secondary">&#9654; Auto</button>
+
+    <!-- Auto-capture settings -->
+    <div id="auto-settings" class="subsection hidden">
+      <label for="next-selector">Next Button Selector</label>
+      <input type="text" id="next-selector" placeholder=".next-page, #nextBtn">
+      <label for="max-pages">Max Pages</label>
+      <input type="number" id="max-pages" value="100" min="1" max="500">
+    </div>
+
+    <div class="button-row">
+      <button id="pause-btn" class="btn-secondary">&#9646;&#9646; Pause</button>
+      <button id="end-btn" class="btn-success">&#9632; End &amp; Assemble</button>
+    </div>
+  </section>
+
+  <!-- Paused Section -->
+  <section id="paused-section" class="section hidden">
+    <div class="session-info">
+      <span id="paused-title-display" class="session-title"></span>
+      <span id="paused-page-count" class="badge">0 pages</span>
+    </div>
+    <p class="paused-label">Session paused</p>
+    <div class="button-row">
+      <button id="resume-btn" class="btn-primary">&#9654; Resume</button>
+      <button id="end-btn-paused" class="btn-success">&#9632; End &amp; Assemble</button>
+    </div>
+  </section>
+
+  <!-- Assembly Progress Section -->
+  <section id="progress-section" class="section hidden">
+    <p id="progress-label">Assembling document...</p>
+    <div class="progress-bar">
+      <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+    </div>
+    <p id="progress-detail" class="detail"></p>
+  </section>
+
+  <!-- Result Section -->
+  <section id="result-section" class="section hidden">
+    <p class="success-msg">Document ready!</p>
+    <a id="download-link" href="#" class="btn-primary" target="_blank">&#11015; Download</a>
+    <button id="new-capture-btn" class="btn-secondary">New Capture</button>
+  </section>
+
+  <!-- Status Messages -->
+  <div id="status-msg" class="status-msg hidden"></div>
+
+  <!-- Config Section (always visible, collapsed) -->
+  <section id="config-section" class="section config-section">
+    <details>
+      <summary>&#9881; Server: <span id="server-url-display">localhost:5000</span></summary>
+      <label for="server-url">Server URL</label>
+      <input type="url" id="server-url" placeholder="http://localhost:5000">
+      <button id="save-config" class="btn-secondary">Save</button>
+    </details>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

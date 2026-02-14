@@ -1,0 +1,160 @@
+/**
+ * DocuFlux Capture - Background Service Worker
+ *
+ * Manages session state in chrome.storage.local and communicates with
+ * the DocuFlux REST API on behalf of the popup and content scripts.
+ */
+
+const DEFAULT_SERVER_URL = 'http://localhost:5000';
+
+// ─── API Client ──────────────────────────────────────────────────────────────
+
+async function getServerUrl() {
+  const { serverUrl } = await chrome.storage.sync.get({ serverUrl: DEFAULT_SERVER_URL });
+  return serverUrl.replace(/\/$/, '');
+}
+
+async function apiPost(path, body) {
+  const base = await getServerUrl();
+  const { clientId } = await chrome.storage.local.get({ clientId: generateId() });
+  await chrome.storage.local.set({ clientId });
+
+  const response = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Client-ID': clientId,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function apiGet(path) {
+  const base = await getServerUrl();
+  const response = await fetch(`${base}${path}`);
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+// ─── Session Management ───────────────────────────────────────────────────────
+
+async function createSession(title, toFormat, sourceUrl) {
+  const data = await apiPost('/api/v1/capture/sessions', { title, to_format: toFormat, source_url: sourceUrl });
+  const session = { sessionId: data.session_id, title, toFormat, pageCount: 0, status: 'active' };
+  await chrome.storage.local.set({ activeSession: session });
+  return session;
+}
+
+async function submitPage(pageData) {
+  const { activeSession } = await chrome.storage.local.get('activeSession');
+  if (!activeSession) throw new Error('No active session');
+
+  const result = await apiPost(
+    `/api/v1/capture/sessions/${activeSession.sessionId}/pages`,
+    pageData
+  );
+  activeSession.pageCount = result.page_count;
+  await chrome.storage.local.set({ activeSession });
+  return result;
+}
+
+async function finishSession() {
+  const { activeSession } = await chrome.storage.local.get('activeSession');
+  if (!activeSession) throw new Error('No active session');
+
+  const result = await apiPost(`/api/v1/capture/sessions/${activeSession.sessionId}/finish`, {});
+  activeSession.status = 'assembling';
+  activeSession.jobId = result.job_id;
+  await chrome.storage.local.set({ activeSession });
+  return result;
+}
+
+async function pollJobStatus(jobId) {
+  return apiGet(`/api/v1/status/${jobId}`);
+}
+
+async function clearSession() {
+  await chrome.storage.local.remove('activeSession');
+}
+
+// ─── Auto-capture coordination ────────────────────────────────────────────────
+
+function triggerContentCapture(tabId) {
+  // Use tabs.sendMessage (MV2-compatible); content.js handles CAPTURE_PAGE.
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_PAGE' }, response => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      if (response?.error) return reject(new Error(response.error));
+      resolve(response);
+    });
+  });
+}
+
+// ─── Message Handler ──────────────────────────────────────────────────────────
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  handleMessage(message).then(sendResponse).catch(err => sendResponse({ error: err.message }));
+  return true; // Keep channel open for async response
+});
+
+async function handleMessage(message) {
+  switch (message.type) {
+    case 'CREATE_SESSION':
+      return createSession(message.title, message.toFormat, message.sourceUrl);
+
+    case 'SUBMIT_PAGE':
+      return submitPage(message.pageData);
+
+    case 'FINISH_SESSION':
+      return finishSession();
+
+    case 'POLL_STATUS': {
+      const { activeSession } = await chrome.storage.local.get('activeSession');
+      if (!activeSession?.jobId) throw new Error('No job in progress');
+      return pollJobStatus(activeSession.jobId);
+    }
+
+    case 'GET_SESSION': {
+      const { activeSession } = await chrome.storage.local.get('activeSession');
+      return activeSession || null;
+    }
+
+    case 'CLEAR_SESSION':
+      await clearSession();
+      return { ok: true };
+
+    case 'GET_CONFIG': {
+      const { serverUrl } = await chrome.storage.sync.get({ serverUrl: DEFAULT_SERVER_URL });
+      return { serverUrl };
+    }
+
+    case 'SET_CONFIG':
+      await chrome.storage.sync.set({ serverUrl: message.serverUrl });
+      return { ok: true };
+
+    case 'TRIGGER_CAPTURE': {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tabs[0]) throw new Error('No active tab');
+      await triggerContentCapture(tabs[0].id);
+      return { ok: true };
+    }
+
+    default:
+      throw new Error(`Unknown message type: ${message.type}`);
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function generateId() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}

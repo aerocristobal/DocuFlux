@@ -1,0 +1,250 @@
+/* DocuFlux Capture - Popup Styles */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  width: 320px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  color: #1a1a2e;
+  background: #f8f9fa;
+}
+
+header {
+  background: #16213e;
+  color: #e0e0e0;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+header h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.capture-toggle {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.capture-toggle.off  { background: #3a3a5c; color: #9a9ab0; }
+.capture-toggle.on   { background: #1b7340; color: #d3f9d8; }
+.capture-toggle.paused { background: #7d4e00; color: #ffe8a1; }
+
+.section {
+  padding: 12px 14px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.section:last-of-type {
+  border-bottom: none;
+}
+
+label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+  margin-top: 8px;
+}
+
+label:first-child {
+  margin-top: 0;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="number"],
+select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #fff;
+  color: #1a1a2e;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input:focus, select:focus {
+  border-color: #4361ee;
+  box-shadow: 0 0 0 2px rgba(67,97,238,0.15);
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  text-transform: none;
+  font-size: 13px;
+  font-weight: 400;
+  color: #1a1a2e;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
+/* Buttons */
+.btn-primary, .btn-secondary, .btn-success, .btn-danger {
+  display: inline-block;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+  text-decoration: none;
+  text-align: center;
+}
+
+.btn-primary { background: #4361ee; color: #fff; }
+.btn-secondary { background: #e9ecef; color: #495057; }
+.btn-success { background: #2dc653; color: #fff; }
+.btn-danger { background: #e63946; color: #fff; }
+
+.btn-primary:hover { background: #3a56d4; }
+.btn-secondary:hover { background: #dee2e6; }
+.btn-success:hover { background: #25b048; }
+.btn-danger:hover { background: #c1121f; }
+
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+button { width: 100%; margin-top: 8px; }
+button.btn-secondary:not(:first-child) { margin-top: 6px; }
+
+.button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.button-row button { margin-top: 0; }
+
+/* Session info */
+.session-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-title {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  background: #4361ee;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Subsection */
+.subsection {
+  background: #f1f3f5;
+  border-radius: 5px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+/* Progress bar */
+.progress-bar {
+  background: #e9ecef;
+  border-radius: 4px;
+  height: 8px;
+  overflow: hidden;
+  margin: 10px 0 4px;
+}
+
+.progress-fill {
+  background: #4361ee;
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.detail {
+  font-size: 11px;
+  color: #6c757d;
+}
+
+/* Status message */
+.status-msg {
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-info { background: #e7f5ff; color: #1864ab; }
+.status-success { background: #ebfbee; color: #1b7340; }
+.status-error { background: #fff5f5; color: #c92a2a; }
+
+.success-msg {
+  font-weight: 600;
+  color: #1b7340;
+  margin-bottom: 8px;
+}
+
+.hidden { display: none !important; }
+
+/* Paused state label */
+.paused-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #7d4e00;
+  background: #fff3bf;
+  padding: 3px 8px;
+  border-radius: 4px;
+  margin-top: 6px;
+  display: inline-block;
+}
+
+/* Config section collapsible */
+.config-section {
+  background: #f1f3f5;
+}
+
+.config-section details > summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6c757d;
+  list-style: none;
+  user-select: none;
+}
+
+.config-section details > summary::-webkit-details-marker { display: none; }
+
+.config-section details[open] > summary {
+  margin-bottom: 6px;
+}
