@@ -100,7 +100,9 @@ function bg(type, data = {}, retries = 2) {
 }
 
 async function sendToContent(type, data = {}) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs[0];
+  if (!tab) throw new Error('No active tab found');
   return new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(tab.id, { type, ...data }, response => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
@@ -157,13 +159,13 @@ els.saveConfig.addEventListener('click', async () => {
 });
 
 els.startCaptureBtn.addEventListener('click', async () => {
-  const title = els.sessionTitle.value.trim() || 'Captured Document';
-  const toFormat = els.targetFormat.value;
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
   try {
     els.startCaptureBtn.disabled = true;
-    const session = await bg('CREATE_SESSION', { title, toFormat, sourceUrl: tab.url });
+    const title = els.sessionTitle.value.trim() || 'Captured Document';
+    const toFormat = els.targetFormat.value;
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const sourceUrl = tabs[0]?.url || '';
+    const session = await bg('CREATE_SESSION', { title, toFormat, sourceUrl });
     showActiveSection(session);
     showStatus('Session started', 'success');
   } catch (e) {
