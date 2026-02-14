@@ -70,7 +70,9 @@ services:
     restart: unless-stopped
 
   worker:
-    build: ./worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
     volumes:
       - ./data:/app/data
       - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
@@ -122,7 +124,9 @@ services:
     restart: unless-stopped
 
   beat:
-    build: ./worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
     command: celery -A tasks beat --loglevel=info
     volumes:
       - ./data:/app/data

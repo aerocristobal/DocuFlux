@@ -51,12 +51,13 @@ ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 ENV HF_DATASETS_CACHE=/app/.cache/huggingface/datasets
 
 # Copy appropriate requirements file based on build mode
-COPY requirements-true.txt requirements-build.txt
+COPY worker/requirements-true.txt requirements-build.txt
 RUN pip3 install --upgrade pip setuptools
 RUN pip3 install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu118 -r requirements-build.txt
 
-# Copy worker code
-COPY . .
+# Copy shared root-level modules first, then worker code
+COPY config.py .
+COPY worker/ .
 
 # Conditional SLM model download (only for GPU builds)
 # TEMPORARILY DISABLED: Model download causing build timeouts
