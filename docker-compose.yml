@@ -25,7 +25,9 @@ services:
     restart: unless-stopped
 
   web:
-    build: ./web
+    build:
+      context: .
+      dockerfile: web/Dockerfile
     volumes:
       - ./data:/app/data
       - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS

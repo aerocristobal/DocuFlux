@@ -5,10 +5,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl libmagic1 
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY web/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copy shared root-level modules first, then web app
+COPY config.py .
+COPY web/ .
 
 # Epic 21.8: Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser && \
