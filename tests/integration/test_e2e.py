@@ -32,7 +32,7 @@ for name, mock in _web_mocks.items():
     if name not in sys.modules:
         sys.modules[name] = mock
 
-sys.modules['secrets_manager'].validate_secrets_at_startup.return_value = {
+sys.modules['secrets_manager'].load_all_secrets.return_value = {
     'SECRET_KEY': 'test-secret-key-for-integration'
 }
 sys.modules['secrets_manager'].load_secret.return_value = None
@@ -45,7 +45,7 @@ _mock_socketio_instance = MagicMock()
 _mock_socketio_class.return_value = _mock_socketio_instance
 sys.modules['flask_socketio'].SocketIO = _mock_socketio_class
 
-import app as web_app
+import web.app as web_app
 
 
 # ============================================================

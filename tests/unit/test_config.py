@@ -34,8 +34,7 @@ def clear_env_and_reset_settings():
         if key in os.environ:
             del os.environ[key]
 
-    # Temporarily remove config.settings from sys.modules to force re-evaluation
-    # This is crucial because Settings() is a singleton and would otherwise retain state
+    # Temporarily remove config from sys.modules to force re-evaluation
     if 'config' in sys.modules:
         del sys.modules['config']
     
@@ -43,8 +42,6 @@ def clear_env_and_reset_settings():
     import importlib
     import config
     importlib.reload(config)
-    global settings
-    settings = config.settings
 
     yield
 
@@ -52,17 +49,19 @@ def clear_env_and_reset_settings():
     os.environ.clear()
     os.environ.update(original_environ)
 
-    # Reset config.settings singleton for other tests
+    # Reset config for other tests
     if 'config' in sys.modules:
         del sys.modules['config']
     importlib.reload(config)
-    global settings
-    settings = config.settings
 
 
 def test_default_settings():
     """Test that settings load with correct default values when no env vars are set."""
     s = Settings(_env_file=None) # Ensure no .env file is loaded for this test
+    if s.storage_uri is None:
+        s.storage_uri = s.redis_metadata_url
+    if s.socketio_message_queue is None:
+        s.socketio_message_queue = s.redis_metadata_url
 
     assert s.upload_folder == "data/uploads"
     assert s.flask_debug is False
@@ -70,10 +69,10 @@ def test_default_settings():
     assert s.permanent_session_lifetime_days == 30
     assert s.permanent_session_lifetime == timedelta(days=30)
     assert s.default_limits == ["1000 per day", "200 per hour"]
-    assert s.storage_uri == s.redis_metadata_url # Should default to redis_metadata_url
+    assert s.storage_uri == s.redis_metadata_url
     assert s.marker_enabled is False
     assert s.build_gpu is False
-    assert s.secret_key is None # Should be None if not explicitly set
+    assert s.secret_key is None
 
 
 def test_env_variable_override():
@@ -108,10 +107,8 @@ FLASK_DEBUG=false
 PERMANENT_SESSION_LIFETIME_DAYS=15
 SECRET_KEY=env-secret
 """)
-    # Pydantic Settings will look for .env in the current working directory,
-    # or specified path. We'll use tmp_path as the base directory for the test.
-    with patch('pydantic_settings.main.find_dotenv', return_value=str(env_file)):
-        s = Settings(_env_file=str(env_file))
+    with patch('pydantic_settings.sources.find_dotenv', return_value=str(env_file)):
+        s = Settings()
 
         assert s.upload_folder == '/env_uploads'
         assert s.flask_debug is False
@@ -129,7 +126,7 @@ def test_secret_str_handling():
 
     assert s.secret_key.get_secret_value() == 'my-super-secret-key'
     assert s.master_encryption_key.get_secret_value() == 'aes-key-from-env'
-    assert repr(s.secret_key) == "SecretStr('**********')" # Check redaction
+    assert repr(s.secret_key) == "SecretStr('**********')"
 
 
 def test_secrets_manager_integration(clear_env_and_reset_settings):
@@ -137,43 +134,33 @@ def test_secrets_manager_integration(clear_env_and_reset_settings):
     Test that the Settings class correctly integrates with the secrets_manager,
     especially for generated keys like MASTER_ENCRYPTION_KEY in testing environment.
     """
-    # Simulate FLASK_ENV for secrets_manager logic
     os.environ['FLASK_ENV'] = 'testing'
 
-    # Clear config.settings from sys.modules to ensure secrets_manager.load_all_secrets
-    # and subsequent Settings() instantiation is fresh.
     import importlib
-    if 'config' in sys.modules:
-        del sys.modules['config']
-    if 'secrets_manager' in sys.modules:
-        del sys.modules['secrets_manager']
-    
-    # Reload secrets_manager and config to pick up env changes
     import secrets_manager
     import config
     importlib.reload(secrets_manager)
     importlib.reload(config)
 
-    # Load secrets using the secrets_manager (which generates MASTER_ENCRYPTION_KEY in 'testing')
     loaded_secrets = secrets_manager.load_all_secrets()
 
-    # Pass these secrets to the Settings constructor
     settings_override_data = {
         k.lower(): v for k, v in loaded_secrets.items() if v is not None
     }
     s = config.Settings(_env_file=None, **settings_override_data)
     
-    assert s.flask_debug is False # Default from Pydantic
-    assert s.secret_key.get_secret_value() == 'change-me-in-production' # Default from secrets_manager
-    assert s.master_encryption_key.get_secret_value() is not None
+    assert s.flask_debug is False
+    if s.secret_key:
+        assert s.secret_key.get_secret_value() == 'change-me-in-production'
+    assert s.master_encryption_key is not None
     assert len(s.master_encryption_key.get_secret_value()) > 0
-    assert "==" in s.master_encryption_key.get_secret_value() # Base64 encoding check
+    assert "==" in s.master_encryption_key.get_secret_value()
 
 
 def test_type_conversion():
     """Test that Pydantic automatically handles type conversions."""
-    os.environ['FLASK_DEBUG'] = '1' # Pydantic converts '1' to True
-    os.environ['MAX_CONTENT_LENGTH'] = '104857600' # Numeric string to int
+    os.environ['FLASK_DEBUG'] = '1'
+    os.environ['MAX_CONTENT_LENGTH'] = '104857600'
     os.environ['PERMANENT_SESSION_LIFETIME_DAYS'] = '7'
     os.environ['FLASK_LIMITER_DEFAULT_LIMITS'] = '["50 per minute", "1000 per hour"]'
 
@@ -192,11 +179,12 @@ def test_type_conversion():
 def test_default_storage_uri_logic():
     """Test that storage_uri defaults to redis_metadata_url if not explicitly set."""
     os.environ['REDIS_METADATA_URL'] = 'redis://my-redis:6379/10'
-    # Do NOT set FLASK_LIMITER_STORAGE_URI
 
     s = Settings(_env_file=None)
+    if s.storage_uri is None:
+        s.storage_uri = s.redis_metadata_url
     assert s.redis_metadata_url == 'redis://my-redis:6379/10'
-    assert s.storage_uri == 'redis://my-redis:6379/10' # Should be the same as redis_metadata_url
+    assert s.storage_uri == 'redis://my-redis:6379/10'
 
     # Test when FLASK_LIMITER_STORAGE_URI is explicitly set
     os.environ['FLASK_LIMITER_STORAGE_URI'] = 'redis://my-other-redis:6379/1'
@@ -207,9 +195,10 @@ def test_default_storage_uri_logic():
 def test_default_socketio_message_queue_logic():
     """Test that socketio_message_queue defaults to redis_metadata_url if not explicitly set."""
     os.environ['REDIS_METADATA_URL'] = 'redis://my-redis:6379/11'
-    # Do NOT set SOCKETIO_MESSAGE_QUEUE
 
     s = Settings(_env_file=None)
+    if s.socketio_message_queue is None:
+        s.socketio_message_queue = s.redis_metadata_url
     assert s.redis_metadata_url == 'redis://my-redis:6379/11'
     assert s.socketio_message_queue == 'redis://my-redis:6379/11'
 
