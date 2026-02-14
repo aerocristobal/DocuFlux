@@ -14,8 +14,9 @@ cryptography==46.0.5
 # Marker with full GPU support (includes PyTorch, torchvision, torchaudio with CUDA)
 # Note: marker-pdf[full] automatically installs compatible versions of all ML dependencies
 # Do NOT pin torch/transformers/torchvision/torchaudio - let marker-pdf manage them
-marker-pdf[full]==1.10.0
+marker-pdf[full]==1.10.2
 
 # Epic 26: SLM (Small Language Model) support with CUDA
 llama-cpp-python[cuda]
-Pillow==12.1.1
+# Pillow is intentionally unpinned: marker-pdf requires Pillow<11,>=10.1
+# CVE-2026-25990 (Pillow>=12.1.1) is unresolvable until marker-pdf lifts this constraint
