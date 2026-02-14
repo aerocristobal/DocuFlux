@@ -1,1 +1,5 @@
-read plan.md to understand the current state and status of the application. plan tasks by adding epics and user stories to plan.md using BDD formatted user stories. Update plan.md as tasks are completed. Include context necessary for future gemini session to understand current state and resume work
+Use 'bd' for trask tracking
+Use Behavior Drive Design formatted user stories for planning work.
+Validate against the definition of done to confirm a planned work is complete.
+Conduct End-to-End test to validate that everything still works.
+
