@@ -49,6 +49,7 @@ except ValueError as e:
 
 UPLOAD_FOLDER = app_settings.upload_folder
 OUTPUT_FOLDER = app_settings.output_folder
+MCP_SERVER_URL = app_settings.mcp_server_url
 
 celery = Celery(
     'tasks',
@@ -56,7 +57,29 @@ celery = Celery(
     backend=app_settings.celery_result_backend
 )
 
-# ... (rest of the file is the same)
+# Redis metadata client (DB 1)
+redis_client = redis.Redis.from_url(
+    app_settings.redis_metadata_url,
+    max_connections=20,
+    decode_responses=True
+)
+
+# WebSocket emitter (standalone, no Flask app)
+socketio = SocketIO(message_queue=app_settings.socketio_message_queue)
+
+
+def is_valid_uuid(val):
+    try:
+        import uuid
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, ImportError):
+        return False
+
+
+def update_job_metadata(job_id, data):
+    """Update job metadata hash in Redis."""
+    redis_client.hset(f"job:{job_id}", mapping=data)
 
 
 def call_mcp_server(action, args):
