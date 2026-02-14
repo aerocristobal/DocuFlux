@@ -40,6 +40,7 @@ const els = {
   progressDetail: $('progress-detail'),
   downloadLink: $('download-link'),
   newCaptureBtn: $('new-capture-btn'),
+  cancelAssemblyBtn: $('cancel-assembly-btn'),
   statusMsg: $('status-msg'),
 };
 
@@ -266,6 +267,13 @@ els.newCaptureBtn.addEventListener('click', async () => {
   showSection('no-session-section');
 });
 
+els.cancelAssemblyBtn.addEventListener('click', async () => {
+  clearInterval(pollInterval);
+  await bg('CLEAR_SESSION');
+  showSection('no-session-section');
+  showStatus('Assembly cancelled', 'info');
+});
+
 // Listen for background events
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'AUTO_CAPTURE_DONE') {
@@ -280,26 +288,31 @@ chrome.runtime.onMessage.addListener((message) => {
 
 // ─── Polling ──────────────────────────────────────────────────────────────────
 
+let pollErrorCount = 0;
+const POLL_ERROR_LIMIT = 5;
+
 function startPolling(jobId) {
   clearInterval(pollInterval);
+  pollErrorCount = 0;
   pollInterval = setInterval(() => pollJob(jobId), 2000);
 }
 
 async function pollJob(jobId) {
   try {
     const status = await bg('POLL_STATUS');
+    pollErrorCount = 0;
     const pct = parseInt(status.progress, 10) || 0;
     setProgress(pct, `Status: ${status.status}`);
 
-    if (status.status === 'success') {
+    if (status.status === 'SUCCESS' || status.status === 'success') {
       clearInterval(pollInterval);
-      const { serverUrl } = await bg('GET_CONFIG');
-      const url = `${serverUrl.replace(/\/$/, '')}${status.download_url}`;
+      const config = await bg('GET_CONFIG');
+      const url = `${config.serverUrl.replace(/\/$/, '')}${status.download_url}`;
       els.downloadLink.href = url;
       showSection('result-section');
-    } else if (status.status === 'failure') {
+    } else if (status.status === 'FAILURE' || status.status === 'failure') {
       clearInterval(pollInterval);
-      showStatus(`Assembly failed: ${status.error || 'Unknown error'}`, 'error');
+      showStatus(`Assembly failed: ${status.error || status.result || 'Unknown error'}`, 'error');
       const session = await bg('GET_SESSION');
       if (session?.status === 'paused') {
         showPausedSection(session);
@@ -310,7 +323,13 @@ async function pollJob(jobId) {
       }
     }
   } catch (e) {
-    console.warn('[DocuFlux] Poll error:', e.message);
+    pollErrorCount++;
+    console.warn(`[DocuFlux] Poll error (${pollErrorCount}/${POLL_ERROR_LIMIT}):`, e.message);
+    if (pollErrorCount >= POLL_ERROR_LIMIT) {
+      clearInterval(pollInterval);
+      showStatus('Assembly status unavailable — job may have failed', 'error');
+      setProgress(0, 'Could not reach server');
+    }
   }
 }
 
