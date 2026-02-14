@@ -58,6 +58,10 @@
     // Basic HTML-to-Markdown conversion
     let html = el.innerHTML || '';
 
+    // Strip script and style blocks (including their content) before tag processing
+    html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+    html = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+
     // Headings
     html = html.replace(/<h1[^>]*>(.*?)<\/h1>/gis, '\n# $1\n');
     html = html.replace(/<h2[^>]*>(.*?)<\/h2>/gis, '\n## $1\n');
@@ -145,6 +149,10 @@
     const text = elementToMarkdown(element);
     const images = await captureImages(element);
 
+    // If content is too short (canvas-rendered pages like Kindle Cloud Reader),
+    // signal the background to take a tab screenshot for OCR.
+    const needsScreenshot = text.trim().length < 50;
+
     const pageData = {
       url: location.href,
       title: document.title,
@@ -152,6 +160,7 @@
       images,
       extraction_method: method,
       page_hint: getPageHint(),
+      needs_screenshot: needsScreenshot,
     };
 
     lastCapturedContent = text;

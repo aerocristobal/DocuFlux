@@ -80,8 +80,19 @@ async function apiGet(path) {
 
 // ─── Session Management ───────────────────────────────────────────────────────
 
-async function createSession(title, toFormat, sourceUrl) {
-  const data = await apiPost('/api/v1/capture/sessions', { title, to_format: toFormat, source_url: sourceUrl });
+function captureScreenshot() {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.captureVisibleTab(null, { format: 'png' }, dataUrl => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      resolve(dataUrl);
+    });
+  });
+}
+
+async function createSession(title, toFormat, sourceUrl, forceOcr) {
+  const data = await apiPost('/api/v1/capture/sessions', {
+    title, to_format: toFormat, source_url: sourceUrl, force_ocr: forceOcr || false,
+  });
   const session = { sessionId: data.session_id, title, toFormat, pageCount: 0, status: 'active' };
   await storageSet({ activeSession: session });
   return session;
@@ -91,6 +102,21 @@ async function submitPage(pageData) {
   const result = await storageGet('activeSession');
   const activeSession = result.activeSession;
   if (!activeSession) throw new Error('No active session');
+
+  // If content script flagged the page as needing a screenshot (canvas-rendered,
+  // e.g. Kindle Cloud Reader), capture the visible tab and attach it as an image.
+  if (pageData.needs_screenshot) {
+    try {
+      const screenshotDataUrl = await captureScreenshot();
+      const filename = `screenshot_${Date.now()}.png`;
+      pageData.images = [
+        { filename, b64: screenshotDataUrl, alt: '', is_screenshot: true },
+        ...(pageData.images || []),
+      ];
+    } catch (e) {
+      console.warn('[DocuFlux] Tab screenshot failed:', e.message);
+    }
+  }
 
   const apiResult = await apiPost(
     `/api/v1/capture/sessions/${activeSession.sessionId}/pages`,
@@ -146,7 +172,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function handleMessage(message) {
   switch (message.type) {
     case 'CREATE_SESSION':
-      return createSession(message.title, message.toFormat, message.sourceUrl);
+      return createSession(message.title, message.toFormat, message.sourceUrl, message.forceOcr);
 
     case 'SUBMIT_PAGE':
       return submitPage(message.pageData);

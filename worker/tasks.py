@@ -1159,40 +1159,103 @@ def assemble_capture_session(session_id, job_id):
         images_dir = os.path.join(output_dir, 'images')
         os.makedirs(images_dir, exist_ok=True)
 
-        all_markdown_parts = []
-        image_count = 0
+        safe_title = secure_filename(title) or f"capture_{job_id}"
+        force_ocr = session_meta.get('force_ocr', 'false').lower() == 'true'
 
+        # Detect whether all pages have screenshots (canvas-rendered, e.g. Kindle)
+        screenshot_images_b64 = []
         for page in pages:
-            page_text = page.get('text', '')
-            page_images = page.get('images', [])
+            for img_info in page.get('images', []):
+                if img_info.get('is_screenshot') and img_info.get('b64'):
+                    screenshot_images_b64.append(img_info['b64'])
+                    break
 
-            for img_info in page_images:
-                img_filename = img_info.get('filename', f'image_{image_count}.png')
-                img_b64 = img_info.get('b64', '')
-                img_alt = img_info.get('alt', '')
+        if force_ocr and screenshot_images_b64:
+            # OCR path: combine screenshots into a PDF and run through Marker AI
+            import io as io_module
+            from PIL import Image as PILImage
 
-                if img_b64:
-                    try:
-                        if ',' in img_b64:
-                            img_b64 = img_b64.split(',', 1)[1]
-                        img_data = base64.b64decode(img_b64)
-                        safe_img_filename = secure_filename(img_filename) or f"image_{image_count}.png"
-                        img_save_path = os.path.join(images_dir, safe_img_filename)
-                        with open(img_save_path, 'wb') as f:
-                            f.write(img_data)
-                        page_text = page_text.replace(f"({img_filename})", f"(images/{safe_img_filename})")
-                        image_count += 1
-                    except Exception as e:
-                        logging.warning(f"Failed to save image {img_filename}: {e}")
+            logging.info(f"OCR path: assembling {len(screenshot_images_b64)} screenshots via Marker for job {job_id}")
+            update_job_metadata(job_id, {'progress': '30'})
 
-            all_markdown_parts.append(page_text)
+            pil_images = []
+            for img_b64 in screenshot_images_b64:
+                try:
+                    if ',' in img_b64:
+                        img_b64 = img_b64.split(',', 1)[1]
+                    pil_img = PILImage.open(io_module.BytesIO(base64.b64decode(img_b64))).convert('RGB')
+                    pil_images.append(pil_img)
+                except Exception as e:
+                    logging.warning(f"Failed to decode screenshot: {e}")
+
+            if not pil_images:
+                raise ValueError("No valid screenshot images found for OCR")
+
+            # Build an in-memory PDF from the screenshots
+            pdf_buf = io_module.BytesIO()
+            pil_images[0].save(pdf_buf, format='PDF', save_all=True, append_images=pil_images[1:], resolution=150)
+            pdf_buf.seek(0)
+
+            update_job_metadata(job_id, {'progress': '45'})
+
+            # Run Marker on the screenshots-as-PDF
+            artifacts = get_model_dict()
+            from marker.converters.pdf import PdfConverter
+            from marker.output import text_from_rendered
+
+            converter = PdfConverter(artifact_dict=artifacts, config={'force_ocr': True})
+            rendered = converter(pdf_buf)
+
+            update_job_metadata(job_id, {'progress': '80'})
+
+            markdown_text, _, marker_images = text_from_rendered(rendered)
+
+            image_count = 0
+            for img_name, img_obj in (marker_images or {}).items():
+                safe_img_name = secure_filename(img_name) or f"image_{image_count}.png"
+                img_obj.save(os.path.join(images_dir, safe_img_name))
+                markdown_text = markdown_text.replace(f"({img_name})", f"(images/{safe_img_name})")
+                image_count += 1
+
+            front_matter = f"---\ntitle: {title}\nsource: {source_url}\npages: {len(pages)}\n---\n\n"
+            merged_content = front_matter + markdown_text
+
+        else:
+            # Text assembly path: merge DOM-extracted markdown from each page
+            all_markdown_parts = []
+            image_count = 0
+
+            for page in pages:
+                page_text = page.get('text', '')
+                page_images = page.get('images', [])
+
+                for img_info in page_images:
+                    if img_info.get('is_screenshot'):
+                        continue  # Skip screenshots in text path
+                    img_filename = img_info.get('filename', f'image_{image_count}.png')
+                    img_b64 = img_info.get('b64', '')
+
+                    if img_b64:
+                        try:
+                            if ',' in img_b64:
+                                img_b64 = img_b64.split(',', 1)[1]
+                            img_data = base64.b64decode(img_b64)
+                            safe_img_filename = secure_filename(img_filename) or f"image_{image_count}.png"
+                            img_save_path = os.path.join(images_dir, safe_img_filename)
+                            with open(img_save_path, 'wb') as f:
+                                f.write(img_data)
+                            page_text = page_text.replace(f"({img_filename})", f"(images/{safe_img_filename})")
+                            image_count += 1
+                        except Exception as e:
+                            logging.warning(f"Failed to save image {img_filename}: {e}")
+
+                all_markdown_parts.append(page_text)
+
+            front_matter = f"---\ntitle: {title}\nsource: {source_url}\npages: {len(pages)}\n---\n\n"
+            merged_content = front_matter + "\n\n---\n\n".join(all_markdown_parts)
 
         update_job_metadata(job_id, {'progress': '70'})
 
-        front_matter = f"---\ntitle: {title}\nsource: {source_url}\npages: {len(pages)}\n---\n\n"
-        merged_content = front_matter + "\n\n---\n\n".join(all_markdown_parts)
-
-        safe_title = secure_filename(title) or f"capture_{job_id}"
         output_filename = f"{safe_title}.md"
         output_path = os.path.join(output_dir, output_filename)
         with open(output_path, 'w', encoding='utf-8') as f:

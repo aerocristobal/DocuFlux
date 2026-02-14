@@ -174,7 +174,7 @@ els.startCaptureBtn.addEventListener('click', async () => {
     const toFormat = els.targetFormat.value;
     const tab = await getActiveTab().catch(() => null);
     const sourceUrl = tab?.url || '';
-    const session = await bg('CREATE_SESSION', { title, toFormat, sourceUrl });
+    const session = await bg('CREATE_SESSION', { title, toFormat, sourceUrl, forceOcr: els.forceOcr.checked });
     showActiveSection(session);
     showStatus('Session started', 'success');
   } catch (e) {
