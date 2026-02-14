@@ -80,10 +80,19 @@ function setProgress(pct, detail = '') {
 
 // ─── Background Communication ─────────────────────────────────────────────────
 
-function bg(type, data = {}) {
+function bg(type, data = {}, retries = 2) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type, ...data }, response => {
-      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      const err = chrome.runtime.lastError;
+      if (err) {
+        // Background event page may not be ready yet — retry once
+        if (retries > 0 && err.message && err.message.includes('Receiving end does not exist')) {
+          setTimeout(() => bg(type, data, retries - 1).then(resolve).catch(reject), 150);
+        } else {
+          reject(new Error(err.message));
+        }
+        return;
+      }
       if (response?.error) return reject(new Error(response.error));
       resolve(response);
     });
@@ -291,4 +300,7 @@ async function pollJob(jobId) {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-init().catch(e => showStatus(e.message, 'error'));
+init().catch(e => {
+  showStatus(e.message, 'error');
+  showSection('no-session-section'); // fallback so popup is never blank
+});
