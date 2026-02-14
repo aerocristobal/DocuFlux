@@ -1162,24 +1162,29 @@ def assemble_capture_session(session_id, job_id):
         safe_title = secure_filename(title) or f"capture_{job_id}"
         force_ocr = session_meta.get('force_ocr', 'false').lower() == 'true'
 
-        # Detect whether all pages have screenshots (canvas-rendered, e.g. Kindle)
-        screenshot_images_b64 = []
+        # Collect one image per page (prefer screenshots, fall back to first image).
+        # Kindle Cloud Reader renders pages as blob-URL <img> elements — these are the
+        # actual page content and are already captured as base64 by the content script.
+        ocr_images_b64 = []
         for page in pages:
-            for img_info in page.get('images', []):
-                if img_info.get('is_screenshot') and img_info.get('b64'):
-                    screenshot_images_b64.append(img_info['b64'])
-                    break
+            page_imgs = page.get('images', [])
+            # Prefer screenshot if present, otherwise first image with b64 data
+            chosen = next((i for i in page_imgs if i.get('is_screenshot') and i.get('b64')), None)
+            if chosen is None:
+                chosen = next((i for i in page_imgs if i.get('b64')), None)
+            if chosen:
+                ocr_images_b64.append(chosen['b64'])
 
-        if force_ocr and screenshot_images_b64:
+        if force_ocr and ocr_images_b64:
             # OCR path: combine screenshots into a PDF and run through Marker AI
             import io as io_module
             from PIL import Image as PILImage
 
-            logging.info(f"OCR path: assembling {len(screenshot_images_b64)} screenshots via Marker for job {job_id}")
+            logging.info(f"OCR path: assembling {len(ocr_images_b64)} page images via Marker for job {job_id}")
             update_job_metadata(job_id, {'progress': '30'})
 
             pil_images = []
-            for img_b64 in screenshot_images_b64:
+            for img_b64 in ocr_images_b64:
                 try:
                     if ',' in img_b64:
                         img_b64 = img_b64.split(',', 1)[1]
@@ -1189,7 +1194,7 @@ def assemble_capture_session(session_id, job_id):
                     logging.warning(f"Failed to decode screenshot: {e}")
 
             if not pil_images:
-                raise ValueError("No valid screenshot images found for OCR")
+                raise ValueError("No valid page images found for OCR")
 
             # Build an in-memory PDF from the screenshots
             pdf_buf = io_module.BytesIO()
@@ -1249,6 +1254,10 @@ def assemble_capture_session(session_id, job_id):
                         except Exception as e:
                             logging.warning(f"Failed to save image {img_filename}: {e}")
 
+                # Strip blob: and absolute URL image references — they won't resolve
+                # in the downloaded file (Kindle renders pages as blob: img elements)
+                import re as re_module
+                page_text = re_module.sub(r'!\[[^\]]*\]\((blob:[^)]+|https?://[^)]+)\)', '', page_text)
                 all_markdown_parts.append(page_text)
 
             front_matter = f"---\ntitle: {title}\nsource: {source_url}\npages: {len(pages)}\n---\n\n"
