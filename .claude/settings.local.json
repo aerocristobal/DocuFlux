@@ -83,7 +83,16 @@
       "Bash(echo:*)",
       "Bash(pip show:*)",
       "Bash(sudo journalctl:*)",
-      "Bash(docker events:*)"
+      "Bash(docker events:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(FLASK_ENV=testing pytest:*)",
+      "Bash(FLASK_ENV=testing CELERY_SIGNING_KEY= pytest:*)",
+      "Bash(npx --yes web-ext lint:*)",
+      "Bash(npx web-ext lint:*)",
+      "Bash(bd list:*)",
+      "Bash(bd create:*)",
+      "Bash(bd update:*)",
+      "Bash(bd close:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
