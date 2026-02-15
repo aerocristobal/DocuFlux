@@ -15,6 +15,5 @@ prometheus-client==0.19.0
 # This significantly reduces image size from ~15GB to <3GB
 
 llama-cpp-python
-# Pillow is intentionally unpinned in CPU mode (no marker-pdf installed)
-# Pin when CVE-2026-25990 fix becomes compatible: Pillow>=12.1.1
+Pillow>=12.1.1  # CVE-2026-25990: out-of-bounds write in PSD image loading
 
