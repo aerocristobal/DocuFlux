@@ -119,6 +119,10 @@ def test_list_jobs_with_data(mock_redis, client, valid_job_id):
         'file_count': '1',
     }]
 
+    # /api/jobs requires session_id to be set
+    with client.session_transaction() as sess:
+        sess['session_id'] = 'test-session-id'
+
     response = client.get('/api/jobs')
     assert response.status_code == 200
     assert len(response.json) == 1

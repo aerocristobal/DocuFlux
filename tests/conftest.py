@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(_root, 'worker'))
 import config
 import secrets_manager
 import web.app as web_app
+sys.modules['app'] = web_app  # Ensure @patch('app.xxx') patches the same module as web.app
 
 
 @pytest.fixture(scope='session')

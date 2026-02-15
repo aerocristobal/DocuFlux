@@ -86,6 +86,20 @@ def update_job_metadata(job_id, data):
     redis_client.hset(f"job:{job_id}", mapping=data)
 
 
+def get_job_metadata(job_id):
+    """Retrieve job metadata from Redis."""
+    try:
+        metadata = redis_client.hgetall(f"job:{job_id}")
+        if not metadata:
+            return None
+        return {k.decode('utf-8') if isinstance(k, bytes) else k:
+                v.decode('utf-8') if isinstance(v, bytes) else v
+                for k, v in metadata.items()}
+    except Exception as e:
+        logging.error(f"Error retrieving metadata for job {job_id}: {e}")
+        return None
+
+
 def call_mcp_server(action, args):
     """
     Helper function to send commands to the MCP server.

@@ -184,7 +184,7 @@ class TestConvertDocument:
                 to_format='html'
             )
 
-        mock_redis.pipeline.assert_called()
+        mock_redis.hset.assert_called()
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -256,7 +256,7 @@ class TestConvertDocument:
                 to_format='html'
             )
 
-        mock_redis.pipeline.assert_called()
+        mock_redis.hset.assert_called()
 
 
 # ============================================================
@@ -356,8 +356,8 @@ class TestConvertWithMarker:
                 sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
             )
 
-        # FAILURE metadata must be recorded via pipeline
-        mock_redis.pipeline.assert_called()
+        # FAILURE metadata must be recorded
+        mock_redis.hset.assert_called()
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -633,3 +633,136 @@ class TestGPUMemoryCleanup:
             )
 
         _torch.cuda.empty_cache.assert_called()
+
+
+# ============================================================
+# Utility function tests - improves branch coverage
+# ============================================================
+
+class TestGetJobMetadata:
+
+    @patch('tasks.redis_client')
+    def test_returns_none_for_empty_metadata(self, mock_redis):
+        """Returns None when Redis hash is empty."""
+        mock_redis.hgetall.return_value = {}
+        result = tasks.get_job_metadata(str(uuid.uuid4()))
+        assert result is None
+
+    @patch('tasks.redis_client')
+    def test_returns_none_on_exception(self, mock_redis):
+        """Returns None when Redis raises an exception."""
+        mock_redis.hgetall.side_effect = Exception("connection refused")
+        result = tasks.get_job_metadata(str(uuid.uuid4()))
+        assert result is None
+
+    @patch('tasks.redis_client')
+    def test_decodes_bytes_keys_and_values(self, mock_redis):
+        """Byte keys/values are decoded to strings."""
+        mock_redis.hgetall.return_value = {
+            b'status': b'SUCCESS',
+            'filename': 'test.md',
+        }
+        result = tasks.get_job_metadata(str(uuid.uuid4()))
+        assert result['status'] == 'SUCCESS'
+        assert result['filename'] == 'test.md'
+
+
+class TestDiskUtilities:
+
+    @patch('shutil.disk_usage')
+    def test_get_disk_usage_percent(self, mock_usage):
+        """Returns correct percentage from disk_usage."""
+        mock_usage.return_value = (1000, 400, 600)
+        pct = tasks._get_disk_usage_percent('/tmp')
+        assert pct == 40.0
+
+    @patch('shutil.disk_usage')
+    def test_get_disk_usage_percent_error(self, mock_usage):
+        """Returns 0.0 on exception."""
+        mock_usage.side_effect = OSError("no such path")
+        pct = tasks._get_disk_usage_percent('/nonexistent')
+        assert pct == 0.0
+
+    def test_get_directory_size_empty(self, tmp_path):
+        """Returns 0 for empty directory."""
+        size = tasks._get_directory_size(str(tmp_path))
+        assert size == 0
+
+    def test_get_directory_size_with_files(self, tmp_path):
+        """Returns sum of file sizes."""
+        (tmp_path / 'a.txt').write_bytes(b'hello')
+        (tmp_path / 'b.txt').write_bytes(b'world!')
+        size = tasks._get_directory_size(str(tmp_path))
+        assert size == 11
+
+    @patch('os.walk')
+    def test_get_directory_size_error(self, mock_walk):
+        """Returns 0 and logs on exception."""
+        mock_walk.side_effect = PermissionError("no access")
+        size = tasks._get_directory_size('/restricted')
+        assert size == 0
+
+
+class TestJobRetentionDecision:
+
+    def test_downloaded_job_expires(self):
+        """Jobs with downloaded_at beyond window are marked for deletion."""
+        now = time.time()
+        meta = {'status': 'SUCCESS', 'completed_at': str(now - 1200),
+                'downloaded_at': str(now - 700)}
+        should_delete, reason, priority = tasks._job_retention_decision(
+            str(uuid.uuid4()), meta, now, '/up', '/out',
+            300, 600, 3600, 3600, False
+        )
+        assert should_delete is True
+
+    def test_orphan_job_expires(self):
+        """Jobs with no Redis metadata but old files are marked for deletion."""
+        now = time.time()
+        job_id = str(uuid.uuid4())
+        with patch('os.path.exists', return_value=True), \
+             patch('os.path.getmtime', return_value=now - 7200):
+            should_delete, reason, priority = tasks._job_retention_decision(
+                job_id, None, now, '/up', '/out',
+                300, 600, 3600, 3600, False
+            )
+        assert should_delete is True
+
+    def test_stale_processing_job_expires(self):
+        """PROCESSING jobs with no completed_at older than 2h are marked for deletion."""
+        now = time.time()
+        meta = {'status': 'PROCESSING', 'started_at': str(now - 7201)}
+        should_delete, reason, priority = tasks._job_retention_decision(
+            str(uuid.uuid4()), meta, now, '/up', '/out',
+            300, 600, 3600, 3600, False
+        )
+        assert should_delete is True
+        assert 'Stale' in reason
+
+    def test_emergency_cleanup_forces_deletion(self):
+        """Emergency cleanup marks all jobs for deletion regardless of age."""
+        now = time.time()
+        meta = {'status': 'SUCCESS', 'completed_at': str(now - 60)}
+        should_delete, reason, priority = tasks._job_retention_decision(
+            str(uuid.uuid4()), meta, now, '/up', '/out',
+            300, 600, 3600, 3600, True
+        )
+        assert should_delete is True
+        assert priority == 15
+        assert 'EMERGENCY' in reason
+
+
+class TestUpdateMetrics:
+
+    @patch('tasks.redis_client')
+    def test_update_metrics_success(self, mock_redis):
+        """update_metrics calls update_queue_metrics without error."""
+        tasks.update_metrics()
+        sys.modules['metrics'].update_queue_metrics.assert_called()
+
+    @patch('tasks.redis_client')
+    def test_update_metrics_handles_exception(self, mock_redis):
+        """update_metrics swallows exceptions gracefully."""
+        sys.modules['metrics'].update_queue_metrics.side_effect = Exception("redis down")
+        tasks.update_metrics()  # should not raise
+        sys.modules['metrics'].update_queue_metrics.side_effect = None

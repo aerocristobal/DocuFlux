@@ -49,10 +49,8 @@ def clear_env_and_reset_settings():
     os.environ.clear()
     os.environ.update(original_environ)
 
-    # Reset config for other tests
-    if 'config' in sys.modules:
-        del sys.modules['config']
-    importlib.reload(config)
+    # Reset config for other tests so next import gets fresh instance
+    sys.modules.pop('config', None)
 
 
 def test_default_settings():
@@ -107,14 +105,13 @@ FLASK_DEBUG=false
 PERMANENT_SESSION_LIFETIME_DAYS=15
 SECRET_KEY=env-secret
 """)
-    with patch('pydantic_settings.sources.find_dotenv', return_value=str(env_file)):
-        s = Settings()
+    s = Settings(_env_file=str(env_file))
 
-        assert s.upload_folder == '/env_uploads'
-        assert s.flask_debug is False
-        assert s.permanent_session_lifetime_days == 15
-        assert s.permanent_session_lifetime == timedelta(days=15)
-        assert s.secret_key.get_secret_value() == 'env-secret'
+    assert s.upload_folder == '/env_uploads'
+    assert s.flask_debug is False
+    assert s.permanent_session_lifetime_days == 15
+    assert s.permanent_session_lifetime == timedelta(days=15)
+    assert s.secret_key.get_secret_value() == 'env-secret'
 
 
 def test_secret_str_handling():
@@ -137,16 +134,16 @@ def test_secrets_manager_integration(clear_env_and_reset_settings):
     os.environ['FLASK_ENV'] = 'testing'
 
     import importlib
+    # Remove any mocked versions from sys.modules (test_worker.py mocks secrets_manager)
+    sys.modules.pop('secrets_manager', None)
+    sys.modules.pop('config', None)
     import secrets_manager
     import config
-    importlib.reload(secrets_manager)
-    importlib.reload(config)
 
     loaded_secrets = secrets_manager.load_all_secrets()
 
-    settings_override_data = {
-        k.lower(): v for k, v in loaded_secrets.items() if v is not None
-    }
+    # Keep uppercase keys to match validation_alias fields in Settings
+    settings_override_data = {k: v for k, v in loaded_secrets.items() if v is not None}
     s = config.Settings(_env_file=None, **settings_override_data)
     
     assert s.flask_debug is False
@@ -154,7 +151,8 @@ def test_secrets_manager_integration(clear_env_and_reset_settings):
         assert s.secret_key.get_secret_value() == 'change-me-in-production'
     assert s.master_encryption_key is not None
     assert len(s.master_encryption_key.get_secret_value()) > 0
-    assert "==" in s.master_encryption_key.get_secret_value()
+    # Generated key is base64 URL-safe encoded (may have 0, 1, or 2 '=' padding chars)
+    assert len(s.master_encryption_key.get_secret_value()) >= 43
 
 
 def test_type_conversion():
