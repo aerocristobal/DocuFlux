@@ -57,6 +57,7 @@ RUN pip3 install --no-cache-dir --extra-index-url https://download.pytorch.org/w
 
 # Copy shared root-level modules first, then worker code
 COPY config.py .
+COPY shared/ .
 COPY worker/ .
 
 # Conditional SLM model download (only for GPU builds)

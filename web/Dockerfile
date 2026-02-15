@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy shared root-level modules first, then web app
 COPY config.py .
+COPY shared/ .
 COPY web/ .
 
 # Epic 21.8: Create non-root user for security

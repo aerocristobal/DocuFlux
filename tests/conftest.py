@@ -8,10 +8,11 @@ os.environ['BUILD_GPU'] = 'false'
 
 # Add project roots to path so we can import app and tasks
 _tests_dir = os.path.dirname(__file__)
-# Ensure the root of the project is in sys.path to resolve 'config' and 'secrets_manager'
-sys.path.insert(0, os.path.abspath(os.path.join(_tests_dir, '..')))
-sys.path.insert(0, os.path.abspath(os.path.join(_tests_dir, '../web')))
-sys.path.insert(0, os.path.abspath(os.path.join(_tests_dir, '../worker')))
+_root = os.path.abspath(os.path.join(_tests_dir, '..'))
+sys.path.insert(0, _root)
+sys.path.insert(0, os.path.join(_root, 'shared'))   # shared modules (encryption, key_manager, etc.)
+sys.path.insert(0, os.path.join(_root, 'web'))
+sys.path.insert(0, os.path.join(_root, 'worker'))
 
 
 # Import necessary modules for test setup

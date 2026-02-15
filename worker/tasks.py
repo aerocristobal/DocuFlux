@@ -6,22 +6,25 @@ import shutil
 import redis
 import requests
 import logging
-import threading
-import signal
-import atexit
 from urllib.parse import urlparse
-import celery as celery_module  # Import module to get version
 from celery import Celery
 from celery.schedules import crontab
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
-from warmup import get_slm_model # Epic 26: SLM model getter
-from PIL import Image # Epic 28: For image processing
+from warmup import get_slm_model  # Epic 26: SLM model getter
+from PIL import Image  # Epic 28: For image processing in analyze_screenshot_layout
 
 from config import settings
 from secrets_manager import load_all_secrets
 from encryption import EncryptionService
 from key_manager import create_key_manager
+from metrics import (
+    worker_tasks_active,
+    conversion_total,
+    conversion_failures_total,
+    conversion_duration_seconds,
+    update_queue_metrics,
+)
 
 # Configure Structured Logging
 handler = logging.StreamHandler(sys.stdout)
@@ -69,6 +72,7 @@ socketio = SocketIO(message_queue=app_settings.socketio_message_queue)
 
 
 def is_valid_uuid(val):
+    """Return True if val is a valid UUID string, False otherwise."""
     try:
         import uuid
         uuid.UUID(str(val))
@@ -104,6 +108,28 @@ def call_mcp_server(action, args):
     reject_on_worker_lost=True
 )
 def convert_document(job_id, input_filename, output_filename, from_format, to_format):
+    """Convert a document using Pandoc.
+
+    Args:
+        job_id: UUID identifying this conversion job.
+        input_filename: Name of the uploaded source file.
+        output_filename: Desired name for the converted output file.
+        from_format: Pandoc source format key (e.g. 'docx', 'markdown').
+        to_format: Pandoc target format key (e.g. 'html', 'pdf').
+
+    Side Effects:
+        Updates Redis job metadata with progress and final status.
+        Writes output to data/outputs/{job_id}/.
+        Emits WebSocket events to connected clients via update_job_metadata.
+        Increments/decrements Prometheus worker_tasks_active gauge.
+
+    Returns:
+        dict: {'status': 'success', 'output_file': filename} on success.
+
+    Raises:
+        FileNotFoundError: If input file does not exist.
+        Exception: Wraps Pandoc subprocess errors and timeouts.
+    """
     # Epic 21.5: Track active tasks
     worker_tasks_active.inc()
     start_time = time.time()
@@ -166,28 +192,6 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
         logging.info(f"Conversion successful: {output_path}")
 
-        # Epic 23.3: Encrypt output files
-        # DISABLED: Encryption requires shared master key between web and worker
-        # TODO: Configure shared MASTER_ENCRYPTION_KEY or disable encryption
-        # output_dir = os.path.dirname(output_path)
-        # if not encrypt_output_files(job_id, output_dir):
-        #     error_msg = "File encryption failed"
-        #     logging.error(f"Encryption failed for job {job_id}")
-        #     update_job_metadata(job_id, {
-        #         'status': 'FAILURE',
-        #         'completed_at': str(time.time()),
-        #         'error': error_msg,
-        #         'progress': '0'
-        #     })
-        #
-        #     duration = time.time() - start_time
-        #     conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-        #     conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='encryption_error').inc()
-        #     conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        #     worker_tasks_active.dec()
-        #
-        #     raise Exception(error_msg)
-
         # Epic 30.2: file_count=1 for single Pandoc output (enables list_jobs() cache)
         update_job_metadata(job_id, {
             'status': 'SUCCESS',
@@ -249,18 +253,134 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
 
 model_dict = None
 
+
 def get_model_dict():
+    """Lazily load and cache Marker AI model artifacts.
+
+    Returns:
+        dict: Model artifact dictionary for use with PdfConverter.
+    """
     global model_dict
     if model_dict is None:
         # Set env vars for marker to optimize for 16GB VRAM
         os.environ["INFERENCE_RAM"] = "16"
-        # Import here to avoid loading at top level
         from marker.models import create_model_dict
-        
         logging.info("Initializing Marker models...")
         model_dict = create_model_dict()
         logging.info("Marker models initialized.")
     return model_dict
+
+
+def _check_pdf_page_limit(job_id, input_path, max_pages):
+    """Check that a PDF does not exceed the page limit for Marker AI.
+
+    Args:
+        job_id: Job UUID for metadata updates on rejection.
+        input_path: Path to the PDF file.
+        max_pages: Maximum allowed page count.
+
+    Returns:
+        dict with {'status': 'error', 'message': ...} if limit exceeded, else None.
+    """
+    try:
+        import pypdfium2 as pdfium
+        pdf_doc = pdfium.PdfDocument(input_path)
+        page_count = len(pdf_doc)
+        pdf_doc.close()
+        if page_count > max_pages:
+            error_msg = (
+                f"PDF has {page_count} pages, which exceeds the {max_pages}-page "
+                f"limit for AI conversion. Split the document into smaller parts."
+            )
+            update_job_metadata(job_id, {
+                'status': 'FAILURE', 'completed_at': str(time.time()),
+                'error': error_msg, 'progress': '0'
+            })
+            return {"status": "error", "message": error_msg}
+        logging.info(f"PDF page count: {page_count} (limit: {max_pages})")
+    except Exception as e:
+        logging.warning(f"Could not check PDF page count: {e}")
+    return None
+
+
+def _run_marker(input_path, options):
+    """Load Marker models and run PDF conversion.
+
+    Args:
+        input_path: Path to the input PDF.
+        options: Marker config dict (e.g. {'force_ocr': True}).
+
+    Returns:
+        tuple: (converter, rendered) Marker objects.
+    """
+    from marker.converters.pdf import PdfConverter
+    artifacts = get_model_dict()
+    converter = PdfConverter(artifact_dict=artifacts, config=options)
+    logging.info(f"Running Marker conversion on {input_path}")
+    rendered = converter(input_path)
+    return converter, rendered
+
+
+def _save_marker_output(rendered, output_path, images_dir):
+    """Extract text and images from a Marker result and write to disk.
+
+    Args:
+        rendered: Marker rendered output object.
+        output_path: Path to write the output Markdown file.
+        images_dir: Directory to save extracted images.
+
+    Returns:
+        tuple: (text, images, saved_images_count, file_count)
+            file_count = output.md + metadata.json + N images
+    """
+    import json
+    from marker.output import text_from_rendered
+
+    text, _, images = text_from_rendered(rendered)
+
+    saved_images_count = 0
+    for filename, image in images.items():
+        image.save(os.path.join(images_dir, filename))
+        saved_images_count += 1
+        text = text.replace(f"({filename})", f"(images/{filename})")
+    logging.info(f"Saved {saved_images_count} images to {images_dir}")
+
+    with open(output_path, "w", encoding='utf-8') as f:
+        f.write(text)
+
+    metadata_path = os.path.join(os.path.dirname(output_path), "metadata.json")
+    with open(metadata_path, "w", encoding='utf-8') as f:
+        json.dump(rendered.metadata, f, indent=2, default=str)
+
+    # output.md + metadata.json + N images
+    file_count = 2 + saved_images_count
+    return text, images, saved_images_count, file_count
+
+
+def _cleanup_marker_memory(*objects):
+    """Free GPU/CPU memory after a Marker task.
+
+    Args:
+        *objects: Python objects to delete before running gc.collect().
+    """
+    import gc
+    for obj in objects:
+        try:
+            del obj
+        except Exception:
+            pass
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            mem_freed = torch.cuda.memory_reserved(0) - torch.cuda.memory_allocated(0)
+            logging.info(f"Memory cleanup complete. GPU memory freed: {mem_freed / 1e9:.2f} GB")
+        else:
+            logging.info("Memory cleanup complete (CPU mode)")
+    except Exception as e:
+        logging.warning(f"Memory cleanup failed: {e}")
+
 
 @celery.task(
     name='tasks.convert_with_marker',
@@ -269,10 +389,33 @@ def get_model_dict():
     soft_time_limit=1140,     # 19 mins
     acks_late=True,
     reject_on_worker_lost=True,
-    max_retries=3             # Reduced retries since no external service dependency
+    max_retries=3
 )
 def convert_with_marker(self, job_id, input_filename, output_filename, from_format, to_format, options=None):
-    # Epic 21.5: Track active tasks and start time
+    """Convert a PDF to Markdown using Marker AI (GPU-accelerated deep learning).
+
+    Args:
+        self: Celery task instance (bind=True).
+        job_id: UUID identifying this conversion job.
+        input_filename: Name of the uploaded PDF file.
+        output_filename: Desired name for the output Markdown file.
+        from_format: Source format ('pdf_marker').
+        to_format: Target format (typically 'markdown').
+        options: Optional dict with Marker config, e.g. {'force_ocr': True, 'use_llm': False}.
+
+    Side Effects:
+        Updates Redis job metadata with progress and final status.
+        Writes output Markdown + images to data/outputs/{job_id}/.
+        Triggers extract_slm_metadata task on success.
+        Performs GPU/CPU memory cleanup after each run.
+
+    Returns:
+        dict: {'status': 'success', 'output_file': filename} on success.
+
+    Raises:
+        FileNotFoundError: If input file does not exist.
+        Exception: Wraps Marker conversion errors; supports Celery retry up to max_retries.
+    """
     worker_tasks_active.inc()
     start_time = time.time()
 
@@ -281,9 +424,9 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         worker_tasks_active.dec()
         return {"status": "error", "message": "Invalid job ID"}
 
-    # Abort if the job was already marked as FAILURE or REVOKED by startup recovery.
-    # This breaks the crash-loop: reject_on_worker_lost re-queues the task, but
-    # recover_orphaned_jobs() marks it FAILURE on startup, so we skip re-processing.
+    # Abort if startup recovery already marked this job as failed.
+    # reject_on_worker_lost re-queues the task, but recover_orphaned_jobs()
+    # marks it FAILURE on startup — skip to break the crash-loop.
     current_status = redis_client.hget(f"job:{job_id}", 'status')
     if current_status in ('FAILURE', 'REVOKED'):
         logging.warning(f"Skipping re-queued task for already-{current_status} job {job_id}")
@@ -291,183 +434,62 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         return {"status": "skipped", "reason": current_status}
 
     safe_job_id = secure_filename(job_id)
-    safe_input_filename = secure_filename(input_filename)
-    safe_output_filename = secure_filename(output_filename)
-
-    if options is None:
-        options = {}
-
-    input_path = os.path.join(UPLOAD_FOLDER, safe_job_id, safe_input_filename)
+    input_path = os.path.join(UPLOAD_FOLDER, safe_job_id, secure_filename(input_filename))
     output_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
-    output_path = os.path.join(output_dir, safe_output_filename)
+    output_path = os.path.join(output_dir, secure_filename(output_filename))
 
     logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1}) with options: {options}")
-    update_job_metadata(job_id, {
-        'status': 'PROCESSING',
-        'started_at': str(time.time()),
-        'progress': '5'
-    })
+    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5'})
 
     if not os.path.exists(input_path):
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    # Reject PDFs that are too large for Marker AI to process reliably.
-    # Marker takes ~20-30 seconds per page on GPU; 300 pages ≈ 2 hours max.
-    MAX_MARKER_PAGES = app_settings.max_marker_pages
-    try:
-        import pypdfium2 as pdfium
-        pdf_doc = pdfium.PdfDocument(input_path)
-        page_count = len(pdf_doc)
-        pdf_doc.close()
-        if page_count > MAX_MARKER_PAGES:
-            error_msg = (
-                f"PDF has {page_count} pages, which exceeds the {MAX_MARKER_PAGES}-page "
-                f"limit for AI conversion. Split the document into smaller parts."
-            )
-            update_job_metadata(job_id, {
-                'status': 'FAILURE', 'completed_at': str(time.time()),
-                'error': error_msg, 'progress': '0'
-            })
-            worker_tasks_active.dec()
-            return {"status": "error", "message": error_msg}
-        logging.info(f"PDF page count: {page_count} (limit: {MAX_MARKER_PAGES})")
-    except Exception as e:
-        logging.warning(f"Could not check PDF page count: {e}")
+    page_limit_error = _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
+    if page_limit_error:
+        worker_tasks_active.dec()
+        return page_limit_error
 
     os.makedirs(output_dir, exist_ok=True)
-
-    # Create images subdirectory
     images_dir = os.path.join(output_dir, 'images')
     os.makedirs(images_dir, exist_ok=True)
 
+    converter = rendered = text = images = None
     try:
         update_job_metadata(job_id, {'progress': '15'})
-        
-        # Get cached models
-        artifacts = get_model_dict()
-        
-        # Initialize converter with task-specific configuration
-        from marker.converters.pdf import PdfConverter
-        converter = PdfConverter(artifact_dict=artifacts, config=options)
-        
-        update_job_metadata(job_id, {'progress': '20'})
-        
-        logging.info(f"Running Marker conversion on {input_path}")
-        
-        # Run conversion
-        rendered = converter(input_path)
-        
+        converter, rendered = _run_marker(input_path, options or {})
+
         update_job_metadata(job_id, {'progress': '80'})
-        
-        # Extract results
-        from marker.output import text_from_rendered
-        import json
-        
-        text, _, images = text_from_rendered(rendered)
-        
-        # Save images and update markdown links
-        saved_images_count = 0
-        for filename, image in images.items():
-            image_save_path = os.path.join(images_dir, filename)
-            image.save(image_save_path)
-            saved_images_count += 1
-            text = text.replace(f"({filename})", f"(images/{filename})")
-            
-        logging.info(f"Saved {saved_images_count} images to {images_dir}")
+        text, images, _, file_count = _save_marker_output(rendered, output_path, images_dir)
 
-        # Save markdown
-        with open(output_path, "w", encoding='utf-8') as f:
-            f.write(text)
-            
-        # Save metadata
-        metadata_path = os.path.join(output_dir, "metadata.json")
-        with open(metadata_path, "w", encoding='utf-8') as f:
-            json.dump(rendered.metadata, f, indent=2, default=str)
-
-        # Epic 30.2: Cache file_count in metadata so list_jobs() skips os.walk()
-        # Count: markdown file + metadata.json + images
-        file_count = 2 + saved_images_count  # output.md + metadata.json + N images
         update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count)})
         logging.info(f"Marker conversion successful: {output_path}")
 
-        # Epic 23.3: Encrypt output files
-        # DISABLED: Encryption requires shared master key between web and worker
-        # TODO: Configure shared MASTER_ENCRYPTION_KEY or disable encryption
-        # if not encrypt_output_files(job_id, output_dir):
-        #     error_msg = "File encryption failed"
-        #     logging.error(f"Encryption failed for job {job_id}")
-        #     update_job_metadata(job_id, {
-        #         'status': 'FAILURE',
-        #         'completed_at': str(time.time()),
-        #         'error': error_msg,
-        #         'progress': '0'
-        #     })
-        #
-        #     duration = time.time() - start_time
-        #     conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-        #     conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='encryption_error').inc()
-        #     conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        #     worker_tasks_active.dec()
-        #
-        #     raise Exception(error_msg)
-
         update_job_metadata(job_id, {
-            'status': 'SUCCESS',
-            'completed_at': str(time.time()),
-            'progress': '100',
-            'encrypted': 'false'  # Encryption disabled in development
+            'status': 'SUCCESS', 'completed_at': str(time.time()),
+            'progress': '100', 'encrypted': 'false'
         })
-
-        # Epic 26: Trigger SLM metadata extraction after successful Marker conversion
-        # This will run asynchronously in a separate task
         extract_slm_metadata.delay(job_id, output_path)
 
-        # Epic 21.5: Record success metrics
         duration = time.time() - start_time
         conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
         conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
         worker_tasks_active.dec()
 
-        # Epic 21.4: Memory cleanup after successful task
-        logging.info("Performing memory cleanup after Marker task completion...")
-        del converter, rendered, text, images
-        import gc
-        import torch
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            mem_freed = torch.cuda.memory_reserved(0) - torch.cuda.memory_allocated(0)
-            logging.info(f"Memory cleanup complete. GPU memory freed: {mem_freed / 1e9:.2f} GB")
-        else:
-            logging.info("Memory cleanup complete (CPU mode)")
-
+        _cleanup_marker_memory(converter, rendered, text, images)
         return {"status": "success", "output_file": os.path.basename(output_path)}
 
     except Exception as e:
-        error_msg = f"Marker conversion failed: {str(e)}"
-        logging.error(f"Error for job {job_id}: {error_msg}")
+        logging.error(f"Marker error for job {job_id}: {e}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
 
-        # Epic 21.5: Record failure metrics
         duration = time.time() - start_time
         conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
         conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='marker_error').inc()
         conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
         worker_tasks_active.dec()
 
-        # Epic 21.4: Memory cleanup even after failure
-        logging.info("Performing memory cleanup after task failure...")
-        import gc
-        try:
-            import torch
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logging.info("Memory cleanup complete after failure")
-        except Exception as cleanup_error:
-            logging.warning(f"Memory cleanup failed: {cleanup_error}")
-
+        _cleanup_marker_memory(converter, rendered, text, images)
         raise
 
 
@@ -503,6 +525,70 @@ def _get_directory_size(path):
     return total_size
 
 
+def _job_retention_decision(
+    job_id, meta, now, upload_dir, output_dir,
+    retention_failure, retention_downloaded, retention_no_download, retention_orphan,
+    emergency_cleanup
+):
+    """Decide whether a job should be deleted and return (should_delete, reason, priority).
+
+    Args:
+        job_id: Job UUID string.
+        meta: Job metadata dict from Redis, or None if missing.
+        now: Current timestamp (float).
+        upload_dir: Path to uploads root.
+        output_dir: Path to outputs root.
+        retention_failure: Seconds to retain failed jobs.
+        retention_downloaded: Seconds to retain downloaded/viewed jobs.
+        retention_no_download: Seconds to retain completed-but-not-downloaded jobs.
+        retention_orphan: Seconds to retain jobs with no Redis metadata.
+        emergency_cleanup: If True, mark all jobs for immediate deletion.
+
+    Returns:
+        tuple: (should_delete: bool, reason: str, priority: int)
+            Higher priority = deleted first during space-constrained runs.
+    """
+    should_delete = False
+    reason = ""
+    priority = 0
+
+    if meta:
+        status = meta.get('status')
+        completed_at = float(meta['completed_at']) if meta.get('completed_at') else None
+        downloaded_at = float(meta['downloaded_at']) if meta.get('downloaded_at') else None
+        last_viewed = float(meta['last_viewed']) if meta.get('last_viewed') else None
+        started_at = float(meta['started_at']) if meta.get('started_at') else None
+
+        if status == 'FAILURE':
+            if completed_at and now > completed_at + retention_failure:
+                should_delete, reason, priority = True, "Failed job expired (5m)", 10
+        elif status == 'SUCCESS':
+            reference_time = last_viewed or downloaded_at or completed_at
+            if downloaded_at or last_viewed:
+                if now > reference_time + retention_downloaded:
+                    should_delete, reason, priority = True, "Downloaded/viewed job expired (10m since last access)", 5
+            elif completed_at and now > completed_at + retention_no_download:
+                should_delete, reason, priority = True, "Completed job (not downloaded) expired (1h)", 3
+
+        if not completed_at and started_at and now > started_at + 7200:
+            should_delete, reason, priority = True, "Stale processing job (2h)", 8
+    else:
+        check_path = os.path.join(upload_dir, job_id)
+        if not os.path.exists(check_path):
+            check_path = os.path.join(output_dir, job_id)
+        if os.path.exists(check_path):
+            mtime = os.path.getmtime(check_path)
+            if now > mtime + retention_orphan:
+                should_delete, reason, priority = True, "Orphaned job expired (1h fallback)", 7
+
+    if emergency_cleanup:
+        should_delete = True
+        priority = 15
+        reason = f"EMERGENCY: {reason}" if reason else "EMERGENCY: Disk >95% full"
+
+    return should_delete, reason, priority
+
+
 @celery.task(name='tasks.cleanup_old_files')
 def cleanup_old_files():
     """
@@ -525,12 +611,10 @@ def cleanup_old_files():
     Returns:
         None: This function does not return any value directly. It logs its actions.
     """
-    now = time.time()
-
-    RETENTION_SUCCESS_NO_DOWNLOAD = 3600 # 1 hour
-    RETENTION_SUCCESS_DOWNLOADED = 600   # 10 minutes
-    RETENTION_FAILURE = 300              # 5 minutes
-    RETENTION_ORPHAN = 3600              # 1 hour (fallback)
+    RETENTION_SUCCESS_NO_DOWNLOAD = 3600  # 1 hour
+    RETENTION_SUCCESS_DOWNLOADED = 600    # 10 minutes
+    RETENTION_FAILURE = 300               # 5 minutes
+    RETENTION_ORPHAN = 3600               # 1 hour (fallback)
 
     upload_dir = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
     output_dir = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
@@ -541,110 +625,52 @@ def cleanup_old_files():
     if os.path.exists(output_dir):
         job_ids.update(os.listdir(output_dir))
 
-    # Epic 21.6: Check disk usage for emergency cleanup
     disk_usage_percent = _get_disk_usage_percent(upload_dir)
     emergency_cleanup = disk_usage_percent > 95
-    aggressive_cleanup = disk_usage_percent > 80
 
     if emergency_cleanup:
         logging.warning(f"EMERGENCY CLEANUP: Disk usage at {disk_usage_percent:.1f}%")
-    elif aggressive_cleanup:
+    elif disk_usage_percent > 80:
         logging.info(f"Aggressive cleanup: Disk usage at {disk_usage_percent:.1f}%")
 
     logging.info(f"Running cleanup. Found {len(job_ids)} jobs on disk.")
 
-    # Epic 21.6: Collect deletion candidates with size and priority
+    now = time.time()
     deletion_candidates = []
 
     for job_id in job_ids:
         if not is_valid_uuid(job_id):
             continue
 
-        key = f"job:{job_id}"
         meta = get_job_metadata(job_id)
-
-        should_delete = False
-        reason = ""
-        priority = 0  # Higher priority = delete first
-
-        if meta:
-            status = meta.get('status')
-            completed_at = float(meta.get('completed_at', 0)) if meta.get('completed_at') else None
-            downloaded_at = float(meta.get('downloaded_at', 0)) if meta.get('downloaded_at') else None
-            last_viewed = float(meta.get('last_viewed', 0)) if meta.get('last_viewed') else None
-            started_at = float(meta.get('started_at', 0)) if meta.get('started_at') else None
-
-            if status == 'FAILURE':
-                if completed_at and now > completed_at + RETENTION_FAILURE:
-                    should_delete = True
-                    reason = "Failed job expired (5m)"
-                    priority = 10  # High priority for failures
-            elif status == 'SUCCESS':
-                # Epic 21.6: Respect last_viewed timestamp
-                reference_time = last_viewed or downloaded_at or completed_at
-
-                if downloaded_at or last_viewed:
-                    if now > reference_time + RETENTION_SUCCESS_DOWNLOADED:
-                        should_delete = True
-                        reason = f"Downloaded/viewed job expired (10m since last access)"
-                        priority = 5  # Medium priority for old downloads
-                elif completed_at:
-                    if now > completed_at + RETENTION_SUCCESS_NO_DOWNLOAD:
-                        should_delete = True
-                        reason = "Completed job (not downloaded) expired (1h)"
-                        priority = 3  # Lower priority for never-downloaded
-            if not completed_at and started_at and now > started_at + 7200:
-                should_delete = True
-                reason = "Stale processing job (2h)"
-                priority = 8  # High priority for stale jobs
-        else:
-            check_path = os.path.join(upload_dir, job_id)
-            if not os.path.exists(check_path):
-                 check_path = os.path.join(output_dir, job_id)
-            if os.path.exists(check_path):
-                 mtime = os.path.getmtime(check_path)
-                 if now > mtime + RETENTION_ORPHAN:
-                     should_delete = True
-                     reason = "Orphaned job expired (1h fallback)"
-                     priority = 7  # Medium-high priority for orphans
-
-        # Epic 21.6: Emergency cleanup - delete everything eligible
-        if emergency_cleanup:
-            should_delete = True
-            priority = 15
-            reason = f"EMERGENCY: {reason}" if reason else "EMERGENCY: Disk >95% full"
+        should_delete, reason, priority = _job_retention_decision(
+            job_id, meta, now, upload_dir, output_dir,
+            RETENTION_FAILURE, RETENTION_SUCCESS_DOWNLOADED,
+            RETENTION_SUCCESS_NO_DOWNLOAD, RETENTION_ORPHAN,
+            emergency_cleanup
+        )
 
         if should_delete:
-            # Calculate total size for this job
             upload_path = os.path.join(upload_dir, job_id)
             output_path = os.path.join(output_dir, job_id)
-            total_size = 0
-            if os.path.exists(upload_path):
-                total_size += _get_directory_size(upload_path)
-            if os.path.exists(output_path):
-                total_size += _get_directory_size(output_path)
-
+            total_size = (
+                (_get_directory_size(upload_path) if os.path.exists(upload_path) else 0) +
+                (_get_directory_size(output_path) if os.path.exists(output_path) else 0)
+            )
             deletion_candidates.append({
-                'job_id': job_id,
-                'reason': reason,
-                'priority': priority,
-                'size_bytes': total_size,
-                'key': key
+                'job_id': job_id, 'reason': reason,
+                'priority': priority, 'size_bytes': total_size,
+                'key': f"job:{job_id}"
             })
 
-    # Epic 21.6: Sort by priority (descending), then by size (descending)
     deletion_candidates.sort(key=lambda x: (x['priority'], x['size_bytes']), reverse=True)
-
     logging.info(f"Found {len(deletion_candidates)} jobs eligible for deletion")
 
-    # Epic 21.6: Delete in priority order
     total_freed = 0
     for candidate in deletion_candidates:
         job_id = candidate['job_id']
-        reason = candidate['reason']
         size_mb = candidate['size_bytes'] / (1024 * 1024)
-
-        logging.info(f"Deleting job {job_id} ({size_mb:.2f} MB). Reason: {reason}")
+        logging.info(f"Deleting job {job_id} ({size_mb:.2f} MB). Reason: {candidate['reason']}")
 
         for base in [upload_dir, output_dir]:
             p = os.path.join(base, job_id)
@@ -657,7 +683,6 @@ def cleanup_old_files():
 
         redis_client.delete(candidate['key'])
 
-        # Epic 21.6: Stop cleanup if disk usage back to normal (unless emergency)
         if not emergency_cleanup:
             current_usage = _get_disk_usage_percent(upload_dir)
             if current_usage < 70:

@@ -360,6 +360,15 @@ FORMATS = [
 ]
 
 def update_job_metadata(job_id, updates):
+    """Write updates to a job's Redis metadata hash and broadcast a WebSocket event.
+
+    Args:
+        job_id: UUID of the job to update.
+        updates: Dict of field/value pairs to set on the job hash.
+
+    Side Effects:
+        Emits 'job_update' WebSocket event to all connected clients.
+    """
     key = f"job:{job_id}"
     try:
         # Epic 30.3: Use pipeline to batch hset + hgetall into one round trip
@@ -400,6 +409,14 @@ def index():
 
 @app.route('/convert', methods=['POST'])
 def convert():
+    """Handle multi-file document conversion submissions from the Web UI.
+
+    Accepts multipart/form-data with one or more files plus from_format/to_format.
+    Creates a job per file, saves uploads, queues Celery tasks, and returns job IDs.
+
+    Returns:
+        JSON {'job_ids': [...], 'status': 'queued'} on success, or error JSON.
+    """
     if not check_disk_space():
         return jsonify({'error': 'Server storage is full.'}), 507
     if 'file' not in request.files:
@@ -468,6 +485,14 @@ def convert():
 
 @app.route('/api/jobs')
 def list_jobs():
+    """Return the current session's job list with status and download URLs.
+
+    Uses a Redis pipeline to batch-fetch all job metadata in one round trip.
+    File counts are read from cached Redis metadata where available.
+
+    Returns:
+        JSON array of job objects sorted by created_at descending.
+    """
     session_id = session.get('session_id')
     if not session_id: return jsonify([])
     history_key = f"history:{session_id}"
@@ -514,11 +539,13 @@ def list_jobs():
     return jsonify(jobs_data)
 
 def is_valid_uuid(val):
+    """Return True if val is a valid UUID string, False otherwise."""
     try: uuid.UUID(str(val)); return True
     except ValueError: return False
 
 @app.route('/api/cancel/<job_id>', methods=['POST'])
 def cancel_job(job_id):
+    """Revoke a queued or running Celery task and mark the job REVOKED."""
     if not is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
     celery.control.revoke(job_id, terminate=True)
     update_job_metadata(job_id, {'status': 'REVOKED', 'progress': '0'})
@@ -526,6 +553,7 @@ def cancel_job(job_id):
 
 @app.route('/api/delete/<job_id>', methods=['POST'])
 def delete_job(job_id):
+    """Delete a job's files from disk and remove its metadata from Redis."""
     if not is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
     safe_job_id = secure_filename(job_id)
     session_id = session.get('session_id')
@@ -539,6 +567,11 @@ def delete_job(job_id):
 
 @app.route('/api/retry/<job_id>', methods=['POST'])
 def retry_job(job_id):
+    """Clone a failed/revoked job and re-queue it with the same parameters.
+
+    Copies the original upload file to a new job directory and dispatches
+    a new Celery task. Returns the new job ID.
+    """
     if not is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
     safe_job_id = secure_filename(job_id)
     job_data = redis_client.hgetall(f"job:{job_id}")
@@ -581,6 +614,7 @@ def retry_job(job_id):
 
 @app.route('/download/<job_id>')
 def download_file(job_id):
+    """Serve the converted output file for download, decrypting if necessary."""
     if not is_valid_uuid(job_id): return "Invalid", 400
     safe_job_id = secure_filename(job_id)
     job_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
@@ -637,6 +671,7 @@ def download_file(job_id):
 
 @app.route('/download_zip/<job_id>')
 def download_zip(job_id):
+    """Bundle all output files into an in-memory ZIP and serve for download."""
     if not is_valid_uuid(job_id): return "Invalid", 400
     safe_job_id = secure_filename(job_id)
     job_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
