@@ -87,8 +87,12 @@ def is_valid_uuid(val):
 
 
 def update_job_metadata(job_id, data):
-    """Update job metadata hash in Redis."""
+    """Update job metadata hash in Redis and broadcast a WebSocket event."""
     redis_client.hset(f"job:{job_id}", mapping=data)
+    try:
+        socketio.emit('job_update', {'id': job_id, **data}, namespace='/')
+    except Exception as e:
+        logging.error(f"WebSocket emit failed for job {job_id}: {e}")
 
 
 def get_job_metadata(job_id):
