@@ -9,6 +9,7 @@ services:
       --maxmemory 256mb
       --maxmemory-policy noeviction
       --port 6379
+      --requirepass ${REDIS_PASSWORD}
     # Epic 24.3: No port exposure - Redis only accessible from Docker internal network
     volumes:
       - redis-data:/data
@@ -17,8 +18,7 @@ services:
         limits:
           memory: 300M
     healthcheck:
-      # Standard health check (TLS disabled)
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a ${REDIS_PASSWORD} ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -35,9 +35,9 @@ services:
       - "5000:5000"
     environment:
       # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - REDIS_METADATA_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - REDIS_METADATA_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
       # Epic 24.1: Redis TLS certificates (DISABLED - certificates not generated)
       # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
@@ -82,9 +82,9 @@ services:
       - "9090:9090"  # Epic 21.5: Prometheus metrics endpoint
     environment:
       # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - REDIS_METADATA_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - REDIS_METADATA_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
       # Epic 24.1: Redis TLS certificates (DISABLED - certificates not generated)
       # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
@@ -136,9 +136,9 @@ services:
 
     environment:
       # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - REDIS_METADATA_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - REDIS_METADATA_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
       # Epic 24.1: Redis TLS certificates (DISABLED - certificates not generated)
       # - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt

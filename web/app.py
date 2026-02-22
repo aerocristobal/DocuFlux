@@ -12,6 +12,11 @@ import zipfile
 import io
 import json
 from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file
+try:
+    from prometheus_flask_exporter import PrometheusMetrics
+    _has_prometheus = True
+except ImportError:
+    _has_prometheus = False
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 from celery import Celery
@@ -92,6 +97,9 @@ CORS(app, resources={r"/api/v1/capture/*": {
     "methods": ["GET", "POST", "OPTIONS"],
     "allow_headers": ["Content-Type", "X-Client-ID"]
 }})
+if _has_prometheus:
+    metrics = PrometheusMetrics(app)
+    metrics.info('app_info', 'DocuFlux web service', version='1.0')
 
 UPLOAD_FOLDER = app_settings.upload_folder
 OUTPUT_FOLDER = app_settings.output_folder
@@ -371,13 +379,8 @@ def update_job_metadata(job_id, updates):
     """
     key = f"job:{job_id}"
     try:
-        # Epic 30.3: Use pipeline to batch hset + hgetall into one round trip
-        pipe = redis_client.pipeline()
-        pipe.hset(key, mapping=updates)
-        pipe.hgetall(key)
-        _, full_meta = pipe.execute()
-        full_meta['id'] = job_id
-        socketio.emit('job_update', full_meta, namespace='/')
+        redis_client.hset(key, mapping=updates)
+        socketio.emit('job_update', {'id': job_id, **updates}, namespace='/')
     except Exception as e:
         logging.error(f"Error updating metadata for {job_id}: {e}")
 
@@ -496,7 +499,7 @@ def list_jobs():
     session_id = session.get('session_id')
     if not session_id: return jsonify([])
     history_key = f"history:{session_id}"
-    job_ids = redis_client.lrange(history_key, 0, -1)
+    job_ids = redis_client.lrange(history_key, 0, 49)  # Latest 50 jobs
     if not job_ids: return jsonify([])
     
     pipe = redis_client.pipeline()

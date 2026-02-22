@@ -56,11 +56,12 @@
 
   function elementToMarkdown(el) {
     // Basic HTML-to-Markdown conversion
-    let html = el.innerHTML || '';
-
-    // Strip script and style blocks (including their content) before tag processing
-    html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
-    html = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+    let html = DOMPurify.sanitize(el.innerHTML || '', {
+      ALLOWED_TAGS: ['h1','h2','h3','h4','h5','h6','p','a','img','ul','ol','li',
+                     'b','strong','i','em','code','pre','blockquote','br','hr',
+                     'div','span','table','thead','tbody','tr','th','td'],
+      ALLOWED_ATTR: ['href','src','alt','title','class']
+    });
 
     // Headings
     html = html.replace(/<h1[^>]*>(.*?)<\/h1>/gis, '\n# $1\n');

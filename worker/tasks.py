@@ -59,6 +59,11 @@ celery = Celery(
     broker=app_settings.celery_broker_url,
     backend=app_settings.celery_result_backend
 )
+celery.conf.update(
+    task_serializer='json',
+    result_serializer='json',
+    accept_content=['json'],
+)
 
 # Redis metadata client (DB 1)
 redis_client = redis.Redis.from_url(
@@ -936,7 +941,11 @@ def test_amazon_session(job_id, encrypted_session_file_path):
             parsed_url = urlparse(final_url)
             hostname = parsed_url.hostname
 
-            if hostname and (hostname.endswith('signin.amazon.com') or hostname.endswith('kindle.amazon.com')):
+            if hostname and (
+                hostname in ('signin.amazon.com', 'kindle.amazon.com') or
+                hostname.endswith('.signin.amazon.com') or
+                hostname.endswith('.kindle.amazon.com')
+            ):
                 logging.warning(f"Amazon session for job {job_id} is invalid: redirected to {hostname}.")
                 update_job_metadata(job_id, {
                     'amazon_session_status': 'INVALID',
