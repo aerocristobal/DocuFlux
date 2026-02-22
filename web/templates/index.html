@@ -407,6 +407,17 @@
                     </div>
                 </div>
             </section>
+            <section id="captures-section" class="hidden">
+                <div class="surface-card">
+                    <h2 class="md-typescale-title-medium" style="display:flex;align-items:center;gap:8px;">
+                        <md-icon>extension</md-icon> Recent Captures
+                    </h2>
+                    <md-list id="captures-list"></md-list>
+                    <div id="no-captures-msg" style="text-align: center; padding: 32px;">
+                        <div class="md-typescale-body-medium" style="opacity:0.6;">No extension captures yet</div>
+                    </div>
+                </div>
+            </section>
         </div>
     </main>
 
@@ -596,6 +607,65 @@
         window.cancelJob = async (id) => { if (await confirmAction('Cancel?', 'Stop?')) { await fetch(`/api/cancel/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); } };
         window.deleteJob = async (id) => { if (await confirmAction('Delete?', 'Remove?')) { await fetch(`/api/delete/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); } };
         window.retryJob = async (id) => { await fetch(`/api/retry/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); showAlert('success', 'Retried.'); };
+
+        // --- Captures Section ---
+        let captureJobs = [];
+
+        async function fetchCaptures() {
+            try {
+                const r = await fetch('/api/captures');
+                captureJobs = await r.json();
+                renderCaptures();
+            } catch (e) {}
+        }
+
+        function renderCaptures() {
+            const section = document.getElementById('captures-section');
+            const list = document.getElementById('captures-list');
+            const msg = document.getElementById('no-captures-msg');
+            if (!captureJobs.length) {
+                section.classList.add('hidden');
+                return;
+            }
+            section.classList.remove('hidden');
+            msg.classList.add('hidden');
+            list.innerHTML = captureJobs.map(j => {
+                const ts = parseFloat(j.created_at);
+                const time = new Date(ts * (ts < 10000000000 ? 1000 : 1)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const active = ['PENDING', 'PROCESSING', 'STARTED'].includes(j.status);
+                let icon = 'pending', color = 'secondary', label = 'Waiting', actions = '';
+                if (j.status === 'SUCCESS') {
+                    icon = 'check_circle'; color = 'primary'; label = 'Done';
+                    const dlUrl = j.download_url || `/download/${j.id}`;
+                    actions = `<a href="${dlUrl}" download slot="end" title="Download"><md-icon-button><md-icon>download</md-icon></md-icon-button></a>`;
+                } else if (j.status === 'FAILURE') {
+                    icon = 'error'; color = 'error'; label = 'Failed';
+                }
+                const prog = active
+                    ? (j.progress ? `<md-linear-progress value="${j.progress/100}" style="width:100px;margin-top:8px;"></md-linear-progress>`
+                                  : `<md-linear-progress indeterminate style="width:100px;margin-top:8px;"></md-linear-progress>`)
+                    : '';
+                return `<md-list-item class="job-item">
+                    <md-icon slot="start" style="color:var(--md-sys-color-${color})">${icon}</md-icon>
+                    <div slot="headline">${escapeHtml(j.filename || 'Captured Document')}</div>
+                    <div slot="supporting-text">capture &rarr; ${escapeHtml(j.to || 'markdown')} · <span class="job-time">${time}</span>${prog}</div>
+                    <div slot="trailing-supporting-text"><md-assist-chip label="${label}" class="status-chip"></md-assist-chip></div>
+                    ${actions}
+                </md-list-item><md-divider></md-divider>`;
+            }).join('');
+        }
+
+        // Merge capture job_updates into captureJobs
+        socket.on('job_update', (u) => {
+            if (u.from === 'capture') {
+                const i = captureJobs.findIndex(j => j.id === u.id);
+                if (i !== -1) captureJobs[i] = { ...captureJobs[i], ...u }; else captureJobs.unshift(u);
+                renderCaptures();
+            }
+        });
+
+        fetchCaptures();
+        setInterval(fetchCaptures, 30000);
 
         // --- Service Status (single fetch per 10s interval) ---
         async function checkServices() {

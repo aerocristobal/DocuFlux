@@ -122,12 +122,13 @@ def add_security_headers(response):
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "img-src 'self' data:; "
         "font-src 'self' data: https://fonts.gstatic.com; "
-        "connect-src 'self' https://esm.run https://cdn.jsdelivr.net ws: wss:;"
+        "connect-src 'self' https://esm.run https://cdn.jsdelivr.net;"
     )
     response.headers['Content-Security-Policy'] = csp
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(), payment=()'
 
     # Epic 22.4: Enable HSTS when running behind HTTPS proxy
     if app_settings.behind_proxy or not app.debug:
@@ -547,6 +548,43 @@ def list_jobs():
         })
     jobs_data.sort(key=lambda x: x['created_at'], reverse=True)
     return jsonify(jobs_data)
+
+
+@app.route('/api/captures')
+def list_captures():
+    """Return recent browser-extension capture jobs with status and download URLs."""
+    job_ids = redis_client.lrange('capture:all_jobs', 0, 49)
+    if not job_ids:
+        return jsonify([])
+
+    pipe = redis_client.pipeline()
+    for jid in job_ids:
+        pipe.hgetall(f"job:{jid}")
+    results = pipe.execute()
+
+    jobs_data = []
+    for jid, meta in zip(job_ids, results):
+        if not meta:
+            continue
+        is_zip = meta.get('is_zip') == 'true'
+        download_url = None
+        if meta.get('status') == 'SUCCESS':
+            download_url = f"/download_zip/{jid}" if is_zip else f"/download/{jid}"
+        jobs_data.append({
+            'id': jid,
+            'filename': meta.get('filename'),
+            'from': meta.get('from', 'capture'),
+            'to': meta.get('to'),
+            'created_at': float(meta.get('created_at', 0)),
+            'status': meta.get('status', 'PENDING'),
+            'progress': meta.get('progress', '0'),
+            'result': meta.get('error') if meta.get('status') == 'FAILURE' else None,
+            'download_url': download_url,
+            'is_zip': is_zip,
+        })
+    jobs_data.sort(key=lambda x: x['created_at'], reverse=True)
+    return jsonify(jobs_data)
+
 
 def is_valid_uuid(val):
     """Return True if val is a valid UUID string, False otherwise."""
@@ -1299,6 +1337,12 @@ def capture_finish_session(session_id):
     })
 
     redis_client.hset(session_key, mapping={'status': 'assembling', 'job_id': job_id})
+
+    # Track capture jobs globally so the web UI can list them
+    captures_list_key = 'capture:all_jobs'
+    redis_client.lpush(captures_list_key, job_id)
+    redis_client.ltrim(captures_list_key, 0, 99)
+    redis_client.expire(captures_list_key, 86400)
 
     celery.send_task(
         'tasks.assemble_capture_session',

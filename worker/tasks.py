@@ -1016,20 +1016,20 @@ def analyze_screenshot_layout(job_id, url, storage_state_json=None):
         temp_screenshot_path = os.path.join(job_output_dir, f"screenshot_{job_id}.png")
 
         logging.info(f"Capturing screenshot for job {job_id} to {temp_screenshot_path}...")
-        mcp_response = call_mcp_server(
-            'create_context_and_goto',
-            {'url': url, 'storageState': storage_state_json}
-        )
+        script = [
+            {'action': 'goto', 'args': {'url': url}},
+            {'action': 'screenshot', 'args': {'path': temp_screenshot_path}},
+        ]
+        mcp_args = {'script': script}
+        if storage_state_json:
+            mcp_args['storageState'] = storage_state_json
+        mcp_response = call_mcp_server('execute_script', mcp_args)
         if not mcp_response.get('success'):
-            raise Exception(f"Failed to navigate and get content from MCP server: {mcp_response.get('error', 'Unknown error')}")
-        
-        # Now take screenshot and save it to the shared volume
-        screenshot_response = call_mcp_server(
-            'screenshot_current_page',
-            {'path': temp_screenshot_path} # mcp-server saves to /app/temp_screenshot_path
-        )
-        if not screenshot_response.get('success'):
-            raise Exception(f"Failed to capture screenshot from MCP server: {screenshot_response.get('error', 'Unknown error')}")
+            raise Exception(f"Failed to navigate and capture screenshot: {mcp_response.get('error', 'Unknown error')}")
+        results = mcp_response.get('script_execution_results', [])
+        screenshot_result = next((r for r in results if r.get('action') == 'screenshot'), None)
+        if not screenshot_result or not screenshot_result.get('success'):
+            raise Exception(f"Screenshot step failed in MCP script")
         logging.info(f"Screenshot captured and saved to {temp_screenshot_path}")
 
 
