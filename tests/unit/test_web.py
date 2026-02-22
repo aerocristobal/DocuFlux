@@ -132,14 +132,10 @@ def test_list_jobs_with_data(mock_redis, client, valid_job_id):
 @patch('app.celery')
 @patch('app.redis_client')
 def test_cancel_job(mock_redis, mock_celery, client, valid_job_id):
-    mock_pipe = MagicMock()
-    mock_redis.pipeline.return_value = mock_pipe
-    mock_pipe.execute.return_value = [1, {'status': 'REVOKED'}]
-
     response = client.post(f'/api/cancel/{valid_job_id}')
     assert response.status_code == 200
     mock_celery.control.revoke.assert_called_with(valid_job_id, terminate=True)
-    mock_redis.pipeline.assert_called()
+    mock_redis.expire.assert_called_with(f"job:{valid_job_id}", 600)
 
 @patch('shutil.rmtree')
 @patch('app.redis_client')
@@ -176,4 +172,3 @@ def test_retry_job(mock_celery, mock_redis, mock_copy, mock_exists, client, vali
     assert 'new_job_id' in response.json
 
     mock_celery.send_task.assert_called()
-    mock_redis.pipeline.assert_called()
