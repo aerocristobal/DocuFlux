@@ -477,15 +477,34 @@
             if (m) { fromSelect.value = m.key; updateToOptions(m.key); }
         });
 
+        // Prevent browser from opening dropped files as a new tab anywhere on the page
+        document.addEventListener('dragover', (e) => e.preventDefault());
+        document.addEventListener('drop', (e) => e.preventDefault());
+
         // Drag-and-drop visual feedback
         ['dragover', 'dragenter'].forEach(ev => {
             dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drop-zone--dragover'); });
             fileInput.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drop-zone--dragover'); });
         });
-        ['dragleave', 'drop'].forEach(ev => {
+        ['dragleave'].forEach(ev => {
             dropZone.addEventListener(ev, () => dropZone.classList.remove('drop-zone--dragover'));
             fileInput.addEventListener(ev, () => dropZone.classList.remove('drop-zone--dragover'));
         });
+        // Handle drop: prevent navigation, read files from dataTransfer
+        function handleFileDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('drop-zone--dragover');
+            const files = e.dataTransfer && e.dataTransfer.files;
+            if (files && files.length) {
+                const dt = new DataTransfer();
+                for (const f of files) dt.items.add(f);
+                fileInput.files = dt.files;
+                fileInput.dispatchEvent(new Event('change'));
+            }
+        }
+        dropZone.addEventListener('drop', handleFileDrop);
+        fileInput.addEventListener('drop', handleFileDrop);
 
         fromSelect.addEventListener('change', () => updateToOptions(fromSelect.value));
         function updateToOptions(key) {

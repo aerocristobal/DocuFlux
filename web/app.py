@@ -408,6 +408,9 @@ def detect_format_from_extension(ext):
 
 @app.route('/')
 def index():
+    if 'session_id' not in session:
+        session['session_id'] = str(uuid.uuid4())
+        session.permanent = True
     return render_template('index.html', formats=FORMATS)
 
 @app.route('/convert', methods=['POST'])
@@ -437,6 +440,10 @@ def convert():
         return jsonify({'error': "Invalid format selection"}), 400
     
     session_id = session.get('session_id')
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        session['session_id'] = session_id
+        session.permanent = True
     job_ids = []
     for file in files:
         if file.filename == '': continue
