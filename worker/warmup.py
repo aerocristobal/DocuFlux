@@ -105,6 +105,19 @@ def check_gpu_availability():
         r.hset("marker:gpu_info", mapping=gpu_info)
         r.set("marker:gpu_status", gpu_info["status"])
 
+        # Emit WebSocket event so frontend updates immediately without waiting for poll
+        try:
+            from flask_socketio import SocketIO as FSocketIO
+            _redis_url = os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1')
+            FSocketIO(message_queue=_redis_url).emit(
+                'gpu_status_update',
+                {'gpu_status': gpu_info['status'], 'gpu_info': gpu_info},
+                namespace='/'
+            )
+            logging.info("Emitted gpu_status_update via WebSocket")
+        except Exception as _e:
+            logging.debug(f"WebSocket emit skipped (non-critical): {_e}")
+
         return gpu_info
 
     except Exception as e:

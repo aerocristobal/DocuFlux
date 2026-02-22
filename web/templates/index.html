@@ -18,8 +18,8 @@
         })();
     </script>
 
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
 
     <script type="importmap">{"imports": {"@material/web/": "https://esm.run/@material/web/"}}</script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
@@ -31,90 +31,315 @@
 
     <style>
         :root {
-            --md-sys-color-primary: #6750a4; --md-sys-color-on-primary: #ffffff; --md-sys-color-primary-container: #eaddff; --md-sys-color-on-primary-container: #21005d;
-            --md-sys-color-secondary: #625b71; --md-sys-color-on-secondary: #ffffff; --md-sys-color-secondary-container: #e8def8; --md-sys-color-on-secondary-container: #1d192b;
-            --md-sys-color-tertiary: #7d5260; --md-sys-color-on-tertiary: #ffffff; --md-sys-color-tertiary-container: #ffd8e4; --md-sys-color-on-tertiary-container: #31111d;
-            --md-sys-color-error: #b3261e; --md-sys-color-on-error: #ffffff; --md-sys-color-error-container: #f9dedc; --md-sys-color-on-error-container: #410e0b;
-            --md-sys-color-outline: #79747e; --md-sys-color-outline-variant: #cac4d0; --md-sys-color-background: #fef7ff; --md-sys-color-on-background: #1d1b20;
-            --md-sys-color-surface: #fef7ff; --md-sys-color-on-surface: #1d1b20; --md-sys-color-surface-variant: #e7e0ec; --md-sys-color-on-surface-variant: #49454f;
-            --md-sys-color-surface-container: #f3edf7; --md-sys-color-surface-container-highest: #e6e0e9;
-            --md-sys-color-inverse-surface: #322f35; --md-sys-color-inverse-on-surface: #f5eff7;
-            font-family: 'Roboto', sans-serif;
+            --md-sys-color-primary: #00696d;
+            --md-sys-color-on-primary: #ffffff;
+            --md-sys-color-primary-container: #9cf1f6;
+            --md-sys-color-on-primary-container: #002022;
+            --md-sys-color-secondary: #4a6365;
+            --md-sys-color-on-secondary: #ffffff;
+            --md-sys-color-secondary-container: #cce8e9;
+            --md-sys-color-on-secondary-container: #051f21;
+            --md-sys-color-tertiary: #525e7d;
+            --md-sys-color-on-tertiary: #ffffff;
+            --md-sys-color-tertiary-container: #dae2ff;
+            --md-sys-color-on-tertiary-container: #0e1b37;
+            --md-sys-color-error: #ba1a1a;
+            --md-sys-color-on-error: #ffffff;
+            --md-sys-color-error-container: #ffdad6;
+            --md-sys-color-on-error-container: #410002;
+            --md-sys-color-outline: #6f797a;
+            --md-sys-color-outline-variant: #bec8c9;
+            --md-sys-color-background: #f4fafb;
+            --md-sys-color-on-background: #161d1e;
+            --md-sys-color-surface: #f4fafb;
+            --md-sys-color-on-surface: #161d1e;
+            --md-sys-color-surface-variant: #dae4e5;
+            --md-sys-color-on-surface-variant: #3f4949;
+            --md-sys-color-surface-container: #e8f3f4;
+            --md-sys-color-surface-container-highest: #d9e4e5;
+            --md-sys-color-inverse-surface: #2b3132;
+            --md-sys-color-inverse-on-surface: #ecf2f3;
+            font-family: 'IBM Plex Sans', sans-serif;
         }
         .dark-theme {
-            --md-sys-color-primary: #d0bcff; --md-sys-color-on-primary: #381e72; --md-sys-color-primary-container: #4f378b; --md-sys-color-on-primary-container: #eaddff;
-            --md-sys-color-secondary: #ccc2dc; --md-sys-color-on-secondary: #332d41; --md-sys-color-secondary-container: #4a4458; --md-sys-color-on-secondary-container: #e8def8;
-            --md-sys-color-tertiary: #efb8c8; --md-sys-color-on-tertiary: #492532; --md-sys-color-tertiary-container: #633b48; --md-sys-color-on-tertiary-container: #ffd8e4;
-            --md-sys-color-error: #f2b8b5; --md-sys-color-on-error: #601410; --md-sys-color-error-container: #8c1d18; --md-sys-color-on-error-container: #f9dedc;
-            --md-sys-color-outline: #938f99; --md-sys-color-outline-variant: #49454f; --md-sys-color-background: #141218; --md-sys-color-on-background: #e6e1e5;
-            --md-sys-color-surface: #141218; --md-sys-color-on-surface: #e6e1e5; --md-sys-color-surface-variant: #49454f; --md-sys-color-on-surface-variant: #cac4d0;
-            --md-sys-color-surface-container: #211f26; --md-sys-color-surface-container-highest: #36343b;
-            --md-sys-color-inverse-surface: #e6e1e5; --md-sys-color-inverse-on-surface: #313033;
+            --md-sys-color-primary: #80d5da;
+            --md-sys-color-on-primary: #003739;
+            --md-sys-color-primary-container: #004f52;
+            --md-sys-color-on-primary-container: #9cf1f6;
+            --md-sys-color-secondary: #b1cccd;
+            --md-sys-color-on-secondary: #1c3435;
+            --md-sys-color-secondary-container: #334b4c;
+            --md-sys-color-on-secondary-container: #cce8e9;
+            --md-sys-color-tertiary: #bbc4e9;
+            --md-sys-color-on-tertiary: #242f4d;
+            --md-sys-color-tertiary-container: #3b4664;
+            --md-sys-color-on-tertiary-container: #dae2ff;
+            --md-sys-color-error: #ffb4ab;
+            --md-sys-color-on-error: #690005;
+            --md-sys-color-error-container: #93000a;
+            --md-sys-color-on-error-container: #ffdad6;
+            --md-sys-color-outline: #899393;
+            --md-sys-color-outline-variant: #3f4949;
+            --md-sys-color-background: #0e1415;
+            --md-sys-color-on-background: #dde4e4;
+            --md-sys-color-surface: #0e1415;
+            --md-sys-color-on-surface: #dde4e4;
+            --md-sys-color-surface-variant: #3f4949;
+            --md-sys-color-on-surface-variant: #bec8c9;
+            --md-sys-color-surface-container: #1a2020;
+            --md-sys-color-surface-container-highest: #2b3132;
+            --md-sys-color-inverse-surface: #dde4e4;
+            --md-sys-color-inverse-on-surface: #2b3132;
         }
-        html, body { background-color: var(--md-sys-color-background); color: var(--md-sys-color-on-background); margin: 0; min-height: 100vh; display: flex; flex-direction: column; transition: background-color 0.3s; }
-        header { background-color: var(--md-sys-color-surface); height: 64px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); position: sticky; top: 0; z-index: 10; }
-        .logo { font-size: 1.375rem; display: flex; align-items: center; gap: 12px; text-decoration: none; color: inherit; }
+
+        html, body {
+            background-color: var(--md-sys-color-background);
+            color: var(--md-sys-color-on-background);
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            transition: background-color 0.3s;
+        }
+
+        /* Header */
+        header {
+            background-color: var(--md-sys-color-surface-container);
+            height: 64px;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            border-bottom: 1px solid var(--md-sys-color-outline-variant);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            color: inherit;
+        }
+        .logo-icon {
+            color: var(--md-sys-color-primary);
+            font-size: 1.5rem;
+        }
+        .logo-text {
+            font-family: 'IBM Plex Mono', monospace;
+            font-weight: 600;
+            font-size: 1.0625rem;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* Layout */
         main { flex: 1; padding: 16px; max-width: 1200px; margin: 0 auto; width: 100%; box-sizing: border-box; }
         @media (min-width: 600px) { main { padding: 24px; } }
         .grid-layout { display: grid; grid-template-columns: 1fr; gap: 24px; }
         @media (min-width: 900px) { .grid-layout { grid-template-columns: 360px 1fr; } }
-        .surface-card { background-color: var(--md-sys-color-surface); border-radius: 16px; padding: 24px; border: 1px solid var(--md-sys-color-outline); display: flex; flex-direction: column; }
-        .drop-zone { border: 2px dashed var(--md-sys-color-outline); border-radius: 12px; padding: 40px 16px; text-align: center; position: relative; background-color: var(--md-sys-color-surface-variant); color: var(--md-sys-color-on-surface-variant); margin-bottom: 24px; transition: 0.2s; cursor: pointer; }
-        .drop-zone--dragover { background-color: var(--md-sys-color-primary-container); border-color: var(--md-sys-color-primary); }
+
+        /* Cards */
+        .surface-card {
+            background-color: var(--md-sys-color-surface);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07), 0 0 1px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+        }
+        .dark-theme .surface-card {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.35), 0 0 1px rgba(0,0,0,0.25);
+        }
+
+        /* Drop Zone */
+        .drop-zone {
+            border: 2px dashed var(--md-sys-color-outline-variant);
+            border-radius: 12px;
+            padding: 40px 16px;
+            text-align: center;
+            position: relative;
+            background-color: var(--md-sys-color-surface-container);
+            color: var(--md-sys-color-on-surface-variant);
+            margin-bottom: 24px;
+            cursor: pointer;
+            transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s;
+        }
+        .drop-zone:hover {
+            border-color: var(--md-sys-color-outline);
+            background-color: var(--md-sys-color-surface-container-highest);
+        }
+        .drop-zone--dragover {
+            border-color: var(--md-sys-color-primary);
+            border-style: solid;
+            background-color: color-mix(in srgb, var(--md-sys-color-primary-container) 25%, var(--md-sys-color-surface-container));
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-sys-color-primary) 15%, transparent);
+        }
+        .drop-icon {
+            font-size: 48px;
+            color: var(--md-sys-color-primary);
+            transition: transform 0.2s;
+            display: block;
+        }
+        .drop-zone:hover .drop-icon, .drop-zone--dragover .drop-icon { transform: translateY(-3px); }
         .drop-zone input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+
+        /* Form elements */
         md-filled-select, md-filled-button { width: 100%; margin-bottom: 16px; }
-        md-filled-select { --md-filled-select-container-color: var(--md-sys-color-surface-container-highest); --md-filled-select-text-color: var(--md-sys-color-on-surface); }
-        .alert-card { padding: 12px 16px; border-radius: 8px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; font-size: 0.875rem; animation: fadeIn 0.3s; }
+        md-filled-select {
+            --md-filled-select-container-color: var(--md-sys-color-surface-container-highest);
+            --md-filled-select-text-color: var(--md-sys-color-on-surface);
+        }
+
+        /* Alerts */
+        .alert-card {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            font-size: 0.875rem;
+            animation: fadeIn 0.3s;
+        }
         .alert-error { background-color: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
         .alert-success { background-color: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
-        .status-chip { height: 28px; }
-        .hidden { display: none !important; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .alert-warning {
+            background-color: var(--md-sys-color-tertiary-container);
+            color: var(--md-sys-color-on-tertiary-container);
+            border-left: 3px solid var(--md-sys-color-tertiary);
+        }
 
-        /* GPU Status Indicator Styles */
-        #gpu-status-chip {
+        /* Job list */
+        .status-chip { height: 28px; }
+        .job-item[data-status="SUCCESS"] { border-left: 3px solid #22c55e; }
+        .job-item[data-status="FAILURE"] { border-left: 3px solid var(--md-sys-color-error); }
+        .job-item[data-status="PROCESSING"],
+        .job-item[data-status="STARTED"] { border-left: 3px solid var(--md-sys-color-primary); }
+        .job-item[data-status="PENDING"] { border-left: 3px solid var(--md-sys-color-outline-variant); }
+        .job-time {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.8rem;
+            opacity: 0.75;
+        }
+
+        /* GPU Status Chip */
+        .gpu-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 5px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--md-sys-color-outline-variant);
+            background: var(--md-sys-color-surface-container-highest);
+            color: var(--md-sys-color-on-surface-variant);
             cursor: pointer;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+            transition: all 0.2s ease;
             margin-right: 12px;
-            transition: all 0.3s ease;
+            outline: none;
+            white-space: nowrap;
         }
-        #gpu-status-chip:hover {
-            filter: brightness(1.1);
+        .gpu-chip:hover {
+            background: var(--md-sys-color-surface-variant);
+            border-color: var(--md-sys-color-outline);
         }
-        .gpu-available {
-            background-color: var(--md-sys-color-primary) !important;
-            color: var(--md-sys-color-on-primary) !important;
+        .gpu-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            transition: background-color 0.4s;
         }
-        .gpu-unavailable {
-            background-color: var(--md-sys-color-tertiary) !important;
-            color: var(--md-sys-color-on-tertiary) !important;
+        .gpu-chip.gpu-available { border-color: color-mix(in srgb, #22c55e 35%, var(--md-sys-color-outline-variant)); }
+        .gpu-chip.gpu-available .gpu-dot { background-color: #22c55e; }
+        .gpu-chip.gpu-unavailable { border-color: color-mix(in srgb, #f59e0b 35%, var(--md-sys-color-outline-variant)); }
+        .gpu-chip.gpu-unavailable .gpu-dot { background-color: #f59e0b; }
+        .gpu-chip.gpu-initializing .gpu-dot {
+            background-color: var(--md-sys-color-outline);
+            animation: pulse-dot 1.5s ease-in-out infinite;
         }
-        .gpu-initializing {
-            background-color: var(--md-sys-color-surface-variant) !important;
-            color: var(--md-sys-color-on-surface-variant) !important;
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 0.35; transform: scale(0.75); }
+            50% { opacity: 1; transform: scale(1.15); }
         }
-        #gpu-modal-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 12px;
+
+        /* Status badges (modal) */
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
+        .status-available { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
+        .status-unavailable { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+        .status-unknown { background: var(--md-sys-color-surface-variant); color: var(--md-sys-color-on-surface-variant); }
+        .dark-theme .status-available { background: rgba(34, 197, 94, 0.12); color: #4ade80; }
+        .dark-theme .status-unavailable { background: rgba(245, 158, 11, 0.12); color: #fbbf24; }
+
+        /* GPU Modal Table */
+        #gpu-modal-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
         #gpu-modal-table td {
-            padding: 8px;
+            padding: 10px 8px;
             border-bottom: 1px solid var(--md-sys-color-outline-variant);
+            vertical-align: middle;
         }
         #gpu-modal-table td:first-child {
             font-weight: 500;
             color: var(--md-sys-color-on-surface-variant);
-            width: 40%;
+            width: 42%;
+            font-size: 0.875rem;
         }
+        .modal-row-icon {
+            font-size: 16px;
+            vertical-align: middle;
+            margin-right: 6px;
+            color: var(--md-sys-color-primary);
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+        }
+        .vram-bar-container {
+            height: 4px;
+            background: var(--md-sys-color-outline-variant);
+            border-radius: 2px;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+        .vram-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.6s ease;
+        }
+
+        /* Misc */
+        .hidden { display: none !important; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body>
     <header>
-        <a href="/" class="logo md-typescale-title-large"><md-icon>description</md-icon> DocuFlux</a>
+        <a href="/" class="logo">
+            <md-icon class="logo-icon">description</md-icon>
+            <span class="logo-text">DocuFlux</span>
+        </a>
         <div style="flex: 1;"></div>
 
         <!-- GPU Status Indicator -->
-        <md-filter-chip id="gpu-status-chip" class="gpu-initializing" label="⏳ Detecting GPU..."></md-filter-chip>
+        <button id="gpu-status-chip" class="gpu-chip gpu-initializing" title="Click for system status" aria-label="GPU Status">
+            <span class="gpu-dot"></span>
+            <span class="gpu-label">Detecting...</span>
+        </button>
 
         <span style="position: relative;">
             <md-icon-button id="theme-toggle"><md-icon>brightness_auto</md-icon></md-icon-button>
@@ -131,18 +356,21 @@
             <section>
                 <div class="surface-card">
                     <h2 class="md-typescale-title-medium">New Conversion</h2>
-                    
+
                     <div id="status-banner" class="alert-card alert-warning hidden">
                         <md-icon>hourglass_empty</md-icon>
-                        <span id="status-text">Marker initializing...</span>
+                        <div style="flex: 1;">
+                            <span id="status-text">Marker initializing...</span>
+                            <md-linear-progress id="status-progress" indeterminate style="margin-top: 6px;"></md-linear-progress>
+                        </div>
                     </div>
 
                     <div id="alert-area"></div>
                     <form id="convert-form">
                         <div class="drop-zone" id="drop-zone">
-                            <md-icon style="font-size: 48px;">cloud_upload</md-icon>
-                            <div id="drop-zone-prompt" class="md-typescale-body-large">Drag files here or click</div>
-                            <div class="md-typescale-body-small">Multiple files supported (Max 100MB)</div>
+                            <md-icon class="drop-icon">cloud_upload</md-icon>
+                            <div id="drop-zone-prompt" class="md-typescale-body-large" style="margin-top: 8px;">Drag files here or click</div>
+                            <div class="md-typescale-body-small">Multiple files supported · Max 100MB</div>
                             <input type="file" id="file" name="file" multiple required>
                         </div>
                         <md-filled-select label="From Format" id="from_format" name="from_format" required>
@@ -152,7 +380,7 @@
                         <md-filled-select label="To Format" id="to_format" name="to_format" disabled required>
                             <md-select-option value="" disabled selected><div slot="headline">Select source first</div></md-select-option>
                         </md-filled-select>
-                        
+
                         <div id="marker-options" class="hidden" style="margin-bottom: 16px;">
                             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                                 <md-checkbox id="force_ocr" name="force_ocr" value="on"></md-checkbox>
@@ -197,19 +425,18 @@
         let localJobs = [];
 
         // --- Theme Logic ---
-        function updateToggleIcon(t) {
+        function updateToggleIcon() {
             const i = document.querySelector('#theme-toggle md-icon');
             if (!i) return;
             const saved = localStorage.getItem('theme') || 'system';
             i.textContent = saved === 'system' ? 'brightness_auto' : (saved === 'dark' ? 'dark_mode' : 'light_mode');
         }
-
         document.getElementById('theme-toggle').addEventListener('click', () => { document.getElementById('theme-menu').open = true; });
         document.getElementById('theme-menu').addEventListener('action', (e) => {
             const t = e.detail.item.dataset.theme;
             localStorage.setItem('theme', t);
             window.applyTheme(t);
-            updateToggleIcon(t);
+            updateToggleIcon();
         });
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (localStorage.getItem('theme') === 'system') window.applyTheme('system'); });
         updateToggleIcon();
@@ -240,6 +467,7 @@
         const fromSelect = document.getElementById('from_format');
         const toSelect = document.getElementById('to_format');
         const fileInput = document.getElementById('file');
+        const dropZone = document.getElementById('drop-zone');
 
         fileInput.addEventListener('change', () => {
             if (!fileInput.files.length) return;
@@ -247,6 +475,16 @@
             const ext = '.' + fileInput.files[0].name.toLowerCase().split('.').pop();
             const m = formats.find(f => (f.extension === ext || (f.key === 'markdown' && (ext === '.md' || ext === '.markdown'))) && f.direction !== 'Output Only');
             if (m) { fromSelect.value = m.key; updateToOptions(m.key); }
+        });
+
+        // Drag-and-drop visual feedback
+        ['dragover', 'dragenter'].forEach(ev => {
+            dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drop-zone--dragover'); });
+            fileInput.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drop-zone--dragover'); });
+        });
+        ['dragleave', 'drop'].forEach(ev => {
+            dropZone.addEventListener(ev, () => dropZone.classList.remove('drop-zone--dragover'));
+            fileInput.addEventListener(ev, () => dropZone.classList.remove('drop-zone--dragover'));
         });
 
         fromSelect.addEventListener('change', () => updateToOptions(fromSelect.value));
@@ -274,11 +512,11 @@
             document.getElementById('submit-progress').classList.remove('hidden');
             try {
                 const r = await fetch('/convert', { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body: fd });
-                if (r.ok) { 
-                    showAlert('success', 'Submitted!'); 
-                    fileInput.value = ''; fromSelect.value = ''; toSelect.value = ''; 
+                if (r.ok) {
+                    showAlert('success', 'Submitted!');
+                    fileInput.value = ''; fromSelect.value = ''; toSelect.value = '';
                     document.getElementById('drop-zone-prompt').textContent = "Drag files here or click";
-                    fetchJobs(); 
+                    fetchJobs();
                 } else { const d = await r.json(); showAlert('error', d.error || 'Failed'); }
             } catch (e) { showAlert('error', 'Network error'); }
             finally { document.getElementById('convert-btn').disabled = false; document.getElementById('submit-progress').classList.add('hidden'); }
@@ -311,24 +549,25 @@
                 const time = new Date(ts * (ts < 10000000000 ? 1000 : 1)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 const active = ['PENDING', 'PROCESSING', 'STARTED'].includes(j.status);
                 let icon = 'pending', color = 'secondary', label = 'Waiting', actions = '';
-                if (j.status === 'SUCCESS') { 
-                    icon = 'check_circle'; 
-                    color = 'primary'; 
-                    label = 'Done'; 
+                if (j.status === 'SUCCESS') {
+                    icon = 'check_circle'; color = 'primary'; label = 'Done';
                     const dlUrl = j.download_url || `/download/${j.id}`;
                     const dlIcon = j.is_zip ? 'folder_zip' : 'download';
                     const dlTitle = j.is_zip ? 'Download ZIP' : 'Download File';
-                    actions = `<a href="${dlUrl}" download slot="end" title="${dlTitle}"><md-icon-button><md-icon>${dlIcon}</md-icon></md-icon-button></a>`; 
+                    actions = `<a href="${dlUrl}" download slot="end" title="${dlTitle}"><md-icon-button><md-icon>${dlIcon}</md-icon></md-icon-button></a>`;
                 }
                 else if (j.status === 'FAILURE') { icon = 'error'; color = 'error'; label = 'Failed'; actions = `<md-icon-button slot="end" onclick="window.retryJob('${j.id}')"><md-icon>replay</md-icon></md-icon-button>`; }
                 else if (j.status === 'REVOKED') { icon = 'cancel'; color = 'outline'; label = 'Cancelled'; actions = `<md-icon-button slot="end" onclick="window.retryJob('${j.id}')"><md-icon>replay</md-icon></md-icon-button>`; }
                 else actions = `<md-icon-button slot="end" onclick="window.cancelJob('${j.id}')"><md-icon>close</md-icon></md-icon-button>`;
-                
-                const prog = active ? `<md-linear-progress value="${(j.progress||0)/100}" ${!j.progress?'indeterminate':''} style="width:100px;margin-top:8px;"></md-linear-progress>` : '';
-                return `<md-list-item class="job-item">
+
+                const prog = active && j.progress
+                    ? `<md-linear-progress value="${j.progress/100}" style="width:100px;margin-top:8px;"></md-linear-progress>`
+                    : active ? `<md-linear-progress indeterminate style="width:100px;margin-top:8px;"></md-linear-progress>` : '';
+
+                return `<md-list-item class="job-item" data-status="${escapeHtml(j.status)}">
                     <md-icon slot="start" style="color:var(--md-sys-color-${color})">${icon}</md-icon>
                     <div slot="headline">${escapeHtml(j.filename)}</div>
-                    <div slot="supporting-text">${escapeHtml(j.from)} &rarr; ${escapeHtml(j.to)} • ${time}${prog}</div>
+                    <div slot="supporting-text">${escapeHtml(j.from)} &rarr; ${escapeHtml(j.to)} · <span class="job-time">${time}</span>${prog}</div>
                     <div slot="trailing-supporting-text"><md-assist-chip label="${label}" class="status-chip"></md-assist-chip></div>
                     ${actions}${!active ? `<md-icon-button slot="end" onclick="window.deleteJob('${j.id}')"><md-icon>delete</md-icon></md-icon-button>` : ''}
                 </md-list-item><md-divider></md-divider>`;
@@ -339,67 +578,63 @@
         window.deleteJob = async (id) => { if (await confirmAction('Delete?', 'Remove?')) { await fetch(`/api/delete/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); } };
         window.retryJob = async (id) => { await fetch(`/api/retry/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); showAlert('success', 'Retried.'); };
 
+        // --- Service Status (single fetch per 10s interval) ---
         async function checkServices() {
             try {
                 const r = await fetch('/api/status/services');
                 const d = await r.json();
+
+                // Marker service banner
                 const banner = document.getElementById('status-banner');
                 const txt = document.getElementById('status-text');
+                const statusProgress = document.getElementById('status-progress');
                 const pdfOpt = document.querySelector('md-select-option[value="pdf_marker"]');
-                
+
                 if (d.marker && d.marker !== 'ready') {
                     banner.classList.remove('hidden');
                     const isError = d.marker === 'error';
                     banner.className = `alert-card alert-${isError ? 'error' : 'warning'}`;
                     const icon = banner.querySelector('md-icon');
                     if (icon) icon.textContent = isError ? 'error' : 'hourglass_empty';
-                    
-                    txt.textContent = `Marker Service: ${d.marker.toUpperCase()}${d.llm_download_eta ? ` (ETA: ${d.llm_download_eta})` : ''}. PDF conversion unavailable.`;
-                    
-                    if (pdfOpt) {
-                        pdfOpt.disabled = true;
-                        if (fromSelect.value === 'pdf_marker') fromSelect.value = ''; // Deselect if selected
-                    }
+                    txt.textContent = `Marker: ${d.marker.toUpperCase()}${d.llm_download_eta ? ` · ETA ${d.llm_download_eta}` : ''}`;
+                    if (statusProgress) statusProgress.classList.toggle('hidden', isError);
+                    if (pdfOpt) { pdfOpt.disabled = true; if (fromSelect.value === 'pdf_marker') fromSelect.value = ''; }
                 } else {
                     banner.classList.add('hidden');
                     if (pdfOpt) pdfOpt.disabled = false;
                 }
-            } catch(e) { console.error(e); }
+
+                // GPU status — reuse same response, no second fetch
+                updateGPUStatus(d);
+            } catch(e) { console.error('checkServices error:', e); }
         }
         setInterval(checkServices, 10000);
         checkServices();
 
-        // GPU Status Indicator Functions
+        // --- GPU Status ---
         function updateGPUStatus(data) {
             const chip = document.getElementById('gpu-status-chip');
-            if (!chip) return;
+            const label = chip && chip.querySelector('.gpu-label');
+            if (!chip || !label) return;
 
             const gpu_status = data.gpu_status || 'initializing';
             const gpu_info = data.gpu_info || {};
 
-            // Remove all status classes
             chip.classList.remove('gpu-available', 'gpu-unavailable', 'gpu-initializing');
 
             if (gpu_status === 'available') {
                 chip.classList.add('gpu-available');
                 const model = gpu_info.model || 'GPU';
-                const shortModel = model.replace('NVIDIA GeForce ', '').replace('NVIDIA ', '');
-                chip.label = `⚡ ${shortModel}`;
+                label.textContent = model.replace('NVIDIA GeForce ', '').replace('NVIDIA ', '');
             } else if (gpu_status === 'unavailable') {
                 chip.classList.add('gpu-unavailable');
-                chip.label = '🖥️ CPU Mode';
-                // Disable PDF (High Accuracy) option
+                label.textContent = 'CPU Mode';
                 const pdfMarkerOpt = document.querySelector('md-select-option[value="pdf_marker"]');
                 if (pdfMarkerOpt) pdfMarkerOpt.disabled = true;
             } else {
                 chip.classList.add('gpu-initializing');
-                chip.label = '⏳ Detecting GPU...';
+                label.textContent = 'Detecting...';
             }
-        }
-
-        function openGPUModal() {
-            const dialog = document.getElementById('gpu-details-modal');
-            if (dialog) dialog.show();
         }
 
         async function refreshGPUDetails() {
@@ -408,65 +643,74 @@
                 const data = await r.json();
                 const gpu_info = data.gpu_info || {};
 
-                // Update modal table
-                document.getElementById('modal-gpu-status').textContent = gpu_info.status || 'unknown';
+                const statusEl = document.getElementById('modal-gpu-status');
+                statusEl.textContent = gpu_info.status || 'unknown';
+                statusEl.className = 'status-badge status-' + (gpu_info.status || 'unknown');
+
                 document.getElementById('modal-gpu-model').textContent = gpu_info.model || 'N/A';
-                document.getElementById('modal-gpu-vram').textContent = gpu_info.vram_total ?
-                    `${gpu_info.vram_available || 0} GB / ${gpu_info.vram_total} GB` : 'N/A';
                 document.getElementById('modal-gpu-cuda').textContent = gpu_info.cuda_version || 'N/A';
                 document.getElementById('modal-gpu-driver').textContent = gpu_info.driver_version || 'N/A';
-                document.getElementById('modal-gpu-util').textContent = gpu_info.utilization !== undefined ?
-                    `${gpu_info.utilization}%` : 'N/A';
-            } catch(e) {
-                console.error('Error refreshing GPU details:', e);
-            }
+                document.getElementById('modal-gpu-util').textContent = gpu_info.utilization !== undefined ? `${gpu_info.utilization}%` : 'N/A';
+
+                if (gpu_info.vram_total) {
+                    const used = gpu_info.vram_total - (gpu_info.vram_available || 0);
+                    const pct = Math.round((used / gpu_info.vram_total) * 100);
+                    document.getElementById('modal-gpu-vram').textContent = `${(gpu_info.vram_available || 0).toFixed(1)} / ${gpu_info.vram_total} GB free`;
+                    const bar = document.getElementById('vram-bar');
+                    if (bar) bar.style.width = `${pct}%`;
+                } else {
+                    document.getElementById('modal-gpu-vram').textContent = 'N/A';
+                }
+            } catch(e) { console.error('Error refreshing GPU details:', e); }
         }
 
-        // Update GPU status on service check
-        const originalCheckServices = checkServices;
-        checkServices = async function() {
-            await originalCheckServices();
-            try {
-                const r = await fetch('/api/status/services');
-                const data = await r.json();
-                updateGPUStatus(data);
-            } catch(e) {
-                console.error('Error checking GPU status:', e);
-            }
-        };
-
-        // Setup GPU chip click handler
-        document.addEventListener('DOMContentLoaded', () => {
-            const chip = document.getElementById('gpu-status-chip');
-            if (chip) {
-                chip.addEventListener('click', () => {
-                    refreshGPUDetails();
-                    openGPUModal();
-                });
-            }
-        });
-
-        // WebSocket listener for GPU status updates
-        if (typeof socket !== 'undefined') {
-            socket.on('gpu_status_update', (data) => {
-                console.log('GPU status update received:', data);
-                updateGPUStatus(data);
+        // GPU chip click — open modal and refresh details
+        const gpuChip = document.getElementById('gpu-status-chip');
+        if (gpuChip) {
+            gpuChip.addEventListener('click', () => {
+                refreshGPUDetails();
+                document.getElementById('gpu-details-modal').show();
             });
         }
+
+        // WebSocket listener for real-time GPU status updates from warmup
+        socket.on('gpu_status_update', (data) => {
+            updateGPUStatus(data);
+        });
     </script>
 
     <!-- GPU Details Modal -->
     <md-dialog id="gpu-details-modal">
         <div slot="headline">System Status</div>
-        <div slot="content" style="min-width: 400px;">
-            <h3 class="md-typescale-title-small" style="margin-top: 0;">GPU Information</h3>
+        <div slot="content" style="min-width: 380px; max-width: 480px;">
             <table id="gpu-modal-table">
-                <tr><td>Status:</td><td id="modal-gpu-status">Unknown</td></tr>
-                <tr><td>Model:</td><td id="modal-gpu-model">N/A</td></tr>
-                <tr><td>VRAM:</td><td id="modal-gpu-vram">N/A</td></tr>
-                <tr><td>CUDA Version:</td><td id="modal-gpu-cuda">N/A</td></tr>
-                <tr><td>Driver Version:</td><td id="modal-gpu-driver">N/A</td></tr>
-                <tr><td>Utilization:</td><td id="modal-gpu-util">N/A</td></tr>
+                <tr>
+                    <td><span class="material-symbols-outlined modal-row-icon">memory</span>Status</td>
+                    <td><span id="modal-gpu-status" class="status-badge status-unknown">Unknown</span></td>
+                </tr>
+                <tr>
+                    <td><span class="material-symbols-outlined modal-row-icon">developer_board</span>Model</td>
+                    <td id="modal-gpu-model">N/A</td>
+                </tr>
+                <tr>
+                    <td><span class="material-symbols-outlined modal-row-icon">storage</span>VRAM</td>
+                    <td>
+                        <span id="modal-gpu-vram">N/A</span>
+                        <div class="vram-bar-container"><div id="vram-bar" class="vram-bar"></div></div>
+                    </td>
+                </tr>
+                <tr>
+                    <td><span class="material-symbols-outlined modal-row-icon">bolt</span>CUDA</td>
+                    <td id="modal-gpu-cuda">N/A</td>
+                </tr>
+                <tr>
+                    <td><span class="material-symbols-outlined modal-row-icon">settings</span>Driver</td>
+                    <td id="modal-gpu-driver">N/A</td>
+                </tr>
+                <tr>
+                    <td><span class="material-symbols-outlined modal-row-icon">speed</span>Utilization</td>
+                    <td id="modal-gpu-util">N/A</td>
+                </tr>
             </table>
         </div>
         <div slot="actions">

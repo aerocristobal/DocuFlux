@@ -1042,8 +1042,11 @@ def api_v1_status(job_id):
         if 'completed_at' in metadata:
             response['completed_at'] = datetime.fromtimestamp(float(metadata['completed_at'])).isoformat() + 'Z'
 
-        # Check output files
-        output_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+        # Check output files (realpath check ensures path stays within OUTPUT_FOLDER)
+        _base = os.path.realpath(app.config['OUTPUT_FOLDER'])
+        output_dir = os.path.realpath(os.path.join(app.config['OUTPUT_FOLDER'], job_id))
+        if not output_dir.startswith(_base + os.sep):
+            return jsonify({'error': 'Invalid job path'}), 400
         if os.path.exists(output_dir):
             files = [f for f in os.listdir(output_dir) if f != 'metadata.json']
             is_multifile = len(files) > 1 or os.path.exists(os.path.join(output_dir, 'images'))
@@ -1097,8 +1100,11 @@ def api_v1_download(job_id):
     if metadata.get('status') != 'SUCCESS':
         return jsonify({'error': 'Job not completed yet'}), 404
 
-    # Check output directory
-    output_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+    # Check output directory (realpath check ensures path stays within OUTPUT_FOLDER)
+    _base = os.path.realpath(app.config['OUTPUT_FOLDER'])
+    output_dir = os.path.realpath(os.path.join(app.config['OUTPUT_FOLDER'], job_id))
+    if not output_dir.startswith(_base + os.sep):
+        return jsonify({'error': 'Invalid job path'}), 400
     if not os.path.exists(output_dir):
         return jsonify({'error': 'Output files not found or expired'}), 410
 
