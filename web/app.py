@@ -514,6 +514,13 @@ def list_jobs():
     for jid in job_ids: pipe.hgetall(f"job:{jid}")
     results = pipe.execute()
 
+    stale_ids = [jid for jid, meta in zip(job_ids, results) if not meta]
+    if stale_ids:
+        prune_pipe = redis_client.pipeline()
+        for jid in stale_ids:
+            prune_pipe.lrem(history_key, 0, jid)
+        prune_pipe.execute()
+
     jobs_data = []
     for jid, meta in zip(job_ids, results):
         if not meta: continue
@@ -597,6 +604,7 @@ def cancel_job(job_id):
     if not is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
     celery.control.revoke(job_id, terminate=True)
     update_job_metadata(job_id, {'status': 'REVOKED', 'progress': '0'})
+    redis_client.expire(f"job:{job_id}", 600)
     return jsonify({'status': 'cancelled'})
 
 @app.route('/api/delete/<job_id>', methods=['POST'])

@@ -223,6 +223,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
             'encrypted': 'false',
             'file_count': '1'
         })
+        redis_client.expire(f"job:{job_id}", 7200)
 
         # Epic 21.5: Record success metrics
         duration = time.time() - start_time
@@ -239,6 +240,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         error_msg = "Conversion timed out after 500 seconds"
         logging.error(f"Timeout for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg, 'progress': '0'})
+        redis_client.expire(f"job:{job_id}", 600)
 
         # Epic 21.5: Record failure metrics
         duration = time.time() - start_time
@@ -252,6 +254,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         error_msg = e.stderr or e.stdout or "Unknown error"
         logging.error(f"Pandoc error for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500], 'progress': '0'})
+        redis_client.expire(f"job:{job_id}", 600)
 
         # Epic 21.5: Record failure metrics
         duration = time.time() - start_time
@@ -264,6 +267,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
     except Exception as e:
         logging.error(f"Unexpected error for job {job_id}: {str(e)}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+        redis_client.expire(f"job:{job_id}", 600)
 
         # Epic 21.5: Record failure metrics
         duration = time.time() - start_time
@@ -492,6 +496,7 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
             'status': 'SUCCESS', 'completed_at': str(time.time()),
             'progress': '100', 'encrypted': 'false'
         })
+        redis_client.expire(f"job:{job_id}", 7200)
         extract_slm_metadata.delay(job_id, output_path)
 
         duration = time.time() - start_time
@@ -505,6 +510,7 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
     except Exception as e:
         logging.error(f"Marker error for job {job_id}: {e}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+        redis_client.expire(f"job:{job_id}", 600)
 
         duration = time.time() - start_time
         conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
@@ -706,11 +712,6 @@ def cleanup_old_files():
 
         redis_client.delete(candidate['key'])
 
-        if not emergency_cleanup:
-            current_usage = _get_disk_usage_percent(upload_dir)
-            if current_usage < 70:
-                logging.info(f"Disk usage now at {current_usage:.1f}%, stopping cleanup")
-                break
 
     logging.info(f"Cleanup complete. Freed {total_freed / (1024 * 1024):.2f} MB")
 
@@ -1356,6 +1357,7 @@ def assemble_capture_session(session_id, job_id):
             'file_count': str(file_count),
             'encrypted': 'false',
         })
+        redis_client.expire(f"job:{job_id}", 7200)
 
         logging.info(f"Capture assembly complete: job={job_id}, pages={len(pages)}, images={image_count}")
         gc.collect()
@@ -1370,6 +1372,7 @@ def assemble_capture_session(session_id, job_id):
             'error': error_msg[:500],
             'progress': '0',
         })
+        redis_client.expire(f"job:{job_id}", 600)
         raise
 
 
