@@ -675,7 +675,11 @@ def download_file(job_id):
     safe_job_id = secure_filename(job_id)
     job_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
     if not os.path.exists(job_dir): return "Not found", 404
-    files = [f for f in os.listdir(job_dir) if os.path.isfile(os.path.join(job_dir, f)) and not f.startswith('.')]
+    entries = [e for e in os.listdir(job_dir) if not e.startswith('.')]
+    # If the output contains subdirectories (e.g. images/ from Marker), serve as ZIP
+    if any(os.path.isdir(os.path.join(job_dir, e)) for e in entries):
+        return download_zip(job_id)
+    files = [e for e in entries if os.path.isfile(os.path.join(job_dir, e))]
     if not files: return "Not found", 404
     # Prefer non-json/metadata files if possible, or just take first
     target_file = files[0]
