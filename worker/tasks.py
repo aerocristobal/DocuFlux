@@ -739,60 +739,6 @@ def update_metrics():
         logging.error(f"Error updating metrics: {e}")
 
 
-@celery.task(name='tasks.renew_certificates')
-def renew_certificates():
-    """
-    Celery task to trigger Certbot certificate renewal and reload services if successful.
-    """
-    logging.info("Initiating certificate renewal process...")
-
-    try:
-        # Step 1: Trigger Certbot renewal inside the certbot container
-        # This assumes the worker container has 'docker-compose' client installed
-        # and configured to communicate with the Docker daemon. This is a simplification.
-        # In a real-world scenario, this might be triggered by an external scheduler
-        # or the certbot container could run its own cronjob.
-        renewal_command = [
-            "docker-compose",
-            "exec",
-            "certbot",
-            "/app/renew-certs.sh" # Path inside the certbot container
-        ]
-        # Assuming the renew-certs.sh script will output "Certificates were renewed or updated" if successful
-        result = subprocess.run(renewal_command, capture_output=True, text=True, check=False)
-
-        if result.returncode != 0:
-            logging.error(f"Certbot renewal command failed with exit code {result.returncode}: {result.stderr}")
-            return {"status": "error", "message": f"Certbot renewal command failed: {result.stderr}"}
-
-        logging.info(f"Certbot renewal command output: {result.stdout}")
-
-        if "Certificates were renewed or updated" in result.stdout:
-            logging.info("Certificates were renewed. Reloading services...")
-            # Step 2: Reload services on the host if renewal was successful
-            # This requires 'docker-compose' to be available on the host (where this Celery task orchestrator effectively runs)
-            # and able to restart containers.
-            reload_command = ["docker-compose", "restart", "web", "worker", "beat"]
-            reload_result = subprocess.run(reload_command, capture_output=True, text=True, check=True)
-            logging.info(f"Service reload output: {reload_result.stdout}")
-            return {"status": "success", "message": "Certificates renewed and services reloaded."}
-        else:
-            logging.info("No certificates were renewed. Services not reloaded.")
-            return {"status": "info", "message": "No certificates renewed."}
-
-    except subprocess.CalledProcessError as e:
-        error_msg = f"Failed to restart services after renewal: {e.stderr}"
-        logging.error(error_msg)
-        return {"status": "error", "message": error_msg}
-    except FileNotFoundError:
-        error_msg = "Docker Compose command not found. Is it installed and in PATH?"
-        logging.error(error_msg)
-        return {"status": "error", "message": error_msg}
-    except Exception as e:
-        error_msg = f"An unexpected error occurred during certificate renewal: {str(e)}"
-        logging.error(error_msg)
-        return {"status": "error", "message": error_msg}
-
 
 @celery.task(
     name='tasks.extract_slm_metadata',
@@ -1384,9 +1330,5 @@ celery.conf.beat_schedule = {
     'update-queue-metrics': {
         'task': 'tasks.update_metrics',
         'schedule': 30.0,  # Every 30 seconds
-    },
-    'renew-certificates-daily': {
-        'task': 'tasks.renew_certificates',
-        'schedule': crontab(hour=3, minute=0), # Every day at 3 AM
     },
 }

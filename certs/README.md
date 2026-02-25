@@ -30,15 +30,6 @@ For local development and testing:
 ls -la certs/redis/
 ```
 
-### Production (Let's Encrypt)
-
-For production deployments, use Certbot with Let's Encrypt:
-
-```bash
-# See Epic 25 for automated certificate management with Certbot
-./scripts/setup-certbot.sh
-```
-
 ## Certificate Details
 
 ### CA Certificate (`ca.crt`)
@@ -62,7 +53,6 @@ For production deployments, use Certbot with Let's Encrypt:
 
 ⚠️ **Certificate Rotation**
 - Development certificates: Rotate annually or when compromised
-- Production certificates: Automated renewal via Certbot (Epic 25)
 - Check expiration: `openssl x509 -in certs/redis/redis.crt -noout -dates`
 
 ## Verifying TLS Connection
@@ -136,5 +126,4 @@ Error: Hostname 'redis' doesn't match certificate
 
 - **Certificate Generation**: `scripts/generate-redis-certs.sh`
 - **Epic 24**: Encryption in Transit with Redis TLS
-- **Epic 25**: Certificate Management with Certbot & Cloudflare DNS
 - **Redis TLS Docs**: https://redis.io/docs/management/security/encryption/

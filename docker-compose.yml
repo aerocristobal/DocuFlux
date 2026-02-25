@@ -76,7 +76,6 @@ services:
     volumes:
       - ./data:/app/data
       - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
-      - ./scripts:/app/scripts:ro # Epic 25: Mount scripts for renewal automation
 
     ports:
       - "9090:9090"  # Epic 21.5: Prometheus metrics endpoint
@@ -132,7 +131,6 @@ services:
       - ./data:/app/data
       - beat-data:/app/celerybeat
       - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
-      - ./scripts:/app/scripts:ro # Epic 25: Mount scripts for renewal automation
 
     environment:
       # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)
@@ -153,44 +151,6 @@ services:
         limits:
           memory: 256M
     restart: unless-stopped
-
-  cloudflare-tunnel:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    depends_on:
-      - web
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-    restart: unless-stopped
-    profiles:
-      - https
-    # Note: This service requires CLOUDFLARE_TUNNEL_TOKEN environment variable
-    # Create tunnel at: https://one.dash.cloudflare.com/
-    # See docs/CLOUDFLARE_TUNNEL_SETUP.md for setup instructions
-
-  certbot:
-    image: certbot/certbot:latest
-    volumes:
-      - ./certs:/etc/letsencrypt
-      - ./cloudflare/credentials.ini:/credentials.ini:ro
-      - ./scripts/certbot-renew.sh:/app/certbot-renew.sh:ro # Mounted for renewal automation
-    command: sleep infinity # Keep container running for manual execution or future scheduling
-    environment:
-      # These variables are used by the certbot-renew.sh script, not directly by certbot itself
-      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
-      - DOMAIN_NAME=${DOMAIN_NAME}
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-    profiles:
-      - https
-    # Note: Requires a credentials.ini file in the cloudflare directory with Cloudflare API token.
-    # See docs/CERTIFICATE_MANAGEMENT.md for setup instructions.
 
   mcp-server:
     build: ./mcp_server

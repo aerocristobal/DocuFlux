@@ -35,7 +35,6 @@ DocuFlux is a modern, containerized document conversion service that bridges the
 -   **Infrastructure & Security**:
     -   Docker, Docker Compose, NVIDIA Container Toolkit.
     -   [Cloudflare Tunnel](https://www.cloudflare.com/products/tunnel/) (for HTTPS).
-    -   [Certbot](https://certbot.eff.org/) (for automated certificate management).
 
 ### Configuration Management
 
@@ -63,22 +62,26 @@ All application-wide settings are defined in `config.py` within the `Settings` c
     Create a `.env` file from the example and fill in the required values. Pydantic Settings will automatically load variables from this file.
     ```bash
     cp .env.example .env
-    # Edit .env and provide your details, especially for Cloudflare and Certbot.
+    # Edit .env and provide your details, especially for Cloudflare Tunnel (optional).
     ```
 
 3.  **Start the services:**
     -   **For GPU users (recommended):**
         ```bash
-        docker-compose --profile gpu up -d --build
+        docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
         ```
     -   **For CPU-only users:**
         ```bash
-        docker-compose --profile cpu up -d --build
+        docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
+        ```
+    -   **With Cloudflare Tunnel (HTTPS):**
+        ```bash
+        docker-compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.cloudflare.yml up -d --build
         ```
     *Note: The `worker` service downloads large AI models on the first build/run. Please be patient.*
 
 4.  **Access the interface:**
-    Open your browser and navigate to `http://localhost:5000` (or your configured Cloudflare domain if using the `https` profile).
+    Open your browser and navigate to `http://localhost:5000` (or your configured Cloudflare domain).
 
 ## Architecture
 
@@ -91,8 +94,7 @@ The system follows a microservices pattern orchestrated by Docker Compose, with 
 | **`mcp-server`** | A dedicated server running Playwright for browser automation, enabling vision-based extraction tasks. |
 | **`redis`** | Message broker for the Celery task queue and ephemeral metadata store for job tracking. |
 | **`beat`** | Celery beat scheduler for periodic cleanup tasks, ensuring data retention policies are met. |
-| **`cloudflare-tunnel`** | Provides zero-touch HTTPS for the web service via Cloudflare's infrastructure. |
-| **`certbot`** | Manages automated SSL/TLS certificate issuance and renewal using Let's Encrypt and Cloudflare DNS. |
+| **`cloudflare-tunnel`** | (Optional) Provides zero-touch HTTPS via Cloudflare's infrastructure. Run with `-f docker-compose.cloudflare.yml`. |
 
 The architecture supports both CPU and GPU-based deployments through Docker Compose profiles, allowing for flexible and resource-efficient operation. All inter-service communication is encrypted, and sensitive data is encrypted at rest.
 
@@ -170,7 +172,6 @@ For detailed API documentation, see [API Reference](docs/API.md).
 - [Supported Formats](docs/FORMATS.md)
 - [AI Integration](docs/AI_INTEGRATION.md)
 - [Certificate Management](docs/CERTIFICATE_MANAGEMENT.md)
-- [Cloudflare API Setup](docs/CLOUDFLARE_API_API_SETUP.md)
 - [Security Fixes](docs/SECURITY_FIXES.md)
 - [Urgent Fixes](docs/URGENT_FIXES.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)

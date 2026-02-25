@@ -28,7 +28,6 @@ DocuFlux uses TLS certificates for:
 |-------------|---------|----------|----------|---------|
 | Redis CA | Internal PKI root | `certs/redis/ca.crt` | 10 years (dev) | Manual |
 | Redis Server | Redis TLS | `certs/redis/redis.crt` | 10 years (dev) | Manual |
-| Let's Encrypt | HTTPS (production) | Managed by Cloudflare | 90 days | Automatic |
 
 ---
 
@@ -83,30 +82,9 @@ openssl x509 -in certs/redis/redis.crt -noout -dates
 
 ## Production Certificates
 
-### Option 1: Let's Encrypt (Recommended)
+> **Note:** HTTPS in production is handled automatically by Cloudflare Tunnel. No Let's Encrypt or Certbot setup is needed.
 
-For production deployments, use Let's Encrypt certificates via Certbot:
-
-```bash
-# See Epic 25 for automated certificate management
-./scripts/setup-certbot.sh
-
-# Certificates managed automatically:
-# - Issuance via DNS-01 challenge
-# - Auto-renewal every 60 days
-# - Distribution to services
-```
-
-**Pros:**
-- Free, trusted certificates
-- Automatic renewal
-- Industry standard
-
-**Cons:**
-- Requires public domain
-- 90-day validity (frequent renewals)
-
-### Option 2: Commercial CA
+### Commercial CA (for Redis TLS or non-Cloudflare deployments)
 
 Purchase certificates from a commercial CA (DigiCert, GlobalSign, etc.):
 
@@ -125,7 +103,7 @@ Purchase certificates from a commercial CA (DigiCert, GlobalSign, etc.):
 
 4. **Reload services:**
    ```bash
-   ./scripts/reload-services.sh
+   docker-compose restart redis web worker beat
    ```
 
 **Pros:**
@@ -140,20 +118,6 @@ Purchase certificates from a commercial CA (DigiCert, GlobalSign, etc.):
 ---
 
 ## Certificate Renewal
-
-### Automated Renewal (Production)
-
-For production with Certbot (Epic 25):
-
-```bash
-# Certificates auto-renew via cron job
-# Check renewal status:
-docker-compose exec certbot certbot certificates
-
-# Manual renewal trigger:
-docker-compose exec certbot certbot renew --force-renewal
-./scripts/reload-services.sh
-```
 
 ### Manual Renewal (Development)
 
@@ -177,73 +141,16 @@ If renewal is needed:
 ./scripts/renew-redis-certs.sh
 
 # Reload services to pick up new certificates
-./scripts/reload-services.sh
-```
-
-### Renewal Workflow
-
-```
-1. Check Expiration
-   └─ ./scripts/renew-redis-certs.sh
-      │
-      ├─ > 30 days? ✓ No action needed
-      │
-      └─ < 30 days? ⚠️ Renewal required
-         │
-         ├─ Backup old certs → certs/backups/<timestamp>/
-         │
-         ├─ Generate new certs → certs/redis/
-         │
-         └─ Reload services
-            │
-            ├─ Restart redis (picks up new cert)
-            │
-            ├─ Restart worker (reconnects with TLS)
-            │
-            ├─ Restart beat (reconnects)
-            │
-            └─ Restart web (reconnects with TLS)
+docker-compose restart redis web worker beat
 ```
 
 ---
 
 ## Service Reload
 
-### Zero-Downtime Reload
-
-The `reload-services.sh` script performs graceful restarts with health checks:
-
 ```bash
-./scripts/reload-services.sh
-```
-
-**Reload Sequence:**
-1. **Redis**: Restarts with new certificates (2-3 seconds downtime)
-2. **Worker**: Waits for Redis health check, reconnects with TLS
-3. **Beat**: Restarts scheduler (no health check, 3-second wait)
-4. **Web**: Waits for Redis health check, reconnects with TLS
-
-**Health Check Strategy:**
-- Each service waits up to 60 seconds for health
-- Health checks run every 10 seconds
-- Exits on failure with error message
-
-### Manual Reload
-
-If automatic reload fails, restart services manually:
-
-```bash
-# Restart all services
 docker-compose restart
-
-# Restart individual service
-docker-compose restart redis
-
-# Check service health
-docker-compose ps
-
-# View logs
-docker-compose logs --tail=50 redis web worker
+docker-compose restart redis  # individual service
 ```
 
 ---
@@ -361,7 +268,7 @@ openssl x509 -in certs/redis/redis.crt -noout -ext subjectAltName
 # If missing, regenerate certificates:
 rm -rf certs/redis/*.crt certs/redis/*.key
 ./scripts/generate-redis-certs.sh
-./scripts/reload-services.sh
+docker-compose restart redis web worker beat
 ```
 
 ### Certificate Expired
@@ -373,12 +280,9 @@ Error: certificate has expired
 
 **Solution:**
 ```bash
-# Check expiration
 openssl x509 -in certs/redis/redis.crt -noout -dates
-
-# Renew certificate
 ./scripts/renew-redis-certs.sh
-./scripts/reload-services.sh
+docker-compose restart redis web worker beat
 ```
 
 ### Permission Denied
@@ -392,12 +296,8 @@ Error: Permission denied reading /certs/redis/redis.key
 
 **Solution:**
 ```bash
-# Fix permissions
 chmod 400 certs/redis/*.key
 chmod 444 certs/redis/*.crt
-
-# Verify
-ls -la certs/redis/
 ```
 
 ---
@@ -436,7 +336,5 @@ ls -la certs/redis/
 
 - **Certificate Generation**: `scripts/generate-redis-certs.sh`
 - **Certificate Renewal**: `scripts/renew-redis-certs.sh`
-- **Service Reload**: `scripts/reload-services.sh`
 - **Redis TLS**: `certs/README.md`
 - **Epic 24**: Encryption in Transit with Redis TLS
-- **Epic 25**: Certificate Management with Certbot & Cloudflare DNS

@@ -46,8 +46,8 @@ cd cloudflare
 # - Configure DNS
 # - Save configuration to .env
 
-# 3. Start DocuFlux with HTTPS profile
-docker-compose --profile https up
+# 3. Start DocuFlux with Cloudflare Tunnel
+docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
 ```
 
 The setup script automatically:
@@ -119,10 +119,10 @@ echo "SESSION_COOKIE_SECURE=true" >> .env
 echo "BEHIND_PROXY=true" >> .env
 ```
 
-### Step 7: Start DocuFlux with HTTPS Profile
+### Step 7: Start DocuFlux with Cloudflare Tunnel
 
 ```bash
-docker-compose --profile https up
+docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
 ```
 
 ### Step 8: Verify HTTPS Access
@@ -197,9 +197,9 @@ ingress:
 loglevel: info
 ```
 
-### docker-compose.yml
+### docker-compose.cloudflare.yml
 
-The `cloudflare-tunnel` service is defined in `docker-compose.yml`:
+The `cloudflare-tunnel` service is defined in `docker-compose.cloudflare.yml`:
 
 ```yaml
 cloudflare-tunnel:
@@ -209,45 +209,36 @@ cloudflare-tunnel:
     - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
   depends_on:
     - web
-  profiles:
-    - https
 ```
 
-It's in the `https` profile, so it only starts when you use `--profile https`.
+It's an optional overlay, so it only starts when you include it with `-f docker-compose.cloudflare.yml`.
 
-## Deployment Profiles
+## Deployment Options
 
-DocuFlux supports multiple deployment profiles:
-
-### HTTP (Default)
+### HTTP only (Default)
 ```bash
 docker-compose up
 ```
 - No HTTPS
 - Direct access on port 5000
-- No Cloudflare Tunnel
 
-### HTTPS (Cloudflare Tunnel)
+### With Cloudflare Tunnel
 ```bash
-docker-compose --profile https up
+docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
 ```
 - HTTPS via Cloudflare Tunnel
 - Secure cookies enabled
 - ProxyFix middleware enabled
 
-### GPU + HTTPS
+### GPU + Cloudflare Tunnel
 ```bash
-docker-compose -f docker-compose.yml -f docker-compose.gpu.yml --profile https up
+docker-compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.cloudflare.yml up
 ```
-- HTTPS via Cloudflare Tunnel
-- GPU-accelerated worker
 
-### CPU + HTTPS
+### CPU + Cloudflare Tunnel
 ```bash
-docker-compose -f docker-compose.yml -f docker-compose.cpu.yml --profile https up
+docker-compose -f docker-compose.yml -f docker-compose.cpu.yml -f docker-compose.cloudflare.yml up
 ```
-- HTTPS via Cloudflare Tunnel
-- CPU-only worker (no GPU)
 
 ## Troubleshooting
 
