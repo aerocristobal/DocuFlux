@@ -12,16 +12,23 @@ from unittest.mock import MagicMock, call
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def make_session_meta(status='active', page_count='2', to_format='markdown'):
+def make_session_meta(status='active', page_count='2', to_format='markdown',
+                      job_id=None, force_ocr='False'):
+    import uuid as _uuid
     return {
         'status': status,
         'created_at': '1700000000.0',
         'title': 'Test Book',
         'to_format': to_format,
         'source_url': 'https://example.com',
-        'force_ocr': 'False',
+        'force_ocr': force_ocr,
         'page_count': page_count,
         'client_id': 'test-client',
+        'job_id': job_id or str(_uuid.uuid4()),
+        'batches_queued': '0',
+        'batches_done': '0',
+        'batches_failed': '0',
+        'next_batch_start': '0',
     }
 
 

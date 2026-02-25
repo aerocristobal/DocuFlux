@@ -766,3 +766,129 @@ class TestUpdateMetrics:
         sys.modules['metrics'].update_queue_metrics.side_effect = Exception("redis down")
         tasks.update_metrics()  # should not raise
         sys.modules['metrics'].update_queue_metrics.side_effect = None
+
+
+# ============================================================
+# process_capture_batch tests (docuflux-m13: streaming batch OCR)
+# ============================================================
+
+class TestProcessCaptureBatch:
+
+    def _make_page_json(self, page_hint=0, has_screenshot=True):
+        import json
+        img = {'filename': 'screenshot.png', 'b64': 'data:image/png;base64,iVBORw0KGgo=', 'is_screenshot': has_screenshot}
+        return json.dumps({'page_hint': page_hint, 'images': [img], 'text': ''})
+
+    @patch('tasks.redis_client')
+    @patch('tasks.get_model_dict')
+    @patch('tasks.update_job_metadata')
+    @patch('tasks._cleanup_marker_memory')
+    @patch('os.makedirs')
+    def test_writes_batch_md_and_images(self, mock_makedirs, mock_cleanup,
+                                        mock_update, mock_model_dict, mock_redis):
+        """Batch task writes batch.md and images to the batch staging directory."""
+        import json
+
+        session_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        tiny_png_b64 = (
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
+            'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+        )
+        page = json.dumps({'page_hint': 0, 'images': [
+            {'filename': 'p.png', 'b64': f'data:image/png;base64,{tiny_png_b64}', 'is_screenshot': True}
+        ], 'text': ''})
+        mock_redis.lrange.return_value = [page]
+        mock_redis.hget.return_value = '1'
+        mock_redis.incrby.return_value = 1  # base_offset = 0
+
+        mock_img = MagicMock()
+
+        # Use _make_pdf_converter_mock so PdfConverter.return_value is a fresh mock
+        # (avoids side_effect bleed from earlier tests that set RuntimeError)
+        _make_pdf_converter_mock(
+            text='# Chapter 1\n![fig](fig_0.png)',
+            images={'fig_0.png': mock_img},
+        )
+
+        from unittest.mock import patch as upatch, mock_open
+
+        with upatch('PIL.Image.open') as mock_pil_open, \
+             upatch('builtins.open', mock_open()), \
+             upatch('os.path.join', side_effect=lambda *a: '/'.join(a)):
+            pil_img = MagicMock()
+            pil_img.convert.return_value = pil_img
+            mock_pil_open.return_value = pil_img
+
+            tasks.process_capture_batch(session_id, job_id, 0, 0, 1)
+
+        # batches_done should have been incremented
+        mock_redis.hincrby.assert_called_with(
+            f"capture:session:{session_id}", 'batches_done', 1
+        )
+        # batch status should be 'done'
+        hset_calls = {str(c) for c in mock_redis.hset.call_args_list}
+        assert any('done' in c for c in hset_calls)
+
+    @patch('tasks.redis_client')
+    @patch('tasks.update_job_metadata')
+    @patch('os.makedirs')
+    def test_no_images_writes_empty_batch(self, mock_makedirs, mock_update, mock_redis):
+        """Batch task writes empty batch.md and marks done when no page images exist."""
+        import json
+
+        session_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        page = json.dumps({'page_hint': 0, 'images': [], 'text': 'some text'})
+        mock_redis.lrange.return_value = [page]
+
+        from unittest.mock import patch as upatch, mock_open
+        with upatch('builtins.open', mock_open()), \
+             upatch('os.path.join', side_effect=lambda *a: '/'.join(a)):
+            tasks.process_capture_batch(session_id, job_id, 0, 0, 1)
+
+        # Should mark done without calling Marker
+        sys.modules['marker.converters.pdf'].PdfConverter.assert_not_called()
+        mock_redis.hincrby.assert_called_with(
+            f"capture:session:{session_id}", 'batches_done', 1
+        )
+
+    @patch('tasks.redis_client')
+    @patch('tasks.get_model_dict')
+    @patch('tasks.update_job_metadata')
+    @patch('os.makedirs')
+    def test_failure_does_not_fail_job(self, mock_makedirs, mock_update,
+                                       mock_model_dict, mock_redis):
+        """Batch failure increments batches_failed but leaves job metadata as CAPTURING."""
+        import json
+
+        session_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        # Make Marker raise an exception
+        mock_model_dict.side_effect = RuntimeError("GPU OOM")
+        tiny_png_b64 = (
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
+            'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+        )
+        page = json.dumps({'page_hint': 0, 'images': [
+            {'filename': 'p.png', 'b64': f'data:image/png;base64,{tiny_png_b64}', 'is_screenshot': True}
+        ], 'text': ''})
+        mock_redis.lrange.return_value = [page]
+
+        from unittest.mock import patch as upatch
+        with upatch('os.path.join', side_effect=lambda *a: '/'.join(a)), \
+             upatch('os.makedirs'), \
+             pytest.raises(RuntimeError):
+            tasks.process_capture_batch(session_id, job_id, 0, 0, 1)
+
+        # batches_failed should be incremented
+        mock_redis.hincrby.assert_called_with(
+            f"capture:session:{session_id}", 'batches_failed', 1
+        )
+        # Job metadata should NOT have been called with FAILURE status
+        failure_calls = [c for c in mock_update.call_args_list
+                         if c.args[1].get('status') == 'FAILURE']
+        assert len(failure_calls) == 0

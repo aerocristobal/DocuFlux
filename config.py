@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     # --- Browser Extension Capture Settings ---
     capture_session_ttl: int = Field(86400, validation_alias="CAPTURE_SESSION_TTL")
     max_capture_pages: int = Field(500, validation_alias="MAX_CAPTURE_PAGES")
+    capture_batch_size: int = Field(50, validation_alias="CAPTURE_BATCH_SIZE")
     capture_allowed_origins: List[str] = Field(
         ["chrome-extension://*", "moz-extension://*"],
         validation_alias="CAPTURE_ALLOWED_ORIGINS"

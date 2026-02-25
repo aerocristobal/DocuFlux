@@ -1111,9 +1111,165 @@ def agentic_page_turner(job_id, start_url, next_button_selector,
 
 
 @celery.task(
+    name='tasks.process_capture_batch',
+    time_limit=900,
+    soft_time_limit=840,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def process_capture_batch(session_id, job_id, batch_index, page_start, page_end):
+    """
+    Process a batch of captured pages through Marker OCR.
+
+    Reads pages[page_start:page_end] from Redis, converts screenshots to PDF,
+    runs Marker, and writes batch.md + images to the batch staging directory.
+    Image filenames use a globally unique counter to avoid collisions on merge.
+    """
+    import base64
+    import io as io_module
+    import json as json_module
+    import gc
+    import re as re_module
+
+    batch_key = f"capture:batch:{session_id}:{batch_index}"
+    session_key = f"capture:session:{session_id}"
+    batch_dir = os.path.join(OUTPUT_FOLDER, job_id, 'batches', f'batch_{batch_index}')
+    batch_images_dir = os.path.join(batch_dir, 'images')
+    os.makedirs(batch_images_dir, exist_ok=True)
+
+    logging.info(f"Processing capture batch {batch_index}: session={session_id}, pages={page_start}-{page_end}")
+
+    redis_client.hset(batch_key, mapping={
+        'status': 'processing',
+        'started_at': str(time.time()),
+    })
+
+    try:
+        pages_raw = redis_client.lrange(f"capture:session:{session_id}:pages", page_start, page_end - 1)
+        pages = [json_module.loads(p) for p in pages_raw]
+        pages.sort(key=lambda p: p.get('page_hint', 0))
+
+        # Collect one screenshot per page
+        ocr_images_b64 = []
+        for page in pages:
+            page_imgs = page.get('images', [])
+            chosen = next((i for i in page_imgs if i.get('is_screenshot') and i.get('b64')), None)
+            if chosen is None:
+                chosen = next((i for i in page_imgs if i.get('b64')), None)
+            if chosen:
+                ocr_images_b64.append(chosen['b64'])
+
+        if not ocr_images_b64:
+            # No images — write empty batch and mark done
+            with open(os.path.join(batch_dir, 'batch.md'), 'w', encoding='utf-8') as f:
+                f.write('')
+            redis_client.hset(batch_key, mapping={
+                'status': 'done',
+                'completed_at': str(time.time()),
+                'image_count': '0',
+            })
+            redis_client.hincrby(session_key, 'batches_done', 1)
+            logging.info(f"Batch {batch_index} done (no images): session={session_id}")
+            return {'status': 'success', 'images': 0}
+
+        # Decode and build PIL images
+        from PIL import Image as PILImage
+        pil_images = []
+        for img_b64 in ocr_images_b64:
+            try:
+                if ',' in img_b64:
+                    img_b64 = img_b64.split(',', 1)[1]
+                pil_img = PILImage.open(io_module.BytesIO(base64.b64decode(img_b64))).convert('RGB')
+                pil_images.append(pil_img)
+            except Exception as e:
+                logging.warning(f"Batch {batch_index}: failed to decode screenshot: {e}")
+
+        if not pil_images:
+            with open(os.path.join(batch_dir, 'batch.md'), 'w', encoding='utf-8') as f:
+                f.write('')
+            redis_client.hset(batch_key, mapping={
+                'status': 'done',
+                'completed_at': str(time.time()),
+                'image_count': '0',
+            })
+            redis_client.hincrby(session_key, 'batches_done', 1)
+            return {'status': 'success', 'images': 0}
+
+        # Build in-memory PDF
+        pdf_buf = io_module.BytesIO()
+        pil_images[0].save(pdf_buf, format='PDF', save_all=True, append_images=pil_images[1:], resolution=150)
+        pdf_buf.seek(0)
+
+        # Run Marker
+        artifacts = get_model_dict()
+        from marker.converters.pdf import PdfConverter
+        from marker.output import text_from_rendered
+
+        converter = PdfConverter(artifact_dict=artifacts, config={'force_ocr': True})
+        rendered = converter(pdf_buf)
+        markdown_text, _, marker_images = text_from_rendered(rendered)
+
+        # Claim globally-unique image offsets atomically
+        img_count_key = f"capture:session:{session_id}:image_counter"
+        num_images = len(marker_images or {})
+        if num_images > 0:
+            new_total = redis_client.incrby(img_count_key, num_images)
+            redis_client.expire(img_count_key, app_settings.capture_session_ttl)
+            base_offset = new_total - num_images
+        else:
+            base_offset = 0
+
+        # Save images and rewrite markdown refs to final path
+        image_count = 0
+        for i, (img_name, img_obj) in enumerate(sorted((marker_images or {}).items())):
+            global_idx = base_offset + i
+            final_name = f"img_{global_idx:05d}.png"
+            img_obj.save(os.path.join(batch_images_dir, final_name))
+            markdown_text = re_module.sub(
+                re_module.escape(f"({img_name})"),
+                f"(images/{final_name})",
+                markdown_text,
+            )
+            image_count += 1
+
+        with open(os.path.join(batch_dir, 'batch.md'), 'w', encoding='utf-8') as f:
+            f.write(markdown_text)
+
+        redis_client.hset(batch_key, mapping={
+            'status': 'done',
+            'completed_at': str(time.time()),
+            'image_count': str(image_count),
+        })
+        redis_client.hincrby(session_key, 'batches_done', 1)
+
+        # Update job progress: batches account for 0–75%
+        batches_queued = int(redis_client.hget(session_key, 'batches_queued') or 1)
+        batches_done = int(redis_client.hget(session_key, 'batches_done') or 1)
+        progress = int((batches_done / batches_queued) * 75)
+        update_job_metadata(job_id, {'progress': str(progress)})
+
+        logging.info(f"Batch {batch_index} done: session={session_id}, images={image_count}")
+
+        _cleanup_marker_memory(converter, rendered)
+        gc.collect()
+        return {'status': 'success', 'images': image_count}
+
+    except Exception as e:
+        error_msg = str(e)
+        logging.error(f"Batch {batch_index} failed: session={session_id}, error={error_msg}")
+        redis_client.hset(batch_key, mapping={
+            'status': 'failed',
+            'error': error_msg[:500],
+        })
+        redis_client.hincrby(session_key, 'batches_failed', 1)
+        # Do NOT mark the job as FAILURE — the assembly step handles partial failures
+        raise
+
+
+@celery.task(
     name='tasks.assemble_capture_session',
-    time_limit=300,
-    soft_time_limit=240,
+    time_limit=600,
+    soft_time_limit=540,
     acks_late=True,
     reject_on_worker_lost=True,
 )
@@ -1160,26 +1316,67 @@ def assemble_capture_session(session_id, job_id):
 
         safe_title = secure_filename(title) or f"capture_{job_id}"
         force_ocr = session_meta.get('force_ocr', 'false').lower() == 'true'
+        batches_queued = int(session_meta.get('batches_queued', 0))
 
-        # Collect one image per page (prefer screenshots, fall back to first image).
-        # Kindle Cloud Reader renders pages as blob-URL <img> elements — these are the
-        # actual page content and are already captured as base64 by the content script.
-        ocr_images_b64 = []
-        for page in pages:
-            page_imgs = page.get('images', [])
-            # Prefer screenshot if present, otherwise first image with b64 data
-            chosen = next((i for i in page_imgs if i.get('is_screenshot') and i.get('b64')), None)
-            if chosen is None:
-                chosen = next((i for i in page_imgs if i.get('b64')), None)
-            if chosen:
-                ocr_images_b64.append(chosen['b64'])
+        if force_ocr and batches_queued > 0:
+            # Batch merge path: stitch together pre-processed batch outputs
+            update_job_metadata(job_id, {'progress': '78'})
+            all_markdown_parts = []
+            total_images = 0
+            batches_failed = int(session_meta.get('batches_failed', 0))
 
-        if force_ocr and ocr_images_b64:
-            # OCR path: combine screenshots into a PDF and run through Marker AI
+            for i in range(batches_queued):
+                batch_key = f"capture:batch:{session_id}:{i}"
+                batch_status = redis_client.hget(batch_key, 'status') or 'unknown'
+                batch_dir = os.path.join(output_dir, 'batches', f'batch_{i}')
+
+                if batch_status == 'failed':
+                    all_markdown_parts.append(
+                        f"\n\n> **⚠ Batch {i} failed to process — these pages may be missing.**\n\n"
+                    )
+                    logging.warning(f"Batch {i} failed for session {session_id}; inserting tombstone")
+                    continue
+
+                md_path = os.path.join(batch_dir, 'batch.md')
+                if os.path.exists(md_path):
+                    with open(md_path, 'r', encoding='utf-8') as f:
+                        all_markdown_parts.append(f.read())
+
+                batch_images_dir = os.path.join(batch_dir, 'images')
+                if os.path.exists(batch_images_dir):
+                    for img_name in sorted(os.listdir(batch_images_dir)):
+                        shutil.copy2(
+                            os.path.join(batch_images_dir, img_name),
+                            os.path.join(images_dir, img_name),
+                        )
+                        total_images += 1
+
+            front_matter = f"---\ntitle: {title}\nsource: {source_url}\npages: {len(pages)}\n---\n\n"
+            merged_content = front_matter + "\n\n---\n\n".join(all_markdown_parts)
+            image_count = total_images
+
+            # Clean up staging area
+            shutil.rmtree(os.path.join(output_dir, 'batches'), ignore_errors=True)
+
+        elif force_ocr:
+            # Fallback: force_ocr session with no pre-processed batches (very small session)
             import io as io_module
             from PIL import Image as PILImage
 
-            logging.info(f"OCR path: assembling {len(ocr_images_b64)} page images via Marker for job {job_id}")
+            # Collect one image per page (prefer screenshots, fall back to first image).
+            ocr_images_b64 = []
+            for page in pages:
+                page_imgs = page.get('images', [])
+                chosen = next((i for i in page_imgs if i.get('is_screenshot') and i.get('b64')), None)
+                if chosen is None:
+                    chosen = next((i for i in page_imgs if i.get('b64')), None)
+                if chosen:
+                    ocr_images_b64.append(chosen['b64'])
+
+            if not ocr_images_b64:
+                raise ValueError("No valid page images found for OCR")
+
+            logging.info(f"OCR fallback path: assembling {len(ocr_images_b64)} page images via Marker for job {job_id}")
             update_job_metadata(job_id, {'progress': '30'})
 
             pil_images = []
@@ -1195,14 +1392,12 @@ def assemble_capture_session(session_id, job_id):
             if not pil_images:
                 raise ValueError("No valid page images found for OCR")
 
-            # Build an in-memory PDF from the screenshots
             pdf_buf = io_module.BytesIO()
             pil_images[0].save(pdf_buf, format='PDF', save_all=True, append_images=pil_images[1:], resolution=150)
             pdf_buf.seek(0)
 
             update_job_metadata(job_id, {'progress': '45'})
 
-            # Run Marker on the screenshots-as-PDF
             artifacts = get_model_dict()
             from marker.converters.pdf import PdfConverter
             from marker.output import text_from_rendered
@@ -1223,6 +1418,7 @@ def assemble_capture_session(session_id, job_id):
 
             front_matter = f"---\ntitle: {title}\nsource: {source_url}\npages: {len(pages)}\n---\n\n"
             merged_content = front_matter + markdown_text
+            batches_failed = 0
 
         else:
             # Text assembly path: merge DOM-extracted markdown from each page
@@ -1261,8 +1457,9 @@ def assemble_capture_session(session_id, job_id):
 
             front_matter = f"---\ntitle: {title}\nsource: {source_url}\npages: {len(pages)}\n---\n\n"
             merged_content = front_matter + "\n\n---\n\n".join(all_markdown_parts)
+            batches_failed = 0
 
-        update_job_metadata(job_id, {'progress': '70'})
+        update_job_metadata(job_id, {'progress': '88'})
 
         output_filename = f"{safe_title}.md"
         output_path = os.path.join(output_dir, output_filename)
@@ -1296,13 +1493,16 @@ def assemble_capture_session(session_id, job_id):
             os.rmdir(images_dir)
             file_count = 1
 
-        update_job_metadata(job_id, {
+        success_meta = {
             'status': 'SUCCESS',
             'completed_at': str(time.time()),
             'progress': '100',
             'file_count': str(file_count),
             'encrypted': 'false',
-        })
+        }
+        if batches_failed > 0:
+            success_meta['batch_warnings'] = f"{batches_failed} batch(es) had failures — some pages may be missing"
+        update_job_metadata(job_id, success_meta)
         redis_client.expire(f"job:{job_id}", 7200)
 
         logging.info(f"Capture assembly complete: job={job_id}, pages={len(pages)}, images={image_count}")

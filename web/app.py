@@ -1248,7 +1248,28 @@ def capture_create_session():
         to_format = 'markdown'
 
     session_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
     now = str(time.time())
+
+    # Pre-allocate output directory so batch tasks can write there immediately
+    output_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+    os.makedirs(os.path.join(output_dir, 'batches'), exist_ok=True)
+
+    update_job_metadata(job_id, {
+        'status': 'CAPTURING',
+        'created_at': now,
+        'filename': title[:200],
+        'from': 'capture',
+        'to': to_format,
+        'session_id': session_id,
+        'progress': '0',
+    })
+
+    # Track capture jobs globally so the web UI can list them
+    captures_list_key = 'capture:all_jobs'
+    redis_client.lpush(captures_list_key, job_id)
+    redis_client.ltrim(captures_list_key, 0, 99)
+    redis_client.expire(captures_list_key, 86400)
 
     session_key = f"capture:session:{session_id}"
     redis_client.hset(session_key, mapping={
@@ -1260,6 +1281,11 @@ def capture_create_session():
         'force_ocr': str(force_ocr),
         'page_count': '0',
         'client_id': client_id,
+        'job_id': job_id,
+        'batches_queued': '0',
+        'batches_done': '0',
+        'batches_failed': '0',
+        'next_batch_start': '0',
     })
     redis_client.expire(session_key, app_settings.capture_session_ttl)
 
@@ -1269,6 +1295,7 @@ def capture_create_session():
 
     return jsonify({
         'session_id': session_id,
+        'job_id': job_id,
         'status': 'active',
         'max_pages': app_settings.max_capture_pages,
     }), 201
@@ -1276,7 +1303,7 @@ def capture_create_session():
 
 @app.route('/api/v1/capture/sessions/<session_id>/pages', methods=['POST'])
 @csrf.exempt
-@limiter.limit("200 per hour")
+@limiter.limit("1000 per hour")
 def capture_add_page(session_id):
     """Submit a captured page to an existing session."""
     if not is_valid_uuid(session_id):
@@ -1310,6 +1337,31 @@ def capture_add_page(session_id):
     new_count = page_count + 1
     redis_client.hset(session_key, 'page_count', str(new_count))
 
+    # Dispatch a batch OCR task every N pages for force_ocr sessions
+    force_ocr = session_meta.get('force_ocr', 'false').lower() == 'true'
+    if force_ocr:
+        next_batch_start = int(session_meta.get('next_batch_start', 0))
+        if new_count - next_batch_start >= app_settings.capture_batch_size:
+            job_id = session_meta.get('job_id')
+            batch_index = int(session_meta.get('batches_queued', 0))
+            page_end = new_count
+            batch_key = f"capture:batch:{session_id}:{batch_index}"
+            redis_client.hset(batch_key, mapping={
+                'status': 'queued',
+                'page_start': str(next_batch_start),
+                'page_end': str(page_end),
+            })
+            redis_client.expire(batch_key, app_settings.capture_session_ttl)
+            redis_client.hset(session_key, mapping={
+                'batches_queued': str(batch_index + 1),
+                'next_batch_start': str(page_end),
+            })
+            celery.send_task(
+                'tasks.process_capture_batch',
+                args=[session_id, job_id, batch_index, next_batch_start, page_end],
+                queue='default',
+            )
+
     return jsonify({'status': 'accepted', 'page_count': new_count}), 200
 
 
@@ -1332,29 +1384,33 @@ def capture_finish_session(session_id):
     if page_count == 0:
         return jsonify({'error': 'No pages captured in session'}), 422
 
-    job_id = str(uuid.uuid4())
-    timestamp = str(time.time())
+    job_id = session_meta.get('job_id')
+    if not job_id:
+        return jsonify({'error': 'Session missing job_id — please start a new session'}), 500
 
-    output_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
-    os.makedirs(output_dir, exist_ok=True)
+    # Dispatch a remainder batch for any pages not yet processed
+    force_ocr = session_meta.get('force_ocr', 'false').lower() == 'true'
+    next_batch_start = int(session_meta.get('next_batch_start', 0))
+    if force_ocr and next_batch_start < page_count:
+        batch_index = int(session_meta.get('batches_queued', 0))
+        batch_key = f"capture:batch:{session_id}:{batch_index}"
+        redis_client.hset(batch_key, mapping={
+            'status': 'queued',
+            'page_start': str(next_batch_start),
+            'page_end': str(page_count),
+        })
+        redis_client.expire(batch_key, app_settings.capture_session_ttl)
+        redis_client.hset(session_key, mapping={
+            'batches_queued': str(batch_index + 1),
+            'next_batch_start': str(page_count),
+        })
+        celery.send_task(
+            'tasks.process_capture_batch',
+            args=[session_id, job_id, batch_index, next_batch_start, page_count],
+            queue='default',
+        )
 
-    update_job_metadata(job_id, {
-        'status': 'PENDING',
-        'created_at': timestamp,
-        'filename': session_meta.get('title', 'capture')[:200],
-        'from': 'capture',
-        'to': session_meta.get('to_format', 'markdown'),
-        'session_id': session_id,
-        'progress': '0',
-    })
-
-    redis_client.hset(session_key, mapping={'status': 'assembling', 'job_id': job_id})
-
-    # Track capture jobs globally so the web UI can list them
-    captures_list_key = 'capture:all_jobs'
-    redis_client.lpush(captures_list_key, job_id)
-    redis_client.ltrim(captures_list_key, 0, 99)
-    redis_client.expire(captures_list_key, 86400)
+    redis_client.hset(session_key, 'status', 'assembling')
 
     celery.send_task(
         'tasks.assemble_capture_session',
