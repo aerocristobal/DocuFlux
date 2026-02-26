@@ -1103,3 +1103,126 @@ class TestFireWebhook:
              patch('tasks.requests.post', side_effect=ConnectionError('timeout')):
             # Should not raise
             tasks.fire_webhook(job_id, 'FAILURE', {'error': 'oops'})
+
+
+class TestAssessPandocQuality:
+    """Tests for the _assess_pandoc_quality helper."""
+
+    def test_high_word_count_returns_true(self, tmp_path):
+        """Returns True when output has sufficient words per page."""
+        import tasks
+        output_file = tmp_path / "output.md"
+        # 200 words, 2 pages → 100 words/page > threshold of 50
+        output_file.write_text(" ".join(["word"] * 200))
+        assert tasks._assess_pandoc_quality(str(output_file), page_count=2) is True
+
+    def test_low_word_count_returns_false(self, tmp_path):
+        """Returns False when output has too few words per page (scanned/image PDF)."""
+        import tasks
+        output_file = tmp_path / "output.md"
+        # 40 words, 2 pages → 20 words/page < threshold of 50
+        output_file.write_text(" ".join(["word"] * 40))
+        assert tasks._assess_pandoc_quality(str(output_file), page_count=2) is False
+
+    def test_zero_page_count_avoids_division_by_zero(self, tmp_path):
+        """page_count=0 is treated as 1 to avoid ZeroDivisionError."""
+        import tasks
+        output_file = tmp_path / "output.md"
+        output_file.write_text(" ".join(["word"] * 100))
+        # Should not raise; treats 0 pages as 1
+        result = tasks._assess_pandoc_quality(str(output_file), page_count=0)
+        assert isinstance(result, bool)
+
+    def test_missing_file_returns_false(self):
+        """Returns False (→ fall back to Marker) if file cannot be read."""
+        import tasks
+        result = tasks._assess_pandoc_quality('/nonexistent/path.md', page_count=5)
+        assert result is False
+
+
+class TestConvertWithHybrid:
+    """Tests for the convert_with_hybrid Celery task."""
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks.subprocess.run')
+    @patch('tasks._assess_pandoc_quality', return_value=True)
+    @patch('os.makedirs')
+    @patch('os.path.exists', return_value=True)
+    def test_pandoc_fast_path_used_when_quality_ok(
+        self, mock_exists, mock_makedirs, mock_quality, mock_run,
+        mock_slm, mock_socketio, mock_redis
+    ):
+        """When Pandoc output is high quality, task completes without Marker."""
+        import tasks
+
+        mock_redis.hget.return_value = None  # No pre-existing FAILURE status
+        mock_redis.expire.return_value = True
+        mock_run.return_value = MagicMock(returncode=0)
+
+        job_id = str(uuid.uuid4())
+        result = tasks.convert_with_hybrid(
+            job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown'
+        )
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'pandoc'
+        # Marker models should NOT have been loaded
+        mock_quality.assert_called_once()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks._save_marker_output')
+    @patch('tasks.subprocess.run', side_effect=Exception("Pandoc failed"))
+    @patch('tasks._assess_pandoc_quality', return_value=False)
+    @patch('tasks._check_pdf_page_limit', return_value=None)
+    @patch('os.makedirs')
+    @patch('os.path.exists', return_value=True)
+    def test_falls_back_to_marker_on_poor_pandoc_quality(
+        self, mock_exists, mock_makedirs, mock_page_limit, mock_quality,
+        mock_run, mock_save, mock_run_marker, mock_slm, mock_socketio, mock_redis
+    ):
+        """When Pandoc quality is poor, task falls back to Marker AI."""
+        import tasks
+
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+
+        mock_rendered = MagicMock()
+        mock_run_marker.return_value = (MagicMock(), mock_rendered)
+        mock_save.return_value = ('text', {}, 0, 2)
+
+        job_id = str(uuid.uuid4())
+        result = tasks.convert_with_hybrid(
+            job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown'
+        )
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'marker'
+        mock_run_marker.assert_called_once()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    def test_invalid_uuid_returns_error(self, mock_socketio, mock_redis):
+        """Invalid job_id returns error dict without any processing."""
+        import tasks
+        result = tasks.convert_with_hybrid(
+            'not-a-uuid', 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown'
+        )
+        assert result['status'] == 'error'
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('os.path.exists', return_value=False)
+    def test_missing_input_raises(self, mock_exists, mock_socketio, mock_redis):
+        """FileNotFoundError raised when input file is absent."""
+        import tasks
+        mock_redis.hget.return_value = None
+        job_id = str(uuid.uuid4())
+        with pytest.raises(FileNotFoundError):
+            tasks.convert_with_hybrid(
+                job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown'
+            )

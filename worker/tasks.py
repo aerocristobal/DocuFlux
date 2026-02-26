@@ -560,6 +560,161 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         raise
 
 
+def _assess_pandoc_quality(output_path, page_count):
+    """Return True if Pandoc's PDF→markdown output meets a minimum quality threshold.
+
+    Heuristic: fewer than 50 words per page usually means the PDF contains
+    scanned images, complex layouts, or sparse text that Pandoc cannot
+    extract reliably.
+    """
+    try:
+        with open(output_path, encoding='utf-8', errors='replace') as f:
+            text = f.read()
+        word_count = len(text.split())
+        words_per_page = word_count / max(page_count, 1)
+        logging.info(f"Pandoc quality: {word_count} words / {page_count} pages = {words_per_page:.1f} words/page")
+        return words_per_page >= 50
+    except Exception as e:
+        logging.warning(f"Quality assessment failed: {e}")
+        return False
+
+
+@celery.task(
+    name='tasks.convert_with_hybrid',
+    bind=True,
+    time_limit=1200,
+    soft_time_limit=1140,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=3
+)
+def convert_with_hybrid(self, job_id, input_filename, output_filename, from_format, to_format, options=None):
+    """Convert a PDF using Pandoc first, falling back to Marker AI if quality is poor.
+
+    Hybrid strategy:
+      1. Try Pandoc (-f pdf → markdown).
+      2. If output has >= 50 words/page, keep the Pandoc result (fast path).
+      3. Otherwise fall back to Marker AI (slow/GPU path).
+
+    Stores 'hybrid_engine_used' ('pandoc' or 'marker') in Redis job metadata.
+    """
+    worker_tasks_active.inc()
+    start_time = time.time()
+
+    if not is_valid_uuid(job_id):
+        logging.error(f"Invalid job_id received: {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "error", "message": "Invalid job ID"}
+
+    current_status = redis_client.hget(f"job:{job_id}", 'status')
+    if current_status in ('FAILURE', 'REVOKED'):
+        logging.warning(f"Skipping re-queued task for already-{current_status} job {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "skipped", "reason": current_status}
+
+    safe_job_id = secure_filename(job_id)
+    input_path = os.path.join(UPLOAD_FOLDER, safe_job_id, secure_filename(input_filename))
+    output_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
+    output_path = os.path.join(output_dir, secure_filename(output_filename))
+
+    logging.info(f"Starting hybrid conversion for job {job_id}")
+    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5'})
+
+    if not os.path.exists(input_path):
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+        worker_tasks_active.dec()
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- Step 1: Get PDF page count for quality assessment ---
+    page_count = 1
+    try:
+        import pypdfium2 as pdfium
+        pdf_doc = pdfium.PdfDocument(input_path)
+        page_count = len(pdf_doc)
+        pdf_doc.close()
+    except Exception as e:
+        logging.warning(f"Could not get page count: {e}")
+
+    # --- Step 2: Try Pandoc fast path ---
+    update_job_metadata(job_id, {'progress': '15', 'hybrid_engine_used': 'pandoc'})
+    pandoc_ok = False
+    try:
+        cmd = ['pandoc', '-f', 'pdf', '-t', 'markdown', input_path, '-o', output_path]
+        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
+        pandoc_ok = _assess_pandoc_quality(output_path, page_count)
+        if pandoc_ok:
+            logging.info(f"Hybrid job {job_id}: Pandoc output is high quality, done.")
+    except Exception as e:
+        logging.info(f"Hybrid job {job_id}: Pandoc attempt failed ({e}), trying Marker.")
+
+    update_job_metadata(job_id, {'progress': '40'})
+
+    if pandoc_ok:
+        update_job_metadata(job_id, {
+            'status': 'SUCCESS', 'completed_at': str(time.time()),
+            'progress': '100', 'encrypted': 'false', 'file_count': '1',
+            'hybrid_engine_used': 'pandoc'
+        })
+        redis_client.expire(f"job:{job_id}", 7200)
+        fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+        extract_slm_metadata.delay(job_id, output_path)
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+        import gc; gc.collect()
+        return {"status": "success", "output_file": os.path.basename(output_path), "engine": "pandoc"}
+
+    # --- Step 3: Fall back to Marker AI ---
+    page_limit_error = _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
+    if page_limit_error:
+        worker_tasks_active.dec()
+        return page_limit_error
+
+    images_dir = os.path.join(output_dir, 'images')
+    os.makedirs(images_dir, exist_ok=True)
+
+    update_job_metadata(job_id, {'progress': '50', 'hybrid_engine_used': 'marker'})
+    converter = rendered = text = images = None
+    try:
+        converter, rendered = _run_marker(input_path, options or {})
+        update_job_metadata(job_id, {'progress': '85'})
+        text, images, _, file_count = _save_marker_output(rendered, output_path, images_dir)
+
+        update_job_metadata(job_id, {
+            'status': 'SUCCESS', 'completed_at': str(time.time()),
+            'progress': '100', 'encrypted': 'false', 'file_count': str(file_count),
+            'hybrid_engine_used': 'marker'
+        })
+        redis_client.expire(f"job:{job_id}", 7200)
+        fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+        extract_slm_metadata.delay(job_id, output_path)
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+        _cleanup_marker_memory(converter, rendered, text, images)
+        return {"status": "success", "output_file": os.path.basename(output_path), "engine": "marker"}
+
+    except Exception as e:
+        logging.error(f"Hybrid Marker fallback error for job {job_id}: {e}")
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+        redis_client.expire(f"job:{job_id}", 600)
+        fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='hybrid_error').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+        _cleanup_marker_memory(converter, rendered, text, images)
+        raise
+
+
 def _get_disk_usage_percent(path='/app/data'):
     """
     Get disk usage percentage for the given path.

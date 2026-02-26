@@ -1,0 +1,241 @@
+---
+# CPU worker — scales horizontally for Pandoc jobs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: docuflux
+  labels:
+    app: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: worker
+          image: docuflux/worker:cpu
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - tasks
+            - worker
+            - --loglevel=info
+            - --pool=solo
+            - --without-mingle
+            - --without-gossip
+            - --concurrency=$(WORKER_CONCURRENCY)
+            - -Q
+            - high_priority,default
+          env:
+            - name: FLASK_ENV
+              value: production
+            - name: BUILD_GPU
+              value: "false"
+            - name: MARKER_ENABLED
+              value: "false"
+            - name: WORKER_CONCURRENCY
+              value: "1"
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: docuflux-secrets
+                  key: secret-key
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docuflux-secrets
+                  key: redis-password
+            - name: CELERY_BROKER_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/0
+            - name: CELERY_RESULT_BACKEND
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/0
+            - name: REDIS_METADATA_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/1
+          resources:
+            limits:
+              memory: 2Gi
+              cpu: "2"
+            requests:
+              memory: 512Mi
+              cpu: 500m
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          ports:
+            - containerPort: 9090
+              name: metrics
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-pvc
+
+---
+# GPU worker — single replica for Marker AI jobs (GPU-equipped node)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-gpu
+  namespace: docuflux
+  labels:
+    app: worker-gpu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-gpu
+  template:
+    metadata:
+      labels:
+        app: worker-gpu
+    spec:
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      containers:
+        - name: worker-gpu
+          image: docuflux/worker:gpu
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - tasks
+            - worker
+            - --loglevel=info
+            - --pool=solo
+            - --without-mingle
+            - --without-gossip
+            - --concurrency=1
+            - -Q
+            - high_priority,default
+          env:
+            - name: BUILD_GPU
+              value: "true"
+            - name: MARKER_ENABLED
+              value: "true"
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: docuflux-secrets
+                  key: secret-key
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docuflux-secrets
+                  key: redis-password
+            - name: CELERY_BROKER_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/0
+            - name: CELERY_RESULT_BACKEND
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/0
+            - name: REDIS_METADATA_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/1
+          resources:
+            limits:
+              memory: 18Gi
+              cpu: "4"
+              nvidia.com/gpu: "1"
+            requests:
+              memory: 4Gi
+              cpu: "1"
+              nvidia.com/gpu: "1"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          ports:
+            - containerPort: 9090
+              name: metrics
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-pvc
+
+---
+# Horizontal Pod Autoscaler for CPU workers
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-hpa
+  namespace: docuflux
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+---
+# Beat scheduler — always single replica
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beat
+  namespace: docuflux
+  labels:
+    app: beat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: beat
+  template:
+    metadata:
+      labels:
+        app: beat
+    spec:
+      containers:
+        - name: beat
+          image: docuflux/worker:cpu
+          command: [celery, -A, tasks, beat, --loglevel=info]
+          env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: docuflux-secrets
+                  key: secret-key
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docuflux-secrets
+                  key: redis-password
+            - name: CELERY_BROKER_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/0
+            - name: CELERY_RESULT_BACKEND
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/0
+            - name: REDIS_METADATA_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379/1
+          resources:
+            limits:
+              memory: 256Mi
+              cpu: 200m

@@ -167,6 +167,23 @@ class TestConversionSubmission:
         call_args = mock_celery.send_task.call_args
         assert call_args[0][0] == 'tasks.convert_with_marker'
 
+    def test_pdf_hybrid_routes_to_correct_task(self, client, mock_redis, mock_celery):
+        """PDF with pdf_hybrid format dispatches to convert_with_hybrid task."""
+        mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
+
+        data = {
+            'file': (io.BytesIO(b'%PDF-1.4 fake pdf'), 'report.pdf'),
+            'from_format': 'pdf_hybrid',
+            'to_format': 'markdown'
+        }
+        response = client.post('/convert', data=data,
+                               content_type='multipart/form-data')
+
+        assert response.status_code == 200
+        mock_celery.send_task.assert_called_once()
+        call_args = mock_celery.send_task.call_args
+        assert call_args[0][0] == 'tasks.convert_with_hybrid'
+
     def test_large_file_uses_default_queue(self, client, mock_redis, mock_celery, tmp_path):
         """Files >5MB are routed to the 'default' queue (not high_priority)."""
         mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]

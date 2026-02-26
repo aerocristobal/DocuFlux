@@ -63,10 +63,10 @@ services:
       - /tmp:noexec,nosuid,nodev,size=100m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
-      interval: 30s
-      timeout: 10s
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 5s
     restart: unless-stopped
 
   worker:
@@ -90,7 +90,15 @@ services:
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-    command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q high_priority,default
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-1}
+    command: >
+      celery -A tasks worker
+      --loglevel=info
+      --pool=solo
+      --without-mingle
+      --without-gossip
+      --concurrency=${WORKER_CONCURRENCY:-1}
+      -Q high_priority,default
     depends_on:
       redis:
         condition: service_healthy

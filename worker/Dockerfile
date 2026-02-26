@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Conditional Dockerfile for GPU or CPU-only builds
 # Build with: docker build --build-arg BUILD_GPU=true/false -t worker .
 # Or use: ./scripts/build.sh auto
@@ -16,7 +17,9 @@ FROM base-${BUILD_GPU} AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies: Pandoc, LaTeX (with XeLaTeX), Python, Git-LFS, and OpenCV dependencies
-RUN apt-get update && apt-get install -y \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y \
     pandoc \
     texlive-latex-base \
     texlive-latex-extra \
@@ -35,8 +38,7 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && git lfs install \
     && ln -s /usr/bin/python3 /usr/bin/python \
-    && fc-cache -fv \
-    && rm -rf /var/lib/apt/lists/*
+    && fc-cache -fv
 
 WORKDIR /app
 
@@ -52,8 +54,10 @@ ENV HF_DATASETS_CACHE=/app/.cache/huggingface/datasets
 
 # Copy appropriate requirements file based on build mode
 COPY worker/requirements-true.txt requirements-build.txt
-RUN pip3 install --upgrade pip setuptools
-RUN pip3 install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu118 -r requirements-build.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --upgrade pip setuptools
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --extra-index-url https://download.pytorch.org/whl/cu118 -r requirements-build.txt
 
 # Copy shared root-level modules first, then worker code
 COPY config.py .
