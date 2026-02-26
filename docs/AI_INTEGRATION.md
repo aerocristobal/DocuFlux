@@ -114,7 +114,10 @@ services:
 When `SLM_MODEL_PATH` is unset, the worker looks for the model at:
 `/app/models/TinyLlama-1.1B-Chat-v1.0-GGUF/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf`
 
-If the file is absent, SLM extraction is silently skipped (`slm_status: SKIPPED`) and all other functionality is unaffected.
+The model is loaded **eagerly at worker startup** (inside `warmup()`), not on first use. This means:
+- ~670 MB of RAM is consumed from the moment the worker starts, regardless of job volume.
+- If the file is absent at startup, SLM is permanently disabled for that worker process — adding the file later requires a worker restart.
+- There is no warm-up delay on first extraction; inference starts immediately.
 
 ## API Usage
 
