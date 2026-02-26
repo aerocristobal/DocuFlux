@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 # Set test environment variables at module level (before any app imports)
 os.environ['BUILD_GPU'] = 'false'
+os.environ['FLASK_ENV'] = 'testing'
 
 # Add project roots to path so we can import app and tasks
 _tests_dir = os.path.dirname(__file__)

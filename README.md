@@ -1,5 +1,7 @@
 # DocuFlux
 
+![Coverage](https://img.shields.io/badge/coverage-72%25-brightgreen)
+
 DocuFlux is a modern, containerized document conversion service that bridges the gap between traditional document formats and modern AI-ready workflows. It combines the versatility of **Pandoc** with the power of **AI-driven PDF analysis (Marker)** to provide high-fidelity conversions for everyone.
 
 ## Features
