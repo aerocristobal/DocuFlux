@@ -12,6 +12,8 @@ These tests verify:
 - ZIP download works for multi-file outputs
 - Job lifecycle: create, list, cancel, delete
 - API v1 endpoints behave consistently with UI endpoints
+- WebSocket job_update events emitted on metadata changes
+- Full pipeline: submit → poll status → download → WebSocket events
 """
 import pytest
 import io
@@ -538,3 +540,208 @@ class TestHealthEndpoints:
         result = response.get_json()
         assert 'disk_space' in result
         assert 'marker' in result
+
+
+# ============================================================
+# WebSocket event emission
+# ============================================================
+
+class TestWebSocketEvents:
+
+    def test_update_job_metadata_emits_job_update(self, mock_redis):
+        """update_job_metadata emits job_update WebSocket event with job data."""
+        job_id = str(uuid.uuid4())
+        updates = {'status': 'PROCESSING', 'progress': '50'}
+
+        with patch.object(web_app.socketio, 'emit') as mock_emit:
+            web_app.update_job_metadata(job_id, updates)
+
+        mock_emit.assert_called_once_with(
+            'job_update',
+            {'id': job_id, 'status': 'PROCESSING', 'progress': '50'},
+            namespace='/'
+        )
+
+    def test_update_job_metadata_emit_includes_all_fields(self, mock_redis):
+        """job_update event payload includes all fields passed to update_job_metadata."""
+        job_id = str(uuid.uuid4())
+        updates = {'status': 'SUCCESS', 'progress': '100', 'completed_at': '1700000000.0'}
+
+        with patch.object(web_app.socketio, 'emit') as mock_emit:
+            web_app.update_job_metadata(job_id, updates)
+
+        call_kwargs = mock_emit.call_args[0][1]  # positional arg: payload dict
+        assert call_kwargs['id'] == job_id
+        assert call_kwargs['status'] == 'SUCCESS'
+        assert call_kwargs['progress'] == '100'
+        assert call_kwargs['completed_at'] == '1700000000.0'
+
+    def test_download_records_downloaded_at(self, client, mock_redis, sample_job_id):
+        """GET /download/{id} records downloaded_at timestamp in Redis."""
+        job_dir = f'/tmp/docuflux_test_outputs/{sample_job_id}'
+        os.makedirs(job_dir, exist_ok=True)
+        test_file = os.path.join(job_dir, 'output.html')
+        with open(test_file, 'w') as f:
+            f.write('<html><body>Test</body></html>')
+
+        mock_redis.hgetall.return_value = {'encrypted': 'false', 'status': 'SUCCESS'}
+
+        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'), \
+             patch.object(web_app.socketio, 'emit') as mock_emit:
+            client.get(f'/download/{sample_job_id}')
+
+        # update_job_metadata is called to record downloaded_at
+        emitted_payloads = [call[0][1] for call in mock_emit.call_args_list]
+        keys_emitted = {k for payload in emitted_payloads for k in payload}
+        assert 'downloaded_at' in keys_emitted
+
+        import shutil
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+    def test_update_job_metadata_redis_error_does_not_raise(self, mock_redis):
+        """update_job_metadata swallows Redis errors gracefully."""
+        job_id = str(uuid.uuid4())
+        mock_redis.hset.side_effect = ConnectionError("Redis gone")
+
+        # Should not raise even if Redis is down
+        web_app.update_job_metadata(job_id, {'status': 'PROCESSING'})
+
+
+# ============================================================
+# Full pipeline: submit → poll → download
+# ============================================================
+
+class TestFullPipelineFlow:
+
+    @pytest.fixture(autouse=True)
+    def valid_api_key(self):
+        with patch('web.app._validate_api_key',
+                   return_value={'created_at': '1700000000.0', 'label': 'test'}):
+            yield
+
+    _api_headers = {'X-API-Key': 'dk_testkey'}
+
+    def test_submit_poll_success_download(self, client, mock_redis, mock_celery, tmp_path):
+        """Full pipeline: POST /api/v1/convert → poll status → download."""
+        # 1. Submit job
+        mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
+        data = {
+            'file': (io.BytesIO(b'# Hello\n\nWorld'), 'doc.md'),
+            'from_format': 'markdown',
+            'to_format': 'html',
+        }
+        submit_resp = client.post('/api/v1/convert', data=data,
+                                  content_type='multipart/form-data',
+                                  headers=self._api_headers)
+        assert submit_resp.status_code == 202
+        job_id = submit_resp.get_json()['job_id']
+        assert job_id  # must be a non-empty UUID string
+
+        # 2. Poll status: PROCESSING
+        mock_redis.hgetall.return_value = {
+            'status': 'PROCESSING', 'filename': 'doc.md',
+            'from': 'markdown', 'to': 'html',
+            'created_at': str(time.time()), 'progress': '50'
+        }
+        poll_resp = client.get(f'/api/v1/status/{job_id}',
+                               headers=self._api_headers)
+        assert poll_resp.status_code == 200
+        assert poll_resp.get_json()['status'] == 'processing'
+        assert poll_resp.get_json()['progress'] == 50
+
+        # 3. Poll status: SUCCESS
+        mock_redis.hgetall.return_value = {
+            'status': 'SUCCESS', 'filename': 'doc.html',
+            'from': 'markdown', 'to': 'html',
+            'created_at': str(time.time() - 5),
+            'completed_at': str(time.time()),
+            'progress': '100', 'file_count': '1', 'encrypted': 'false'
+        }
+        success_resp = client.get(f'/api/v1/status/{job_id}',
+                                  headers=self._api_headers)
+        assert success_resp.status_code == 200
+        assert success_resp.get_json()['status'] == 'success'
+        assert success_resp.get_json()['download_url']
+
+        # 4. Download the output
+        job_dir = f'/tmp/docuflux_test_outputs/{job_id}'
+        os.makedirs(job_dir, exist_ok=True)
+        with open(os.path.join(job_dir, 'doc.html'), 'w') as f:
+            f.write('<html><body>Hello World</body></html>')
+
+        mock_redis.hgetall.return_value = {'encrypted': 'false', 'status': 'SUCCESS'}
+        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'):
+            dl_resp = client.get(f'/download/{job_id}')
+        assert dl_resp.status_code == 200
+
+        import shutil
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+    def test_submit_poll_failure_state(self, client, mock_redis, mock_celery):
+        """Pipeline correctly surfaces FAILURE state with error message."""
+        mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
+        data = {
+            'file': (io.BytesIO(b'bad content'), 'broken.md'),
+            'from_format': 'markdown',
+            'to_format': 'html',
+        }
+        submit_resp = client.post('/api/v1/convert', data=data,
+                                  content_type='multipart/form-data',
+                                  headers=self._api_headers)
+        job_id = submit_resp.get_json()['job_id']
+
+        mock_redis.hgetall.return_value = {
+            'status': 'FAILURE', 'filename': 'broken.md',
+            'from': 'markdown', 'to': 'html',
+            'created_at': str(time.time()),
+            'completed_at': str(time.time()),
+            'error': 'Pandoc conversion failed: unsupported format',
+            'progress': '0'
+        }
+        fail_resp = client.get(f'/api/v1/status/{job_id}',
+                               headers=self._api_headers)
+        assert fail_resp.status_code == 200
+        result = fail_resp.get_json()
+        assert result['status'] == 'failure'
+        assert 'error' in result
+
+    def test_multi_file_pipeline_returns_zip_url(self, client, mock_redis, mock_celery):
+        """Marker pipeline producing images returns download_zip URL in status."""
+        mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
+        data = {
+            'file': (io.BytesIO(b'%PDF-1.4 fake'), 'report.pdf'),
+            'from_format': 'pdf_marker',
+            'to_format': 'markdown',
+        }
+        submit_resp = client.post('/api/v1/convert', data=data,
+                                  content_type='multipart/form-data',
+                                  headers=self._api_headers)
+        assert submit_resp.status_code == 202
+        job_id = submit_resp.get_json()['job_id']
+
+        # Simulate Marker success with multiple output files (markdown + images)
+        # Create a real output dir with images subdir so the endpoint detects is_multifile
+        job_dir = f'/tmp/docuflux_test_outputs/{job_id}'
+        os.makedirs(os.path.join(job_dir, 'images'), exist_ok=True)
+        with open(os.path.join(job_dir, 'report.md'), 'w') as f:
+            f.write('# Report\n')
+
+        mock_redis.hgetall.return_value = {
+            'status': 'SUCCESS', 'filename': 'report.md',
+            'from': 'pdf_marker', 'to': 'markdown',
+            'created_at': str(time.time() - 10),
+            'completed_at': str(time.time()),
+            'progress': '100', 'file_count': '5', 'encrypted': 'false'
+        }
+        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'):
+            status_resp = client.get(f'/api/v1/status/{job_id}',
+                                     headers=self._api_headers)
+        assert status_resp.status_code == 200
+        result = status_resp.get_json()
+        assert result['status'] == 'success'
+        # API v1 always uses /api/v1/download/<id>; multi-file signalled by is_multifile
+        assert '/api/v1/download/' in result['download_url']
+        assert result['is_multifile'] is True
+
+        import shutil
+        shutil.rmtree(job_dir, ignore_errors=True)
