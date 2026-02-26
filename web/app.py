@@ -592,6 +592,18 @@ def list_jobs():
         if meta.get('status') == 'SUCCESS':
             download_url = f"/download_zip/{jid}" if is_zip else f"/download/{jid}"
 
+        slm = None
+        if meta.get('slm_status') == 'SUCCESS':
+            try:
+                tags = json.loads(meta.get('slm_tags', '[]'))
+            except Exception:
+                tags = []
+            slm = {
+                'title': meta.get('slm_title', ''),
+                'tags': tags,
+                'summary': meta.get('slm_summary', ''),
+            }
+
         jobs_data.append({
             'id': jid, 'filename': meta.get('filename'), 'from': meta.get('from'),
             'to': meta.get('to'), 'created_at': float(meta.get('created_at', 0)),
@@ -599,7 +611,8 @@ def list_jobs():
             'result': meta.get('error') if meta.get('status') == 'FAILURE' else None,
             'download_url': download_url,
             'is_zip': is_zip,
-            'file_count': file_count
+            'file_count': file_count,
+            'slm': slm,
         })
     jobs_data.sort(key=lambda x: x['created_at'], reverse=True)
     return jsonify(jobs_data)
@@ -1185,6 +1198,21 @@ def api_v1_status(job_id):
         if 'error' in metadata:
             response['error'] = metadata['error']
 
+    # Add SLM metadata if available
+    slm_status = metadata.get('slm_status')
+    if slm_status:
+        slm_info = {'status': slm_status}
+        if metadata.get('slm_title'):
+            slm_info['title'] = metadata['slm_title']
+        if metadata.get('slm_tags'):
+            try:
+                slm_info['tags'] = json.loads(metadata['slm_tags'])
+            except Exception:
+                slm_info['tags'] = []
+        if metadata.get('slm_summary'):
+            slm_info['summary'] = metadata['slm_summary']
+        response['slm_metadata'] = slm_info
+
     return jsonify(response), 200
 
 
@@ -1363,6 +1391,43 @@ def api_v1_get_webhook(job_id):
         return jsonify({'error': 'No webhook registered for this job'}), 404
 
     return jsonify({'job_id': job_id, 'webhook_url': webhook_url}), 200
+
+
+@app.route('/api/v1/jobs/<job_id>/extract-metadata', methods=['POST'])
+@csrf.exempt
+@require_api_key
+def api_v1_extract_metadata(job_id):
+    """Manually trigger SLM metadata extraction for a completed job."""
+    if not is_valid_uuid(job_id):
+        return jsonify({'error': 'Invalid job ID format'}), 400
+
+    metadata = get_job_metadata(job_id)
+    if not metadata:
+        return jsonify({'error': 'Job not found'}), 404
+
+    if metadata.get('status') != 'SUCCESS':
+        return jsonify({'error': 'Job must be in SUCCESS state'}), 409
+
+    # Find the output markdown file
+    output_dir = os.path.realpath(os.path.join(app.config['OUTPUT_FOLDER'], job_id))
+    _base = os.path.realpath(app.config['OUTPUT_FOLDER'])
+    if not output_dir.startswith(_base + os.sep):
+        return jsonify({'error': 'Invalid job path'}), 400
+
+    md_file = None
+    if os.path.exists(output_dir):
+        for f in os.listdir(output_dir):
+            if f.endswith('.md'):
+                md_file = os.path.join(output_dir, f)
+                break
+
+    if not md_file:
+        return jsonify({'error': 'No markdown output found for this job'}), 404
+
+    celery.send_task('tasks.extract_slm_metadata', args=[job_id, md_file], queue='default')
+    update_job_metadata(job_id, {'slm_status': 'PENDING'})
+
+    return jsonify({'job_id': job_id, 'status': 'queued', 'message': 'SLM extraction queued'}), 202
 
 
 # ============================================================================

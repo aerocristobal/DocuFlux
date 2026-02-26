@@ -594,10 +594,19 @@
                     ? `<md-linear-progress value="${j.progress/100}" style="width:100px;margin-top:8px;"></md-linear-progress>`
                     : active ? `<md-linear-progress indeterminate style="width:100px;margin-top:8px;"></md-linear-progress>` : '';
 
+                let slmHtml = '';
+                if (j.slm) {
+                    const slmTags = (j.slm.tags || []).map(t => `<md-assist-chip label="${escapeHtml(t)}" style="font-size:0.7rem;margin:2px;"></md-assist-chip>`).join('');
+                    slmHtml = `<div style="margin-top:6px;padding:6px 0;border-top:1px solid var(--md-sys-color-outline-variant);font-size:0.8rem;">
+                        <span style="color:var(--md-sys-color-tertiary);font-weight:500;">AI: </span>${escapeHtml(j.slm.title || '')}
+                        ${j.slm.summary ? `<div style="color:var(--md-sys-color-on-surface-variant);margin-top:2px;">${escapeHtml(j.slm.summary)}</div>` : ''}
+                        ${slmTags ? `<div style="margin-top:4px;">${slmTags}</div>` : ''}
+                    </div>`;
+                }
                 return `<md-list-item class="job-item" data-status="${escapeHtml(j.status)}">
                     <md-icon slot="start" style="color:var(--md-sys-color-${color})">${icon}</md-icon>
                     <div slot="headline">${escapeHtml(j.filename)}</div>
-                    <div slot="supporting-text">${escapeHtml(j.from)} &rarr; ${escapeHtml(j.to)} · <span class="job-time">${time}</span>${prog}</div>
+                    <div slot="supporting-text">${escapeHtml(j.from)} &rarr; ${escapeHtml(j.to)} · <span class="job-time">${time}</span>${prog}${slmHtml}</div>
                     <div slot="trailing-supporting-text"><md-assist-chip label="${label}" class="status-chip"></md-assist-chip></div>
                     ${actions}${!active ? `<md-icon-button slot="end" onclick="window.deleteJob('${j.id}')"><md-icon>delete</md-icon></md-icon-button>` : ''}
                 </md-list-item><md-divider></md-divider>`;

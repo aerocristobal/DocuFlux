@@ -544,3 +544,120 @@ def test_api_v1_endpoints_csrf_exempt(client, mock_redis, mock_celery, mock_disk
 
     # Restore CSRF disabled state
     app.config['WTF_CSRF_ENABLED'] = False
+
+
+# ============================================================================
+# GET /api/v1/status — SLM metadata fields
+# ============================================================================
+
+class TestApiV1StatusSlm:
+    def test_status_includes_slm_metadata_when_success(self, client, api_headers):
+        """Status response includes slm_metadata when SLM extraction succeeded."""
+        job_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        redis_data = {
+            'status': 'SUCCESS',
+            'filename': 'doc.pdf',
+            'from': 'pdf_marker',
+            'to': 'markdown',
+            'created_at': '1700000000.0',
+            'completed_at': '1700000060.0',
+            'progress': '100',
+            'slm_status': 'SUCCESS',
+            'slm_title': 'AI Generated Title',
+            'slm_tags': '["ai", "document"]',
+            'slm_summary': 'A brief summary.',
+        }
+        with patch('web.app.get_job_metadata', return_value=redis_data), \
+             patch('web.app.os.path.exists', return_value=False):
+            r = client.get(f'/api/v1/status/{job_id}')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert 'slm_metadata' in data
+        assert data['slm_metadata']['status'] == 'SUCCESS'
+        assert data['slm_metadata']['title'] == 'AI Generated Title'
+        assert data['slm_metadata']['tags'] == ['ai', 'document']
+        assert data['slm_metadata']['summary'] == 'A brief summary.'
+
+    def test_status_no_slm_field_when_not_extracted(self, client, api_headers):
+        """Status response omits slm_metadata when SLM hasn't run."""
+        job_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        redis_data = {
+            'status': 'PENDING',
+            'filename': 'doc.pdf',
+            'from': 'pdf_marker',
+            'to': 'markdown',
+            'created_at': '1700000000.0',
+            'progress': '0',
+        }
+        with patch('web.app.get_job_metadata', return_value=redis_data):
+            r = client.get(f'/api/v1/status/{job_id}')
+        assert r.status_code == 200
+        assert 'slm_metadata' not in r.get_json()
+
+
+# ============================================================================
+# POST /api/v1/jobs/<job_id>/extract-metadata
+# ============================================================================
+
+class TestApiV1ExtractMetadata:
+    def test_extract_metadata_queues_task(self, client, api_headers):
+        """POST /extract-metadata dispatches SLM task and returns 202."""
+        import uuid, os, tempfile
+        job_id = str(uuid.uuid4())
+        redis_data = {'status': 'SUCCESS', 'filename': 'doc.pdf', 'from': 'pdf_marker',
+                      'to': 'markdown', 'created_at': '1700000000.0'}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            md_path = os.path.join(tmpdir, 'doc.md')
+            open(md_path, 'w').close()
+
+            from web.app import app as flask_app
+            flask_app.config['OUTPUT_FOLDER'] = tmpdir
+            job_dir = os.path.join(tmpdir, job_id)
+            os.makedirs(job_dir)
+            open(os.path.join(job_dir, 'doc.md'), 'w').close()
+
+            with patch('web.app.get_job_metadata', return_value=redis_data), \
+                 patch('web.app.update_job_metadata') as mock_update, \
+                 patch('web.app.celery') as mock_celery:
+                r = client.post(
+                    f'/api/v1/jobs/{job_id}/extract-metadata',
+                    headers=api_headers,
+                )
+        assert r.status_code == 202
+        data = r.get_json()
+        assert data['status'] == 'queued'
+        mock_celery.send_task.assert_called_once()
+        args = mock_celery.send_task.call_args
+        assert args[0][0] == 'tasks.extract_slm_metadata'
+
+    def test_extract_metadata_requires_api_key(self, client):
+        """POST /extract-metadata returns 401 without API key."""
+        import uuid
+        job_id = str(uuid.uuid4())
+        r = client.post(f'/api/v1/jobs/{job_id}/extract-metadata')
+        assert r.status_code == 401
+
+    def test_extract_metadata_409_if_not_success(self, client, api_headers):
+        """POST /extract-metadata returns 409 if job is still processing."""
+        import uuid
+        job_id = str(uuid.uuid4())
+        redis_data = {'status': 'PROCESSING', 'filename': 'doc.pdf',
+                      'from': 'pdf_marker', 'to': 'markdown', 'created_at': '1700000000.0'}
+        with patch('web.app.get_job_metadata', return_value=redis_data):
+            r = client.post(
+                f'/api/v1/jobs/{job_id}/extract-metadata',
+                headers=api_headers,
+            )
+        assert r.status_code == 409
+
+    def test_extract_metadata_404_for_unknown_job(self, client, api_headers):
+        """POST /extract-metadata returns 404 if job not found."""
+        import uuid
+        job_id = str(uuid.uuid4())
+        with patch('web.app.get_job_metadata', return_value=None):
+            r = client.post(
+                f'/api/v1/jobs/{job_id}/extract-metadata',
+                headers=api_headers,
+            )
+        assert r.status_code == 404

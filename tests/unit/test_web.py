@@ -700,3 +700,71 @@ class TestApiKeyAuth:
             headers={'X-API-Key': 'dk_validkey123'},
         )
         assert response.status_code == 400  # Missing file, not auth error
+
+
+# ============================================================================
+# /api/jobs — SLM metadata in job list
+# ============================================================================
+
+class TestListJobsSlm:
+    @patch('app.redis_client')
+    def test_list_jobs_includes_slm_when_available(self, mock_redis, client):
+        """GET /api/jobs includes slm field for jobs with successful SLM extraction."""
+        import uuid, json
+        job_id = str(uuid.uuid4())
+
+        with client.session_transaction() as sess:
+            sess['session_id'] = 'test-session'
+
+        mock_redis.lrange.return_value = [job_id]
+        pipe = MagicMock()
+        pipe.execute.return_value = [{
+            'status': 'SUCCESS',
+            'filename': 'doc.pdf',
+            'from': 'pdf_marker',
+            'to': 'markdown',
+            'created_at': '1700000000.0',
+            'progress': '100',
+            'file_count': '1',
+            'slm_status': 'SUCCESS',
+            'slm_title': 'Test Title',
+            'slm_tags': '["tag1","tag2"]',
+            'slm_summary': 'A test summary.',
+        }]
+        mock_redis.pipeline.return_value = pipe
+
+        r = client.get('/api/jobs')
+        assert r.status_code == 200
+        jobs = r.get_json()
+        assert len(jobs) == 1
+        assert jobs[0]['slm'] is not None
+        assert jobs[0]['slm']['title'] == 'Test Title'
+        assert jobs[0]['slm']['tags'] == ['tag1', 'tag2']
+        assert jobs[0]['slm']['summary'] == 'A test summary.'
+
+    @patch('app.redis_client')
+    def test_list_jobs_slm_null_when_not_extracted(self, mock_redis, client):
+        """GET /api/jobs has slm=null for jobs without SLM extraction."""
+        import uuid
+        job_id = str(uuid.uuid4())
+
+        with client.session_transaction() as sess:
+            sess['session_id'] = 'test-session'
+
+        mock_redis.lrange.return_value = [job_id]
+        pipe = MagicMock()
+        pipe.execute.return_value = [{
+            'status': 'PENDING',
+            'filename': 'doc.pdf',
+            'from': 'pdf',
+            'to': 'markdown',
+            'created_at': '1700000000.0',
+            'progress': '0',
+        }]
+        mock_redis.pipeline.return_value = pipe
+
+        r = client.get('/api/jobs')
+        assert r.status_code == 200
+        jobs = r.get_json()
+        assert len(jobs) == 1
+        assert jobs[0]['slm'] is None
