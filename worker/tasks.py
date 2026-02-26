@@ -109,6 +109,31 @@ def get_job_metadata(job_id):
         return None
 
 
+def fire_webhook(job_id, status, extra=None):
+    """Fire webhook POST if a URL is registered for this job.
+
+    Reads webhook_url from the job's Redis hash. On success or failure the
+    webhook receives a JSON payload with job_id, status, and relevant fields.
+    Network errors are logged and silently ignored so they never fail a job.
+    """
+    try:
+        meta = redis_client.hget(f"job:{job_id}", 'webhook_url')
+        if not meta:
+            return
+        webhook_url = meta.decode('utf-8') if isinstance(meta, bytes) else meta
+        payload = {
+            'job_id': job_id,
+            'status': status,
+            'timestamp': str(time.time()),
+        }
+        if extra:
+            payload.update(extra)
+        requests.post(webhook_url, json=payload, timeout=5)
+        logging.info(f"Webhook fired for job {job_id} → {webhook_url} (status={status})")
+    except Exception as e:
+        logging.warning(f"Webhook delivery failed for job {job_id}: {e}")
+
+
 def call_mcp_server(action, args):
     """
     Helper function to send commands to the MCP server.
@@ -224,6 +249,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
             'file_count': '1'
         })
         redis_client.expire(f"job:{job_id}", 7200)
+        fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
 
         # Epic 21.5: Record success metrics
         duration = time.time() - start_time
@@ -241,6 +267,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         logging.error(f"Timeout for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg, 'progress': '0'})
         redis_client.expire(f"job:{job_id}", 600)
+        fire_webhook(job_id, 'FAILURE', {'error': error_msg})
 
         # Epic 21.5: Record failure metrics
         duration = time.time() - start_time
@@ -255,6 +282,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         logging.error(f"Pandoc error for job {job_id}: {error_msg}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500], 'progress': '0'})
         redis_client.expire(f"job:{job_id}", 600)
+        fire_webhook(job_id, 'FAILURE', {'error': str(error_msg)[:500]})
 
         # Epic 21.5: Record failure metrics
         duration = time.time() - start_time
@@ -268,6 +296,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         logging.error(f"Unexpected error for job {job_id}: {str(e)}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
         redis_client.expire(f"job:{job_id}", 600)
+        fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
         # Epic 21.5: Record failure metrics
         duration = time.time() - start_time
@@ -497,6 +526,7 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
             'progress': '100', 'encrypted': 'false'
         })
         redis_client.expire(f"job:{job_id}", 7200)
+        fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
         extract_slm_metadata.delay(job_id, output_path)
 
         duration = time.time() - start_time
@@ -511,6 +541,7 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         logging.error(f"Marker error for job {job_id}: {e}")
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
         redis_client.expire(f"job:{job_id}", 600)
+        fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
         duration = time.time() - start_time
         conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()

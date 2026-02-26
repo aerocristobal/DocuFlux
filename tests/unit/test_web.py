@@ -402,3 +402,230 @@ class TestCaptureFinishSession:
 
         response = client.post(f'/api/v1/capture/sessions/{session_id}/finish', json={})
         assert response.status_code == 500
+
+
+# ============================================================
+# Captures list + health endpoints (docuflux-5lb: coverage)
+# ============================================================
+
+class TestListCaptures:
+
+    @patch('app.redis_client')
+    def test_empty_returns_empty_list(self, mock_redis, client):
+        mock_redis.lrange.return_value = []
+        response = client.get('/api/captures')
+        assert response.status_code == 200
+        assert response.json == []
+
+    @patch('app.redis_client')
+    def test_returns_capture_jobs(self, mock_redis, client, valid_job_id):
+        mock_redis.lrange.return_value = [valid_job_id]
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [{
+            'status': 'SUCCESS',
+            'filename': 'book.md',
+            'from': 'capture',
+            'to': 'markdown',
+            'created_at': '1700000000.0',
+            'progress': '100',
+            'is_zip': 'false',
+        }]
+
+        response = client.get('/api/captures')
+        assert response.status_code == 200
+        data = response.json
+        assert len(data) == 1
+        assert data[0]['status'] == 'SUCCESS'
+        assert data[0]['download_url'] == f'/download/{valid_job_id}'
+
+    @patch('app.redis_client')
+    def test_zip_job_has_zip_download_url(self, mock_redis, client, valid_job_id):
+        mock_redis.lrange.return_value = [valid_job_id]
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [{
+            'status': 'SUCCESS',
+            'filename': 'book.md',
+            'from': 'capture',
+            'to': 'markdown',
+            'created_at': '1700000000.0',
+            'progress': '100',
+            'is_zip': 'true',
+        }]
+
+        response = client.get('/api/captures')
+        assert response.status_code == 200
+        assert response.json[0]['download_url'] == f'/download_zip/{valid_job_id}'
+
+    @patch('app.redis_client')
+    def test_skips_missing_metadata(self, mock_redis, client, valid_job_id):
+        mock_redis.lrange.return_value = [valid_job_id]
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [{}]  # Empty metadata (job cleaned up)
+
+        response = client.get('/api/captures')
+        assert response.status_code == 200
+        assert response.json == []  # Skipped due to empty meta
+
+
+class TestHealthEndpoints:
+
+    @patch('app.redis_client')
+    def test_readiness_ok(self, mock_redis, client):
+        """Readiness probe returns 200 when Redis responds."""
+        response = client.get('/readyz')
+        assert response.status_code == 200
+        data = response.json
+        assert data['status'] == 'ready'
+
+    @patch('app.redis_client')
+    def test_readiness_redis_down(self, mock_redis, client):
+        """Readiness probe returns 503 when Redis is unreachable."""
+        mock_redis.ping.side_effect = Exception("Connection refused")
+        response = client.get('/readyz')
+        assert response.status_code == 503
+        assert response.json['status'] == 'not_ready'
+
+    @patch('app.celery')
+    @patch('app.shutil')
+    @patch('app.redis_client')
+    def test_health_detailed_healthy(self, mock_redis, mock_shutil, mock_celery, client):
+        """Detailed health check returns healthy when all components respond."""
+        mock_shutil.disk_usage.return_value = (100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
+        mock_redis.get.return_value = 'available'
+        mock_redis.hgetall.return_value = {}
+        mock_celery.control.inspect.return_value.active.return_value = {'worker1': []}
+
+        response = client.get('/api/health')
+        assert response.status_code == 200
+        data = response.json
+        assert data['status'] == 'healthy'
+        assert 'components' in data
+
+    @patch('app.celery')
+    @patch('app.shutil')
+    @patch('app.redis_client')
+    def test_health_detailed_redis_down(self, mock_redis, mock_shutil, mock_celery, client):
+        """Detailed health check marks Redis component as down."""
+        mock_redis.ping.side_effect = Exception("Connection refused")
+        mock_redis.get.return_value = None
+        mock_redis.hgetall.return_value = {}
+        mock_shutil.disk_usage.return_value = (100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
+        # Provide workers so Celery check doesn't override to 'degraded'
+        mock_celery.control.inspect.return_value.active.return_value = {'worker1': []}
+
+        response = client.get('/api/health')
+        data = response.json
+        assert data['components']['redis']['status'] == 'down'
+
+
+class TestApiV1Status:
+
+    @patch('app.redis_client')
+    def test_job_status_success(self, mock_redis, client, valid_job_id):
+        """Job status API returns metadata for a known job."""
+        mock_redis.hgetall.return_value = {
+            'status': 'SUCCESS',
+            'filename': 'doc.md',
+            'progress': '100',
+            'created_at': '1700000000.0',
+        }
+        response = client.get(f'/api/v1/status/{valid_job_id}')
+        assert response.status_code == 200
+        data = response.json
+        assert data['status'] == 'success'  # endpoint lowercases status
+
+    @patch('app.redis_client')
+    def test_job_status_not_found(self, mock_redis, client, valid_job_id):
+        """Job status API returns 404 for unknown job."""
+        mock_redis.hgetall.return_value = {}
+        response = client.get(f'/api/v1/status/{valid_job_id}')
+        assert response.status_code == 404
+
+    def test_job_status_invalid_uuid(self, client):
+        """Job status API rejects invalid UUIDs."""
+        response = client.get('/api/v1/status/not-a-uuid')
+        assert response.status_code == 400
+
+# ─── Webhook API Tests ────────────────────────────────────────────────────────
+
+class TestWebhookApi:
+    """Tests for POST /api/v1/webhooks and GET /api/v1/webhooks/<job_id>."""
+
+    @patch('app.redis_client')
+    def test_register_webhook_success(self, mock_redis, client, valid_job_id):
+        """Register a valid webhook URL for an existing job returns 201."""
+        mock_redis.hgetall.return_value = {
+            'status': 'PENDING', 'filename': 'doc.pdf',
+            'from': 'pdf', 'to': 'markdown',
+            'created_at': '1700000000.0', 'progress': '0',
+        }
+        response = client.post(
+            '/api/v1/webhooks',
+            json={'job_id': valid_job_id, 'webhook_url': 'https://example.com/hook'},
+        )
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data['registered'] is True
+        assert data['webhook_url'] == 'https://example.com/hook'
+        mock_redis.hset.assert_called()
+
+    @patch('app.redis_client')
+    def test_register_webhook_invalid_uuid(self, mock_redis, client):
+        """Register returns 400 for invalid job_id."""
+        response = client.post(
+            '/api/v1/webhooks',
+            json={'job_id': 'not-a-uuid', 'webhook_url': 'https://example.com/hook'},
+        )
+        assert response.status_code == 400
+
+    @patch('app.redis_client')
+    def test_register_webhook_invalid_url(self, mock_redis, client, valid_job_id):
+        """Register returns 400 for non-http webhook_url."""
+        mock_redis.hgetall.return_value = {'status': 'PENDING', 'created_at': '1700000000.0'}
+        response = client.post(
+            '/api/v1/webhooks',
+            json={'job_id': valid_job_id, 'webhook_url': 'ftp://bad.example.com/hook'},
+        )
+        assert response.status_code == 400
+
+    @patch('app.redis_client')
+    def test_register_webhook_job_not_found(self, mock_redis, client, valid_job_id):
+        """Register returns 404 when job does not exist."""
+        mock_redis.hgetall.return_value = {}
+        response = client.post(
+            '/api/v1/webhooks',
+            json={'job_id': valid_job_id, 'webhook_url': 'https://example.com/hook'},
+        )
+        assert response.status_code == 404
+
+    @patch('app.redis_client')
+    def test_get_webhook_success(self, mock_redis, client, valid_job_id):
+        """GET webhook returns the registered URL for a job."""
+        mock_redis.hgetall.return_value = {
+            'status': 'SUCCESS', 'filename': 'doc.pdf',
+            'from': 'pdf', 'to': 'markdown',
+            'created_at': '1700000000.0', 'progress': '100',
+            'webhook_url': 'https://example.com/hook',
+        }
+        response = client.get(f'/api/v1/webhooks/{valid_job_id}')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['webhook_url'] == 'https://example.com/hook'
+
+    @patch('app.redis_client')
+    def test_get_webhook_not_registered(self, mock_redis, client, valid_job_id):
+        """GET webhook returns 404 when no webhook has been registered."""
+        mock_redis.hgetall.return_value = {
+            'status': 'PENDING', 'filename': 'doc.pdf',
+            'created_at': '1700000000.0', 'progress': '0',
+        }
+        response = client.get(f'/api/v1/webhooks/{valid_job_id}')
+        assert response.status_code == 404
+
+    def test_get_webhook_invalid_uuid(self, client):
+        """GET webhook returns 400 for invalid job_id."""
+        response = client.get('/api/v1/webhooks/bad-id')
+        assert response.status_code == 400

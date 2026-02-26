@@ -892,3 +892,214 @@ class TestProcessCaptureBatch:
         failure_calls = [c for c in mock_update.call_args_list
                          if c.args[1].get('status') == 'FAILURE']
         assert len(failure_calls) == 0
+
+
+# ============================================================
+# assemble_capture_session tests (docuflux-m13 + docuflux-5lb)
+# ============================================================
+
+class TestAssembleCaptureSession:
+
+    def _make_session_meta(self, force_ocr='false', batches_queued='0',
+                           batches_done='0', batches_failed='0'):
+        return {
+            'title': 'Test Book',
+            'to_format': 'markdown',
+            'source_url': 'https://example.com',
+            'force_ocr': force_ocr,
+            'batches_queued': batches_queued,
+            'batches_done': batches_done,
+            'batches_failed': batches_failed,
+        }
+
+    def _make_page(self, page_hint=0, text='# Chapter'):
+        import json
+        return json.dumps({'page_hint': page_hint, 'text': text, 'images': []}).encode()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.update_job_metadata')
+    @patch('tasks.socketio')
+    @patch('os.makedirs')
+    @patch('os.path.exists')
+    def test_text_assembly_path_success(self, mock_exists, mock_makedirs,
+                                        mock_socketio, mock_update, mock_redis):
+        """Text path assembles pages without calling Marker."""
+        session_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        mock_redis.hgetall.return_value = self._make_session_meta(force_ocr='false')
+        mock_redis.lrange.return_value = [self._make_page(0, '# Page 1'), self._make_page(1, '# Page 2')]
+        mock_exists.return_value = False  # no images dir to rmdir
+
+        from unittest.mock import patch as upatch, mock_open
+        with upatch('builtins.open', mock_open()) as m_open, \
+             upatch('os.path.join', side_effect=lambda *a: '/'.join(a)), \
+             upatch('os.path.exists', return_value=False), \
+             upatch('os.makedirs'):
+            tasks.assemble_capture_session(session_id, job_id)
+
+        # Marker should NOT have been called
+        sys.modules['marker.converters.pdf'].PdfConverter.assert_not_called()
+        # SUCCESS status should have been recorded
+        success_calls = [c for c in mock_update.call_args_list
+                         if c.args[1].get('status') == 'SUCCESS']
+        assert len(success_calls) == 1
+
+    @patch('tasks.redis_client')
+    @patch('tasks.update_job_metadata')
+    @patch('tasks.socketio')
+    @patch('os.makedirs')
+    def test_text_assembly_path_no_pages_raises(self, mock_makedirs, mock_socketio,
+                                                 mock_update, mock_redis):
+        """Assemble raises ValueError when no pages are found in Redis."""
+        session_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        mock_redis.hgetall.return_value = self._make_session_meta()
+        mock_redis.lrange.return_value = []  # No pages
+
+        with pytest.raises(ValueError, match="No pages found"):
+            tasks.assemble_capture_session(session_id, job_id)
+
+        # Should mark FAILURE
+        failure_calls = [c for c in mock_update.call_args_list
+                         if c.args[1].get('status') == 'FAILURE']
+        assert len(failure_calls) == 1
+
+    @patch('tasks.redis_client')
+    @patch('tasks.update_job_metadata')
+    @patch('tasks.socketio')
+    def test_batch_merge_path_stitches_outputs(self, mock_socketio, mock_update, mock_redis):
+        """Batch merge path reads batch.md files and copies images from each batch."""
+        import json, os, tempfile
+
+        session_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        # Two batches, both done
+        mock_redis.hgetall.return_value = self._make_session_meta(
+            force_ocr='true', batches_queued='2', batches_done='2'
+        )
+        mock_redis.lrange.return_value = [
+            json.dumps({'page_hint': 0, 'text': '', 'images': []}).encode(),
+        ]
+        mock_redis.hget.return_value = 'done'  # batch status
+
+        # Use real temp directory so file I/O works
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            job_dir = os.path.join(tmpdir, job_id)
+            os.makedirs(os.path.join(job_dir, 'batches', 'batch_0', 'images'))
+            os.makedirs(os.path.join(job_dir, 'batches', 'batch_1', 'images'))
+            # Write batch markdown files
+            with open(os.path.join(job_dir, 'batches', 'batch_0', 'batch.md'), 'w') as f:
+                f.write('# Part 1')
+            with open(os.path.join(job_dir, 'batches', 'batch_1', 'batch.md'), 'w') as f:
+                f.write('# Part 2')
+            # Write a dummy image in batch_0
+            img_path = os.path.join(job_dir, 'batches', 'batch_0', 'images', 'img_00000.png')
+            with open(img_path, 'wb') as f:
+                f.write(b'PNG')
+
+            tasks.assemble_capture_session(session_id, job_id)
+
+            # Final markdown file should exist
+            final_md = os.path.join(job_dir, 'Test_Book.md')
+            assert os.path.exists(final_md) or any(
+                f.endswith('.md') for f in os.listdir(job_dir)
+            )
+            # Images should be merged
+            images_dir = os.path.join(job_dir, 'images')
+            assert os.path.exists(images_dir)
+            assert 'img_00000.png' in os.listdir(images_dir)
+            # Staging directory should be cleaned up
+            assert not os.path.exists(os.path.join(job_dir, 'batches'))
+
+        # Restore to a non-breaking value
+        tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+    @patch('tasks.redis_client')
+    @patch('tasks.update_job_metadata')
+    @patch('tasks.socketio')
+    def test_batch_merge_tombstone_for_failed_batch(self, mock_socketio, mock_update, mock_redis):
+        """Failed batches produce a tombstone in the final markdown."""
+        import json, os, tempfile
+
+        session_id = str(uuid.uuid4())
+        job_id = str(uuid.uuid4())
+
+        mock_redis.hgetall.return_value = self._make_session_meta(
+            force_ocr='true', batches_queued='1', batches_done='0', batches_failed='1'
+        )
+        mock_redis.lrange.return_value = [
+            json.dumps({'page_hint': 0, 'text': '', 'images': []}).encode(),
+        ]
+        mock_redis.hget.return_value = 'failed'  # batch 0 failed
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            job_dir = os.path.join(tmpdir, job_id)
+            os.makedirs(os.path.join(job_dir, 'batches', 'batch_0'))
+
+            tasks.assemble_capture_session(session_id, job_id)
+
+            # Find the output markdown file and check it has tombstone text
+            md_files = [f for f in os.listdir(job_dir) if f.endswith('.md')]
+            assert len(md_files) == 1
+            with open(os.path.join(job_dir, md_files[0])) as f:
+                content = f.read()
+            assert '⚠' in content or 'failed' in content.lower()
+
+            # Job should still be SUCCESS with batch_warnings
+            success_calls = [c for c in mock_update.call_args_list
+                             if c.args[1].get('status') == 'SUCCESS']
+            assert len(success_calls) == 1
+            assert 'batch_warnings' in success_calls[0].args[1]
+
+        tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+# ─── fire_webhook Tests ───────────────────────────────────────────────────────
+
+class TestFireWebhook:
+    """Tests for the fire_webhook helper in tasks.py."""
+
+    def test_fires_post_when_url_registered(self):
+        """fire_webhook posts JSON payload to the registered URL."""
+        import tasks
+        from unittest.mock import patch, MagicMock
+        job_id = str(__import__('uuid').uuid4())
+
+        with patch.object(tasks.redis_client, 'hget', return_value=b'https://hook.example.com/cb'), \
+             patch('tasks.requests.post') as mock_post:
+            tasks.fire_webhook(job_id, 'SUCCESS', {'download_url': '/api/v1/download/' + job_id})
+
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args
+        assert call_kwargs[0][0] == 'https://hook.example.com/cb'
+        payload = call_kwargs[1]['json']
+        assert payload['job_id'] == job_id
+        assert payload['status'] == 'SUCCESS'
+        assert 'download_url' in payload
+
+    def test_no_post_when_no_url(self):
+        """fire_webhook does nothing when no webhook_url is registered."""
+        import tasks
+        from unittest.mock import patch
+        job_id = str(__import__('uuid').uuid4())
+
+        with patch.object(tasks.redis_client, 'hget', return_value=None), \
+             patch('tasks.requests.post') as mock_post:
+            tasks.fire_webhook(job_id, 'SUCCESS')
+
+        mock_post.assert_not_called()
+
+    def test_network_error_does_not_raise(self):
+        """fire_webhook swallows network errors silently."""
+        import tasks
+        from unittest.mock import patch
+        job_id = str(__import__('uuid').uuid4())
+
+        with patch.object(tasks.redis_client, 'hget', return_value=b'https://hook.example.com/cb'), \
+             patch('tasks.requests.post', side_effect=ConnectionError('timeout')):
+            # Should not raise
+            tasks.fire_webhook(job_id, 'FAILURE', {'error': 'oops'})

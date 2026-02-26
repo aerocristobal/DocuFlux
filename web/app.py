@@ -12,6 +12,7 @@ import zipfile
 import io
 import json
 from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file
+from urllib.parse import urlparse
 try:
     from prometheus_flask_exporter import PrometheusMetrics
     _has_prometheus = True
@@ -1226,6 +1227,58 @@ def api_v1_formats():
         'output_formats': output_formats,
         'conversions': conversions
     }), 200
+
+
+# ============================================================================
+# Webhook API Endpoints
+# ============================================================================
+
+@app.route('/api/v1/webhooks', methods=['POST'])
+@csrf.exempt
+@limiter.limit("60 per hour")
+def api_v1_register_webhook():
+    """Register a webhook URL for job status notifications.
+
+    Body: {"job_id": "<uuid>", "webhook_url": "<https://...>"}
+
+    When the job reaches SUCCESS or FAILURE the worker will POST a JSON
+    payload to the registered URL.  Returns 201 on success.
+    """
+    data = request.get_json(silent=True) or {}
+    job_id = data.get('job_id', '').strip()
+    webhook_url = data.get('webhook_url', '').strip()
+
+    if not is_valid_uuid(job_id):
+        return jsonify({'error': 'Invalid job_id'}), 400
+
+    parsed = urlparse(webhook_url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        return jsonify({'error': 'webhook_url must be a valid http/https URL'}), 400
+
+    metadata = get_job_metadata(job_id)
+    if not metadata:
+        return jsonify({'error': 'Job not found'}), 404
+
+    redis_client.hset(f"job:{job_id}", 'webhook_url', webhook_url)
+    return jsonify({'job_id': job_id, 'webhook_url': webhook_url, 'registered': True}), 201
+
+
+@app.route('/api/v1/webhooks/<job_id>', methods=['GET'])
+@csrf.exempt
+def api_v1_get_webhook(job_id):
+    """Return the registered webhook URL for a job, or 404 if none."""
+    if not is_valid_uuid(job_id):
+        return jsonify({'error': 'Invalid job_id'}), 400
+
+    metadata = get_job_metadata(job_id)
+    if not metadata:
+        return jsonify({'error': 'Job not found'}), 404
+
+    webhook_url = metadata.get('webhook_url')
+    if not webhook_url:
+        return jsonify({'error': 'No webhook registered for this job'}), 404
+
+    return jsonify({'job_id': job_id, 'webhook_url': webhook_url}), 200
 
 
 # ============================================================================
