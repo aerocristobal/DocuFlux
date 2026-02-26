@@ -2,10 +2,31 @@
 """
 Test script to verify CJK (Chinese-Japanese-Korean) PDF conversion support.
 This tests that XeLaTeX and Noto CJK fonts are properly configured.
+
+These tests require a running `docuflux-worker-1` Docker container.
+They are skipped automatically in CI when the container is not available.
+Run them locally with: docker-compose up worker
 """
 
 import subprocess
 import sys
+import pytest
+
+
+def _worker_running():
+    """Return True if the docuflux-worker-1 container is accessible."""
+    result = subprocess.run(
+        ['docker', 'exec', 'docuflux-worker-1', 'true'],
+        capture_output=True
+    )
+    return result.returncode == 0
+
+
+pytestmark = pytest.mark.skipif(
+    not _worker_running(),
+    reason="docuflux-worker-1 container is not running (skipped in CI)"
+)
+
 
 def test_xelatex_installed():
     """Test that XeLaTeX is installed in the worker container"""
