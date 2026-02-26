@@ -65,12 +65,19 @@ celery.conf.update(
     accept_content=['json'],
 )
 
-# Redis metadata client (DB 1)
-redis_client = redis.Redis.from_url(
-    app_settings.redis_metadata_url,
-    max_connections=20,
-    decode_responses=True
-)
+# Redis metadata client (DB 1) — supports TLS via rediss:// URL + cert env vars
+_redis_url = app_settings.redis_metadata_url
+_redis_kwargs = {'max_connections': 20, 'decode_responses': True}
+if _redis_url.startswith('rediss://'):
+    _redis_kwargs['ssl'] = True
+    _redis_kwargs['ssl_cert_reqs'] = 'required'
+    if app_settings.redis_tls_ca_certs:
+        _redis_kwargs['ssl_ca_certs'] = app_settings.redis_tls_ca_certs
+    if app_settings.redis_tls_certfile:
+        _redis_kwargs['ssl_certfile'] = app_settings.redis_tls_certfile
+    if app_settings.redis_tls_keyfile:
+        _redis_kwargs['ssl_keyfile'] = app_settings.redis_tls_keyfile
+redis_client = redis.Redis.from_url(_redis_url, **_redis_kwargs)
 
 # WebSocket emitter (standalone, no Flask app)
 socketio = SocketIO(message_queue=app_settings.socketio_message_queue)

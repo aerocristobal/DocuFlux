@@ -1,0 +1,53 @@
+# Docker Compose overlay to enable Redis TLS (rediss://)
+#
+# Usage:
+#   1. Generate certificates first:
+#      ./scripts/generate-redis-certs.sh
+#
+#   2. Launch with TLS:
+#      docker-compose -f docker-compose.yml -f docker-compose.tls.yml up
+#
+# This overlay replaces redis:// with rediss:// and enables the Redis TLS
+# listener on port 6380 while disabling the plain-text port.
+
+services:
+  redis:
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+      --port 0
+      --tls-port 6380
+      --tls-cert-file /certs/redis/redis.crt
+      --tls-key-file /certs/redis/redis.key
+      --tls-ca-cert-file /certs/redis/ca.crt
+      --tls-auth-clients no
+      --requirepass ${REDIS_PASSWORD}
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - >
+          redis-cli --no-auth-warning -a $${REDIS_PASSWORD} -p 6380
+          --tls --cacert /certs/redis/ca.crt ping | grep PONG
+
+  web:
+    environment:
+      - CELERY_BROKER_URL=rediss://:${REDIS_PASSWORD}@redis:6380/0
+      - CELERY_RESULT_BACKEND=rediss://:${REDIS_PASSWORD}@redis:6380/0
+      - REDIS_METADATA_URL=rediss://:${REDIS_PASSWORD}@redis:6380/1
+      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
+
+  worker:
+    environment:
+      - CELERY_BROKER_URL=rediss://:${REDIS_PASSWORD}@redis:6380/0
+      - CELERY_RESULT_BACKEND=rediss://:${REDIS_PASSWORD}@redis:6380/0
+      - REDIS_METADATA_URL=rediss://:${REDIS_PASSWORD}@redis:6380/1
+      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt
+
+  beat:
+    environment:
+      - CELERY_BROKER_URL=rediss://:${REDIS_PASSWORD}@redis:6380/0
+      - CELERY_RESULT_BACKEND=rediss://:${REDIS_PASSWORD}@redis:6380/0
+      - REDIS_METADATA_URL=rediss://:${REDIS_PASSWORD}@redis:6380/1
+      - REDIS_TLS_CA_CERTS=/certs/redis/ca.crt

@@ -197,6 +197,12 @@ if celery_signing_key:
     celery.conf.security_digest = 'sha256'
     logging.info("Celery message signing enabled (task_serializer=auth)")
 else:
+    # No signing key: use JSON serializer (matches worker default, prevents pickle mismatch)
+    celery.conf.update(
+        task_serializer='json',
+        result_serializer='json',
+        accept_content=['json'],
+    )
     logging.warning("Celery signing key not set - messages not authenticated")
 
 # Epic 23.3: Initialize encryption components (lazily)
