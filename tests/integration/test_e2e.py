@@ -419,6 +419,14 @@ class TestDownloadEndpoints:
 
 class TestApiV1:
 
+    @pytest.fixture(autouse=True)
+    def valid_api_key(self):
+        """Patch API key validation so all TestApiV1 tests bypass auth."""
+        with patch('web.app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'}):
+            yield
+
+    _api_headers = {'X-API-Key': 'dk_testkey'}
+
     def test_api_v1_convert_submit(self, client, mock_redis, mock_celery):
         """POST /api/v1/convert returns 202 with job_id."""
         mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
@@ -429,7 +437,8 @@ class TestApiV1:
             'from_format': 'markdown'
         }
         response = client.post('/api/v1/convert', data=data,
-                               content_type='multipart/form-data')
+                               content_type='multipart/form-data',
+                               headers=self._api_headers)
 
         assert response.status_code == 202
         result = response.get_json()
@@ -482,14 +491,16 @@ class TestApiV1:
         """POST /api/v1/convert without file returns 400."""
         response = client.post('/api/v1/convert',
                                data={'to_format': 'html'},
-                               content_type='multipart/form-data')
+                               content_type='multipart/form-data',
+                               headers=self._api_headers)
         assert response.status_code == 400
 
     def test_api_v1_convert_missing_to_format_returns_400(self, client, mock_redis):
         """POST /api/v1/convert without to_format returns 400."""
         data = {'file': (io.BytesIO(b'content'), 'test.md')}
         response = client.post('/api/v1/convert', data=data,
-                               content_type='multipart/form-data')
+                               content_type='multipart/form-data',
+                               headers=self._api_headers)
         assert response.status_code == 400
 
 

@@ -45,11 +45,18 @@ def mock_disk_space():
         yield mock
 
 
+@pytest.fixture
+def api_headers():
+    """Provide a valid API key header by patching _validate_api_key."""
+    with patch('web.app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'}):
+        yield {'X-API-Key': 'dk_testkey'}
+
+
 # ============================================================================
 # POST /api/v1/convert Tests
 # ============================================================================
 
-def test_api_v1_convert_success_pandoc(client, mock_redis, mock_celery, mock_disk_space):
+def test_api_v1_convert_success_pandoc(client, mock_redis, mock_celery, mock_disk_space, api_headers):
     """Test successful job submission with Pandoc engine"""
     # Mock Redis operations
     mock_redis.hset = Mock()
@@ -65,7 +72,7 @@ def test_api_v1_convert_success_pandoc(client, mock_redis, mock_celery, mock_dis
         'engine': 'pandoc'
     }
 
-    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
     assert response.status_code == 202
     json_data = response.get_json()
@@ -82,7 +89,7 @@ def test_api_v1_convert_success_pandoc(client, mock_redis, mock_celery, mock_dis
     assert call_args[1]['args'][4] == 'docx'  # to_format
 
 
-def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_disk_space):
+def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_disk_space, api_headers):
     """Test successful job submission with Marker engine"""
     # Mock Redis operations
     mock_redis.hset = Mock()
@@ -100,7 +107,7 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
         'use_llm': 'false'
     }
 
-    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
     assert response.status_code == 202
     json_data = response.get_json()
@@ -118,7 +125,7 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
     assert options['use_llm'] == False
 
 
-def test_api_v1_convert_auto_detect_format(client, mock_redis, mock_celery, mock_disk_space):
+def test_api_v1_convert_auto_detect_format(client, mock_redis, mock_celery, mock_disk_space, api_headers):
     """Test auto-detection of input format from file extension"""
     mock_redis.hset = Mock()
     mock_redis.hgetall = Mock(return_value={})
@@ -130,16 +137,16 @@ def test_api_v1_convert_auto_detect_format(client, mock_redis, mock_celery, mock
         # from_format not provided - should auto-detect
     }
 
-    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
     assert response.status_code == 202
     json_data = response.get_json()
     assert 'job_id' in json_data
 
 
-def test_api_v1_convert_missing_file(client, mock_disk_space):
+def test_api_v1_convert_missing_file(client, mock_disk_space, api_headers):
     """Test missing file error"""
-    response = client.post('/api/v1/convert', data={'to_format': 'markdown'})
+    response = client.post('/api/v1/convert', data={'to_format': 'markdown'}, headers=api_headers)
 
     assert response.status_code == 400
     json_data = response.get_json()
@@ -147,13 +154,13 @@ def test_api_v1_convert_missing_file(client, mock_disk_space):
     assert 'file' in json_data['error'].lower()
 
 
-def test_api_v1_convert_missing_to_format(client, mock_disk_space):
+def test_api_v1_convert_missing_to_format(client, mock_disk_space, api_headers):
     """Test missing to_format error"""
     data = {
         'file': (io.BytesIO(b"test"), 'test.md')
     }
 
-    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
     assert response.status_code == 400
     json_data = response.get_json()
@@ -161,14 +168,14 @@ def test_api_v1_convert_missing_to_format(client, mock_disk_space):
     assert 'to_format' in json_data['error']
 
 
-def test_api_v1_convert_invalid_to_format(client, mock_disk_space):
+def test_api_v1_convert_invalid_to_format(client, mock_disk_space, api_headers):
     """Test invalid to_format error"""
     data = {
         'file': (io.BytesIO(b"test"), 'test.md'),
         'to_format': 'invalid_format'
     }
 
-    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
     assert response.status_code == 422
     json_data = response.get_json()
@@ -176,7 +183,7 @@ def test_api_v1_convert_invalid_to_format(client, mock_disk_space):
     assert 'invalid_format' in json_data['error']
 
 
-def test_api_v1_convert_invalid_engine(client, mock_disk_space):
+def test_api_v1_convert_invalid_engine(client, mock_disk_space, api_headers):
     """Test invalid engine error"""
     data = {
         'file': (io.BytesIO(b"test"), 'test.md'),
@@ -184,7 +191,7 @@ def test_api_v1_convert_invalid_engine(client, mock_disk_space):
         'engine': 'invalid_engine'
     }
 
-    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
     assert response.status_code == 422
     json_data = response.get_json()
@@ -192,7 +199,7 @@ def test_api_v1_convert_invalid_engine(client, mock_disk_space):
     assert 'engine' in json_data['error'].lower()
 
 
-def test_api_v1_convert_disk_full(client):
+def test_api_v1_convert_disk_full(client, api_headers):
     """Test disk full error"""
     with patch('web.app.check_disk_space', return_value=False):
         data = {
@@ -200,7 +207,7 @@ def test_api_v1_convert_disk_full(client):
             'to_format': 'pdf'
         }
 
-        response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+        response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
         assert response.status_code == 507
         json_data = response.get_json()
@@ -208,14 +215,14 @@ def test_api_v1_convert_disk_full(client):
         assert 'storage' in json_data['error'].lower()
 
 
-def test_api_v1_convert_cannot_detect_format(client, mock_disk_space):
+def test_api_v1_convert_cannot_detect_format(client, mock_disk_space, api_headers):
     """Test error when format cannot be auto-detected"""
     data = {
         'file': (io.BytesIO(b"test"), 'test.xyz'),  # Unknown extension
         'to_format': 'pdf'
     }
 
-    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
     assert response.status_code == 422
     json_data = response.get_json()
@@ -514,7 +521,7 @@ def test_api_v1_formats(client):
 # CSRF Exemption Tests
 # ============================================================================
 
-def test_api_v1_endpoints_csrf_exempt(client, mock_redis, mock_celery, mock_disk_space):
+def test_api_v1_endpoints_csrf_exempt(client, mock_redis, mock_celery, mock_disk_space, api_headers):
     """Test that API v1 endpoints work without CSRF token"""
     # Enable CSRF for this test
     from web.app import app
@@ -530,7 +537,7 @@ def test_api_v1_endpoints_csrf_exempt(client, mock_redis, mock_celery, mock_disk
         'to_format': 'pdf'
     }
 
-    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data')
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
 
     # Should succeed (202), not fail with 400 CSRF error
     assert response.status_code == 202

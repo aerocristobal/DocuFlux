@@ -629,3 +629,74 @@ class TestWebhookApi:
         """GET webhook returns 400 for invalid job_id."""
         response = client.get('/api/v1/webhooks/bad-id')
         assert response.status_code == 400
+
+# ─── API Key Auth Tests ───────────────────────────────────────────────────────
+
+class TestApiKeyAuth:
+    """Tests for API key generation, validation, and enforcement."""
+
+    @patch('app.redis_client')
+    def test_create_api_key_returns_201(self, mock_redis, client):
+        """POST /api/v1/auth/keys returns 201 with a dk_ prefixed key."""
+        mock_redis.hset.return_value = True
+        response = client.post('/api/v1/auth/keys', json={'label': 'CI pipeline'})
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data['api_key'].startswith('dk_')
+        assert data['label'] == 'CI pipeline'
+        assert 'created_at' in data
+
+    @patch('app.redis_client')
+    def test_create_api_key_no_body(self, mock_redis, client):
+        """POST /api/v1/auth/keys with no body uses empty label."""
+        mock_redis.hset.return_value = True
+        response = client.post('/api/v1/auth/keys', json={})
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data['api_key'].startswith('dk_')
+        assert data['label'] == ''
+
+    @patch('app.redis_client')
+    def test_revoke_api_key_success(self, mock_redis, client):
+        """DELETE /api/v1/auth/keys/<key> returns 200 on success."""
+        mock_redis.delete.return_value = 1  # Redis returns count of deleted keys
+        response = client.delete('/api/v1/auth/keys/dk_somekey123')
+        assert response.status_code == 200
+        assert response.get_json()['revoked'] is True
+
+    @patch('app.redis_client')
+    def test_revoke_nonexistent_key_returns_404(self, mock_redis, client):
+        """DELETE /api/v1/auth/keys/<key> returns 404 for unknown key."""
+        mock_redis.delete.return_value = 0
+        response = client.delete('/api/v1/auth/keys/dk_doesnotexist')
+        assert response.status_code == 404
+
+    def test_convert_without_api_key_returns_401(self, client):
+        """POST /api/v1/convert without X-API-Key returns 401."""
+        response = client.post('/api/v1/convert', data={})
+        assert response.status_code == 401
+        assert 'API key required' in response.get_json()['error']
+
+    @patch('app.redis_client')
+    def test_convert_with_invalid_api_key_returns_403(self, mock_redis, client):
+        """POST /api/v1/convert with invalid key returns 403."""
+        mock_redis.hgetall.return_value = {}  # Key not found
+        response = client.post(
+            '/api/v1/convert',
+            data={},
+            headers={'X-API-Key': 'dk_invalidkey'},
+        )
+        assert response.status_code == 403
+        assert 'Invalid' in response.get_json()['error']
+
+    @patch('app.redis_client')
+    def test_convert_with_valid_api_key_proceeds(self, mock_redis, client):
+        """POST /api/v1/convert with valid key passes auth and hits endpoint logic."""
+        mock_redis.hgetall.return_value = {'created_at': '1700000000.0', 'label': 'test'}
+        # No file provided — should 400 (not 401/403), proving auth passed
+        response = client.post(
+            '/api/v1/convert',
+            data={},
+            headers={'X-API-Key': 'dk_validkey123'},
+        )
+        assert response.status_code == 400  # Missing file, not auth error

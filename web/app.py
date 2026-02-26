@@ -400,6 +400,47 @@ def get_job_metadata(job_id):
         logging.error(f"Error retrieving metadata for job {job_id}: {e}")
         return None
 
+# ============================================================================
+# API Key Authentication
+# ============================================================================
+
+import secrets
+from functools import wraps
+
+APIKEY_PREFIX = 'apikey:'
+
+
+def _generate_api_key():
+    """Return a new random API key with 'dk_' prefix."""
+    return 'dk_' + secrets.token_urlsafe(32)
+
+
+def _validate_api_key(key):
+    """Return key metadata dict if valid, None otherwise."""
+    if not key or not key.startswith('dk_'):
+        return None
+    try:
+        data = redis_client.hgetall(f"{APIKEY_PREFIX}{key}")
+        return {k.decode() if isinstance(k, bytes) else k:
+                v.decode() if isinstance(v, bytes) else v
+                for k, v in data.items()} if data else None
+    except Exception:
+        return None
+
+
+def require_api_key(f):
+    """Decorator: require valid X-API-Key header, return 401/403 otherwise."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        key = request.headers.get('X-API-Key', '').strip()
+        if not key:
+            return jsonify({'error': 'API key required. Provide X-API-Key header.'}), 401
+        if not _validate_api_key(key):
+            return jsonify({'error': 'Invalid or revoked API key'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
 def detect_format_from_extension(ext):
     """Helper to auto-detect format from file extension."""
     ext = ext.lower().lstrip('.')
@@ -944,6 +985,7 @@ def health_detailed():
 
 @app.route('/api/v1/convert', methods=['POST'])
 @csrf.exempt  # REST API exempt from CSRF
+@require_api_key
 @limiter.limit("200 per hour")
 def api_v1_convert():
     """
@@ -1227,6 +1269,42 @@ def api_v1_formats():
         'output_formats': output_formats,
         'conversions': conversions
     }), 200
+
+
+# ============================================================================
+# Auth Key Management Endpoints
+# ============================================================================
+
+@app.route('/api/v1/auth/keys', methods=['POST'])
+@csrf.exempt
+@limiter.limit("10 per hour")
+def api_v1_create_key():
+    """Generate a new API key.
+
+    Body (optional): {"label": "My integration"}
+
+    Returns 201 with the new key — store it safely, it won't be shown again.
+    """
+    data = request.get_json(silent=True) or {}
+    label = str(data.get('label', ''))[:100]
+    key = _generate_api_key()
+    now = str(time.time())
+    redis_client.hset(f"{APIKEY_PREFIX}{key}", mapping={'created_at': now, 'label': label})
+    return jsonify({'api_key': key, 'created_at': now, 'label': label}), 201
+
+
+@app.route('/api/v1/auth/keys/<key>', methods=['DELETE'])
+@csrf.exempt
+@limiter.limit("30 per hour")
+def api_v1_revoke_key(key):
+    """Revoke an API key.
+
+    Returns 200 on success, 404 if the key does not exist.
+    """
+    deleted = redis_client.delete(f"{APIKEY_PREFIX}{key}")
+    if not deleted:
+        return jsonify({'error': 'Key not found'}), 404
+    return jsonify({'revoked': True}), 200
 
 
 # ============================================================================
