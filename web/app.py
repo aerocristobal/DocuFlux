@@ -11,7 +11,7 @@ import logging
 import zipfile
 import io
 import json
-from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file
+from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file, g
 from urllib.parse import urlparse
 try:
     from prometheus_flask_exporter import PrometheusMetrics
@@ -34,9 +34,22 @@ from encryption import EncryptionService
 from key_manager import create_key_manager
 import tempfile
 
-# Configure Structured Logging
+# Configure Structured Logging with request-ID correlation
+class _RequestIdFilter(logging.Filter):
+    """Inject the current Flask request_id into every log record."""
+    def filter(self, record):
+        try:
+            record.request_id = getattr(g, 'request_id', '-')
+        except RuntimeError:
+            record.request_id = '-'
+        return True
+
 handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
+handler.setFormatter(logging.Formatter(
+    '{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s",'
+    ' "request_id": "%(request_id)s", "message": "%(message)s"}'
+))
+handler.addFilter(_RequestIdFilter())
 root_logger = logging.getLogger()
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
@@ -113,6 +126,19 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 def request_entity_too_large(error):
     return jsonify({'error': f'File too large. Maximum size is {app_settings.max_content_length / (1024 * 1024):.0f}MB.'}), 413
 
+@app.before_request
+def _assign_request_id():
+    """Generate or propagate a correlation ID for structured log tracing."""
+    g.request_id = request.headers.get('X-Request-ID') or str(uuid.uuid4())[:8]
+
+
+@app.after_request
+def _echo_request_id(response):
+    """Return the correlation ID in the response so callers can correlate logs."""
+    response.headers['X-Request-ID'] = getattr(g, 'request_id', '-')
+    return response
+
+
 @app.after_request
 def add_security_headers(response):
     # Epic 22.3: Updated CSP to support both ws:// and wss:// WebSocket connections
@@ -181,6 +207,7 @@ celery = Celery(
 celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
     'tasks.convert_with_marker': {'queue': 'default'},
+    'tasks.convert_with_hybrid': {'queue': 'default'},
     'tasks.assemble_capture_session': {'queue': 'default'},
 }
 
@@ -368,6 +395,7 @@ FORMATS = [
     {'name': 'LaTeX', 'key': 'latex', 'direction': 'Both', 'extension': '.tex', 'category': 'Technical', 'mime_types': ['text/x-tex', 'text/plain']},
     {'name': 'PDF (via LaTeX)', 'key': 'pdf', 'direction': 'Output Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
     {'name': 'PDF (High Accuracy)', 'key': 'pdf_marker', 'direction': 'Input Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
+    {'name': 'PDF (Hybrid)', 'key': 'pdf_hybrid', 'direction': 'Input Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
     {'name': 'AsciiDoc', 'key': 'asciidoc', 'direction': 'Both', 'extension': '.adoc', 'category': 'Technical', 'mime_types': ['text/plain']},
     {'name': 'reStructuredText', 'key': 'rst', 'direction': 'Both', 'extension': '.rst', 'category': 'Technical', 'mime_types': ['text/plain', 'text/x-rst']},
     {'name': 'BibTeX (Bibliography)', 'key': 'bibtex', 'direction': 'Both', 'extension': '.bib', 'category': 'Technical', 'mime_types': ['text/plain', 'text/x-bibtex']},
@@ -523,10 +551,15 @@ def convert():
         file_size = os.path.getsize(input_path)
         target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
         
-        task_name = 'tasks.convert_with_marker' if from_format == 'pdf_marker' else 'tasks.convert_document'
-        task_args = [job_id, input_filename, output_filename, from_format, to_format]
-        
         if from_format == 'pdf_marker':
+            task_name = 'tasks.convert_with_marker'
+        elif from_format == 'pdf_hybrid':
+            task_name = 'tasks.convert_with_hybrid'
+        else:
+            task_name = 'tasks.convert_document'
+        task_args = [job_id, input_filename, output_filename, from_format, to_format]
+
+        if from_format in ('pdf_marker', 'pdf_hybrid'):
             options = {
                 'force_ocr': request.form.get('force_ocr') == 'on',
                 'use_llm': request.form.get('use_llm') == 'on'
@@ -713,10 +746,16 @@ def retry_job(job_id):
         'use_llm': job_data.get('use_llm')
     })
 
-    task_name = 'tasks.convert_with_marker' if job_data.get('from') == 'pdf_marker' else 'tasks.convert_document'
-    task_args = [new_job_id, input_filename, output_filename, job_data.get('from'), job_data.get('to')]
+    original_from = job_data.get('from')
+    if original_from == 'pdf_marker':
+        task_name = 'tasks.convert_with_marker'
+    elif original_from == 'pdf_hybrid':
+        task_name = 'tasks.convert_with_hybrid'
+    else:
+        task_name = 'tasks.convert_document'
+    task_args = [new_job_id, input_filename, output_filename, original_from, job_data.get('to')]
 
-    if job_data.get('from') == 'pdf_marker':
+    if original_from in ('pdf_marker', 'pdf_hybrid'):
         options = {
             'force_ocr': job_data.get('force_ocr') == 'True',
             'use_llm': job_data.get('use_llm') == 'True'
@@ -1060,6 +1099,8 @@ def api_v1_convert():
     # Map engine to internal format
     if engine == 'marker' and from_format == 'pdf':
         internal_from_format = 'pdf_marker'
+    elif engine == 'hybrid' and from_format == 'pdf':
+        internal_from_format = 'pdf_hybrid'
     else:
         internal_from_format = from_format
 
@@ -1108,6 +1149,13 @@ def api_v1_convert():
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
         celery.send_task(
             'tasks.convert_with_marker',
+            args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
+            queue=queue_name
+        )
+    elif internal_from_format == 'pdf_hybrid':
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        celery.send_task(
+            'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue=queue_name
         )
@@ -1279,7 +1327,7 @@ def api_v1_formats():
                 'key': fmt['key'],
                 'extension': fmt['extension'],
                 'mime_types': fmt.get('mime_types', []),
-                'supports_marker': fmt['key'] in ['pdf_marker'],
+                'supports_marker': fmt['key'] in ['pdf_marker', 'pdf_hybrid'],
                 'supports_pandoc': True
             })
 
