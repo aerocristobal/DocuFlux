@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # --- Flask/Session Settings ---
     flask_debug: bool = Field(False, validation_alias="FLASK_DEBUG")
-    max_content_length: int = Field(100 * 1024 * 1024, validation_alias="MAX_CONTENT_LENGTH")  # 100MB default
+    max_content_length: int = Field(200 * 1024 * 1024, validation_alias="MAX_CONTENT_LENGTH")  # 200MB default
     min_free_space: int = Field(500 * 1024 * 1024, validation_alias="MIN_FREE_SPACE")  # 500MB default
     session_cookie_secure: bool = Field(False, validation_alias="SESSION_COOKIE_SECURE")
     permanent_session_lifetime_days: int = Field(30, validation_alias="PERMANENT_SESSION_LIFETIME_DAYS")

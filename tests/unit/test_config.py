@@ -63,7 +63,7 @@ def test_default_settings():
 
     assert s.upload_folder == "data/uploads"
     assert s.flask_debug is False
-    assert s.max_content_length == 100 * 1024 * 1024
+    assert s.max_content_length == 200 * 1024 * 1024
     assert s.permanent_session_lifetime_days == 30
     assert s.permanent_session_lifetime == timedelta(days=30)
     assert s.default_limits == ["1000 per day", "200 per hour"]
