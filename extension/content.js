@@ -98,24 +98,14 @@
     html = html.replace(/<li[^>]*>(.*?)<\/li>/gis, '- $1\n');
     html = html.replace(/<\/?[uo]l[^>]*>/gi, '\n');
 
-    // Explicitly strip script/style content before generic tag removal (defence-in-depth)
-    html = html.replace(/<script\b[\s\S]*?<\/script>/gi, '');
-    html = html.replace(/<style\b[\s\S]*?<\/style>/gi, '');
-    // Strip remaining tags (use * so empty <> sequences are also caught)
-    html = html.replace(/<[^>]*>/g, '');
-
-    // Decode HTML entities without innerHTML
-    // &amp; is decoded last to prevent double-unescaping of sequences like &amp;lt;
-    let text = html
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&#x27;/g, "'")
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&#(\d+);/g, (_, c) => String.fromCharCode(parseInt(c, 10)))
-      .replace(/&#x([0-9a-f]+);/gi, (_, c) => String.fromCharCode(parseInt(c, 16)))
-      .replace(/&amp;/g, '&');
+    // Strip remaining tags and decode HTML entities via the browser DOM API.
+    // A detached element strips all tags through textContent without regex
+    // edge-cases (partial tags, bad tag filters, double-unescaping). The
+    // element is never inserted into the document so no scripts execute.
+    const tmpDiv = document.createElement('div');
+    tmpDiv.innerHTML = html;
+    let text = (tmpDiv.textContent || tmpDiv.innerText || '')
+      .replace(/\u00A0/g, ' ');  // normalise non-breaking spaces (&nbsp;)
 
     // Normalise whitespace
     text = text.replace(/\n{3,}/g, '\n\n').trim();
