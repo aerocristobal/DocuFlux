@@ -396,6 +396,7 @@ FORMATS = [
     {'name': 'PDF (via LaTeX)', 'key': 'pdf', 'direction': 'Output Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
     {'name': 'PDF (High Accuracy)', 'key': 'pdf_marker', 'direction': 'Input Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
     {'name': 'PDF (Hybrid)', 'key': 'pdf_hybrid', 'direction': 'Input Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
+    {'name': 'PDF (AI + SLM Refine)', 'key': 'pdf_marker_slm', 'direction': 'Input Only', 'extension': '.pdf', 'category': 'Technical', 'mime_types': ['application/pdf']},
     {'name': 'AsciiDoc', 'key': 'asciidoc', 'direction': 'Both', 'extension': '.adoc', 'category': 'Technical', 'mime_types': ['text/plain']},
     {'name': 'reStructuredText', 'key': 'rst', 'direction': 'Both', 'extension': '.rst', 'category': 'Technical', 'mime_types': ['text/plain', 'text/x-rst']},
     {'name': 'BibTeX (Bibliography)', 'key': 'bibtex', 'direction': 'Both', 'extension': '.bib', 'category': 'Technical', 'mime_types': ['text/plain', 'text/x-bibtex']},
@@ -555,11 +556,13 @@ def convert():
             task_name = 'tasks.convert_with_marker'
         elif from_format == 'pdf_hybrid':
             task_name = 'tasks.convert_with_hybrid'
+        elif from_format == 'pdf_marker_slm':
+            task_name = 'tasks.convert_with_marker_slm'
         else:
             task_name = 'tasks.convert_document'
         task_args = [job_id, input_filename, output_filename, from_format, to_format]
 
-        if from_format in ('pdf_marker', 'pdf_hybrid'):
+        if from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
             options = {
                 'force_ocr': request.form.get('force_ocr') == 'on',
                 'use_llm': request.form.get('use_llm') == 'on'
@@ -751,11 +754,13 @@ def retry_job(job_id):
         task_name = 'tasks.convert_with_marker'
     elif original_from == 'pdf_hybrid':
         task_name = 'tasks.convert_with_hybrid'
+    elif original_from == 'pdf_marker_slm':
+        task_name = 'tasks.convert_with_marker_slm'
     else:
         task_name = 'tasks.convert_document'
     task_args = [new_job_id, input_filename, output_filename, original_from, job_data.get('to')]
 
-    if original_from in ('pdf_marker', 'pdf_hybrid'):
+    if original_from in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
         options = {
             'force_ocr': job_data.get('force_ocr') == 'True',
             'use_llm': job_data.get('use_llm') == 'True'
@@ -1101,6 +1106,8 @@ def api_v1_convert():
         internal_from_format = 'pdf_marker'
     elif engine == 'hybrid' and from_format == 'pdf':
         internal_from_format = 'pdf_hybrid'
+    elif engine == 'marker_slm' and from_format == 'pdf':
+        internal_from_format = 'pdf_marker_slm'
     else:
         internal_from_format = from_format
 
@@ -1156,6 +1163,13 @@ def api_v1_convert():
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
         celery.send_task(
             'tasks.convert_with_hybrid',
+            args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
+            queue=queue_name
+        )
+    elif internal_from_format == 'pdf_marker_slm':
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        celery.send_task(
+            'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue=queue_name
         )
