@@ -147,6 +147,18 @@ function showActiveSection(session) {
   showSection('active-section');
   els.sessionTitleDisplay.textContent = session.title;
   els.pageCount.textContent = `${session.pageCount} page${session.pageCount !== 1 ? 's' : ''}`;
+  // Show batch progress if a job_id is available (force_ocr sessions)
+  if (session.jobId) {
+    bg('POLL_STATUS').then(status => {
+      const batchesQueued = parseInt(status.batches_queued, 10) || 0;
+      const batchesDone = parseInt(status.batches_done, 10) || 0;
+      if (batchesQueued > 0) {
+        const batchPct = Math.round((batchesDone / batchesQueued) * 75);
+        els.progressFill.style.width = `${batchPct}%`;
+        els.progressLabel.textContent = `Batch ${batchesDone}/${batchesQueued} processed`;
+      }
+    }).catch(() => {});
+  }
 }
 
 function showPausedSection(session) {
@@ -310,6 +322,9 @@ async function pollJob(jobId) {
       const url = `${config.serverUrl.replace(/\/$/, '')}${status.download_url}`;
       els.downloadLink.href = url;
       showSection('result-section');
+      if (status.batch_warnings) {
+        showStatus(`⚠ ${status.batch_warnings}`, 'error');
+      }
     } else if (status.status === 'FAILURE' || status.status === 'failure') {
       clearInterval(pollInterval);
       showStatus(`Assembly failed: ${status.error || status.result || 'Unknown error'}`, 'error');

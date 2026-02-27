@@ -93,7 +93,14 @@ async function createSession(title, toFormat, sourceUrl, forceOcr) {
   const data = await apiPost('/api/v1/capture/sessions', {
     title, to_format: toFormat, source_url: sourceUrl, force_ocr: forceOcr || false,
   });
-  const session = { sessionId: data.session_id, title, toFormat, pageCount: 0, status: 'active' };
+  const session = {
+    sessionId: data.session_id,
+    jobId: data.job_id || null,
+    title,
+    toFormat,
+    pageCount: 0,
+    status: 'active',
+  };
   await storageSet({ activeSession: session });
   return session;
 }
@@ -125,6 +132,20 @@ async function submitPage(pageData) {
   activeSession.pageCount = apiResult.page_count;
   await storageSet({ activeSession });
   return apiResult;
+}
+
+async function submitPageWithRetry(pageData) {
+  const MAX_RETRIES = 3;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await submitPage(pageData);
+    } catch (e) {
+      if (attempt === MAX_RETRIES) throw e;
+      const delay = 2000 * Math.pow(2, attempt);
+      console.warn(`[DocuFlux] Page submit failed (attempt ${attempt + 1}): ${e.message}. Retrying in ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
 }
 
 async function finishSession() {
@@ -175,7 +196,7 @@ async function handleMessage(message) {
       return createSession(message.title, message.toFormat, message.sourceUrl, message.forceOcr);
 
     case 'SUBMIT_PAGE':
-      return submitPage(message.pageData);
+      return submitPageWithRetry(message.pageData);
 
     case 'FINISH_SESSION':
       return finishSession();

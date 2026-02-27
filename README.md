@@ -252,7 +252,7 @@ Key environment variables (full list in [docs/CONFIGURATION.md](docs/CONFIGURATI
 | `MASTER_ENCRYPTION_KEY` | *(required)* | AES-256 master key for file encryption |
 | `REDIS_METADATA_URL` | `redis://redis:6379/1` | Job metadata store |
 | `CELERY_BROKER_URL` | `redis://redis:6379/0` | Task broker |
-| `MAX_CONTENT_LENGTH` | `104857600` (100 MB) | Max upload size |
+| `MAX_CONTENT_LENGTH` | `209715200` (200 MB) | Max upload size |
 | `MARKER_ENABLED` | `false` | Enable Marker AI (set `true` in GPU builds) |
 | `MAX_MARKER_PAGES` | `300` | PDF page limit for Marker/Hybrid |
 | `SLM_MODEL_PATH` | *(none)* | Path to GGUF model for SLM extraction |
