@@ -560,6 +560,151 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         raise
 
 
+def _slm_refine_markdown(text, job_id):
+    """Run the SLM over Marker output in ~600-word chunks to fix OCR artifacts.
+
+    Fixes character confusion (l/1/I, O/0), broken hyphenation, and page
+    numbers / running headers that leaked into body text.  Returns the
+    refined text, or the original text if the SLM is not loaded.
+    """
+    slm = get_slm_model()
+    if slm is None:
+        logging.warning(f"[{job_id}] SLM not loaded; skipping OCR refinement")
+        return text
+
+    SYSTEM = (
+        "You are a document editor. The text below was extracted from a PDF by OCR. "
+        "Fix ONLY: character confusion (l/1/I, O/0), broken hyphen-ation across lines, "
+        "and page numbers or running headers that leaked into body text. "
+        "Do NOT change meaning, content, or Markdown structure. "
+        "Return only the corrected text.\n\nText:\n"
+    )
+    CHUNK_WORDS = 600
+
+    words = text.split()
+    chunks = [words[i:i + CHUNK_WORDS] for i in range(0, len(words), CHUNK_WORDS)]
+    refined_chunks = []
+    for i, chunk in enumerate(chunks):
+        chunk_text = " ".join(chunk)
+        prompt = SYSTEM + chunk_text + "\n\nCorrected text:\n"
+        try:
+            out = slm.create_completion(prompt, max_tokens=800, temperature=0.1,
+                                        top_p=0.9, stop=["---"])
+            refined_chunks.append(out['choices'][0]['text'].strip())
+        except Exception as e:
+            logging.warning(f"[{job_id}] SLM chunk {i} failed: {e}; using original")
+            refined_chunks.append(chunk_text)
+        update_job_metadata(job_id, {'progress': str(50 + int(40 * (i + 1) / len(chunks)))})
+
+    return "\n\n".join(refined_chunks)
+
+
+@celery.task(
+    name='tasks.convert_with_marker_slm',
+    bind=True,
+    time_limit=1500,       # Marker (~900s) + SLM refinement (~300s) + headroom
+    soft_time_limit=1380,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=1,
+)
+def convert_with_marker_slm(self, job_id, input_filename, output_filename,
+                             from_format, to_format, options=None):
+    """Convert a PDF via Marker AI then run an SLM pass to fix OCR artifacts.
+
+    Falls back to plain Marker output if the SLM model is not loaded
+    (i.e. SLM_MODEL_PATH is not set), so the task never errors solely due
+    to a missing SLM.
+    """
+    worker_tasks_active.inc()
+    start_time = time.time()
+
+    if not is_valid_uuid(job_id):
+        logging.error(f"Invalid job_id received: {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "error", "message": "Invalid job ID"}
+
+    current_status = redis_client.hget(f"job:{job_id}", 'status')
+    if current_status in ('FAILURE', 'REVOKED'):
+        logging.warning(f"Skipping re-queued task for already-{current_status} job {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "skipped", "reason": current_status}
+
+    safe_job_id = secure_filename(job_id)
+    input_path = os.path.join(UPLOAD_FOLDER, safe_job_id, secure_filename(input_filename))
+    output_dir = os.path.join(OUTPUT_FOLDER, safe_job_id)
+    output_path = os.path.join(output_dir, secure_filename(output_filename))
+
+    logging.info(f"Starting Marker+SLM conversion for job {job_id} with options: {options}")
+    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5'})
+
+    if not os.path.exists(input_path):
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    page_limit_error = _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
+    if page_limit_error:
+        worker_tasks_active.dec()
+        return page_limit_error
+
+    os.makedirs(output_dir, exist_ok=True)
+    images_dir = os.path.join(output_dir, 'images')
+    os.makedirs(images_dir, exist_ok=True)
+
+    converter = rendered = text = images = None
+    try:
+        # Step 1: Marker conversion (progress 5 → 50)
+        update_job_metadata(job_id, {'progress': '15'})
+        converter, rendered = _run_marker(input_path, options or {})
+
+        update_job_metadata(job_id, {'progress': '50'})
+        text, images, _, file_count = _save_marker_output(rendered, output_path, images_dir)
+
+        # Free GPU/CPU memory before SLM to avoid OOM on single-GPU systems
+        _cleanup_marker_memory(converter, rendered)
+        converter = rendered = None
+
+        # Step 2: SLM refinement pass (progress 50 → 90)
+        logging.info(f"[{job_id}] Starting SLM refinement pass")
+        refined_text = _slm_refine_markdown(text, job_id)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(refined_text)
+
+        update_job_metadata(job_id, {'progress': '95', 'file_count': str(file_count)})
+        logging.info(f"Marker+SLM conversion successful: {output_path}")
+
+        update_job_metadata(job_id, {
+            'status': 'SUCCESS', 'completed_at': str(time.time()),
+            'progress': '100', 'encrypted': 'false'
+        })
+        redis_client.expire(f"job:{job_id}", 7200)
+        fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+        extract_slm_metadata.delay(job_id, output_path)
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+
+        _cleanup_marker_memory(text, images)
+        return {"status": "success", "output_file": os.path.basename(output_path)}
+
+    except Exception as e:
+        logging.error(f"Marker+SLM error for job {job_id}: {e}")
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+        redis_client.expire(f"job:{job_id}", 600)
+        fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='marker_slm_error').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+
+        _cleanup_marker_memory(converter, rendered, text, images)
+        raise
+
+
 def _assess_pandoc_quality(output_path, page_count):
     """Return True if Pandoc's PDF→markdown output meets a minimum quality threshold.
 
