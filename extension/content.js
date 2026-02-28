@@ -122,6 +122,7 @@
 
   async function captureImages(contentElement) {
     const images = [];
+    let skipped = 0;
     const imgEls = contentElement.querySelectorAll('img');
 
     for (const img of imgEls) {
@@ -137,12 +138,13 @@
         const b64 = canvas.toDataURL('image/png');
         images.push({ filename, b64, alt: img.alt || '' });
       } catch (e) {
-        // CORS-tainted image — skip silently
+        // CORS-tainted image — count and skip
+        skipped++;
         console.debug('[DocuFlux] Skipping tainted image:', img.src, e.message);
       }
     }
 
-    return images;
+    return { images, skipped };
   }
 
   // ─── Main Capture ─────────────────────────────────────────────────────────────
@@ -150,7 +152,7 @@
   async function captureCurrentPage() {
     const { element, method } = findContentElement();
     const text = elementToMarkdown(element);
-    const images = await captureImages(element);
+    const { images, skipped } = await captureImages(element);
 
     // If content is too short (canvas-rendered pages like Kindle Cloud Reader),
     // signal the background to take a tab screenshot for OCR.
@@ -164,6 +166,7 @@
       extraction_method: method,
       page_hint: getPageHint(),
       needs_screenshot: needsScreenshot,
+      skipped_image_count: skipped,
     };
 
     lastCapturedContent = text;
@@ -387,7 +390,7 @@
     // Page changed — clear turn timeout
     clearTimeout(pageTurnTimer);
 
-    const images = await captureImages(element);
+    const { images, skipped } = await captureImages(element);
     const pageData = {
       url: location.href,
       title: document.title,
@@ -395,6 +398,7 @@
       images,
       extraction_method: method,
       page_hint: getPageHint(),
+      skipped_image_count: skipped,
     };
 
     chrome.runtime.sendMessage({ type: 'SUBMIT_PAGE', pageData }, response => {

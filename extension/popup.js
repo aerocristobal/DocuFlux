@@ -231,7 +231,12 @@ els.capturePageBtn.addEventListener('click', async () => {
     const result = await bg('SUBMIT_PAGE', { pageData });
 
     els.pageCount.textContent = `${result.page_count} page${result.page_count !== 1 ? 's' : ''}`;
-    showStatus(`Page ${result.page_count} captured`, 'success');
+    const skipped = result.skipped_image_count || 0;
+    if (skipped > 0) {
+      showStatus(`Page ${result.page_count} captured (${skipped} image${skipped !== 1 ? 's' : ''} skipped — cross-origin)`, 'info');
+    } else {
+      showStatus(`Page ${result.page_count} captured`, 'success');
+    }
   } catch (e) {
     showStatus(e.message, 'error');
   } finally {
