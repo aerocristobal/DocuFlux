@@ -131,7 +131,10 @@ async function detectSiteRecommendations(tabUrl) {
   if (!tabUrl) return;
   try {
     const hostname = new URL(tabUrl).hostname;
-    if (hostname.endsWith('.percipio.com')) {
+    if (hostname === 'read.amazon.com') {
+      els.nextMethod.value = 'key-right';
+      showStatus('Kindle detected: using Arrow Right for page advance', 'info');
+    } else if (hostname.endsWith('.percipio.com')) {
       els.nextMethod.value = 'passive';
 
       // Check if we have host permissions for cross-origin frame access

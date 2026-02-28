@@ -147,10 +147,14 @@
     return { images, skipped };
   }
 
-  // ─── Percipio Detection ───────────────────────────────────────────────────────
+  // ─── Site Detection ─────────────────────────────────────────────────────────
 
   function isPercipioReader() {
     return /\.percipio\.com$/.test(location.hostname);
+  }
+
+  function isKindleReader() {
+    return location.hostname === 'read.amazon.com';
   }
 
   // ─── Main Capture ─────────────────────────────────────────────────────────────
@@ -324,6 +328,11 @@
       autoModeConfig.nextMethod = 'passive';
     }
 
+    // Auto-detect Kindle Cloud Reader and force key-right advance
+    if (isKindleReader() && (!config.nextMethod || config.nextMethod === 'selector')) {
+      autoModeConfig.nextMethod = 'key-right';
+    }
+
     // Detect canvas pages by capturing first page
     const firstPageData = await captureCurrentPage();
     const isCanvasPage = firstPageData.needs_screenshot;
@@ -371,11 +380,14 @@
 
   function startDomObserver() {
     const { element } = findContentElement();
+    // Kindle replaces content elements when its page buffer refreshes (~6-7 pages).
+    // Observe document.body so the observer survives element replacement.
+    const target = isKindleReader() ? document.body : element;
     autoModeObserver = new MutationObserver(() => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(handleMutation, AUTO_CAPTURE_DEBOUNCE);
     });
-    autoModeObserver.observe(element, { childList: true, subtree: true });
+    autoModeObserver.observe(target, { childList: true, subtree: true });
   }
 
   function startScreenshotPoll(currentPageCount, maxPages) {
