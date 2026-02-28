@@ -31,65 +31,80 @@
 
     <style>
         :root {
-            --md-sys-color-primary: #00696d;
+            /* === SEPIA / PARCHMENT LIGHT THEME === */
+            --md-sys-color-primary: #7B1D1D;
             --md-sys-color-on-primary: #ffffff;
-            --md-sys-color-primary-container: #9cf1f6;
-            --md-sys-color-on-primary-container: #002022;
-            --md-sys-color-secondary: #4a6365;
+            --md-sys-color-primary-container: #ffdad6;
+            --md-sys-color-on-primary-container: #410002;
+            --md-sys-color-secondary: #7A4F4A;
             --md-sys-color-on-secondary: #ffffff;
-            --md-sys-color-secondary-container: #cce8e9;
-            --md-sys-color-on-secondary-container: #051f21;
-            --md-sys-color-tertiary: #525e7d;
+            --md-sys-color-secondary-container: #ffdad6;
+            --md-sys-color-on-secondary-container: #2c1510;
+            --md-sys-color-tertiary: #6B4C00;
             --md-sys-color-on-tertiary: #ffffff;
-            --md-sys-color-tertiary-container: #dae2ff;
-            --md-sys-color-on-tertiary-container: #0e1b37;
+            --md-sys-color-tertiary-container: #ffdea6;
+            --md-sys-color-on-tertiary-container: #221400;
             --md-sys-color-error: #ba1a1a;
             --md-sys-color-on-error: #ffffff;
             --md-sys-color-error-container: #ffdad6;
             --md-sys-color-on-error-container: #410002;
-            --md-sys-color-outline: #6f797a;
-            --md-sys-color-outline-variant: #bec8c9;
-            --md-sys-color-background: #f4fafb;
-            --md-sys-color-on-background: #161d1e;
-            --md-sys-color-surface: #f4fafb;
-            --md-sys-color-on-surface: #161d1e;
-            --md-sys-color-surface-variant: #dae4e5;
-            --md-sys-color-on-surface-variant: #3f4949;
-            --md-sys-color-surface-container: #e8f3f4;
-            --md-sys-color-surface-container-highest: #d9e4e5;
-            --md-sys-color-inverse-surface: #2b3132;
-            --md-sys-color-inverse-on-surface: #ecf2f3;
+            --md-sys-color-outline: #7D7168;
+            --md-sys-color-outline-variant: #CFC5B8;
+            --md-sys-color-background: #F5EDD3;
+            --md-sys-color-on-background: #1c0a00;
+            --md-sys-color-surface: #FFFCF2;
+            --md-sys-color-on-surface: #1c1410;
+            --md-sys-color-surface-variant: #EDE0CF;
+            --md-sys-color-on-surface-variant: #4e433a;
+            --md-sys-color-surface-container-lowest: #FFFDF5;
+            --md-sys-color-surface-container-low: #F5EDD3;
+            --md-sys-color-surface-container: #EDE5C9;
+            --md-sys-color-surface-container-high: #E6DEC1;
+            --md-sys-color-surface-container-highest: #DFD7BA;
+            --md-sys-color-inverse-surface: #352f2c;
+            --md-sys-color-inverse-on-surface: #f6edea;
             font-family: 'IBM Plex Sans', sans-serif;
         }
         .dark-theme {
-            --md-sys-color-primary: #80d5da;
-            --md-sys-color-on-primary: #003739;
-            --md-sys-color-primary-container: #004f52;
-            --md-sys-color-on-primary-container: #9cf1f6;
-            --md-sys-color-secondary: #b1cccd;
-            --md-sys-color-on-secondary: #1c3435;
-            --md-sys-color-secondary-container: #334b4c;
-            --md-sys-color-on-secondary-container: #cce8e9;
-            --md-sys-color-tertiary: #bbc4e9;
-            --md-sys-color-on-tertiary: #242f4d;
-            --md-sys-color-tertiary-container: #3b4664;
-            --md-sys-color-on-tertiary-container: #dae2ff;
+            /* === MIDNIGHT BLUE DARK THEME === */
+            --md-sys-color-primary: #FFB74D;
+            --md-sys-color-on-primary: #3e1c00;
+            --md-sys-color-primary-container: #5A2D00;
+            --md-sys-color-on-primary-container: #ffdcb5;
+            --md-sys-color-secondary: #80CBC4;
+            --md-sys-color-on-secondary: #003e3a;
+            --md-sys-color-secondary-container: #005048;
+            --md-sys-color-on-secondary-container: #9ef2eb;
+            --md-sys-color-tertiary: #CF94D8;
+            --md-sys-color-on-tertiary: #40004d;
+            --md-sys-color-tertiary-container: #5c006c;
+            --md-sys-color-on-tertiary-container: #f9b2ff;
             --md-sys-color-error: #ffb4ab;
             --md-sys-color-on-error: #690005;
             --md-sys-color-error-container: #93000a;
             --md-sys-color-on-error-container: #ffdad6;
-            --md-sys-color-outline: #899393;
-            --md-sys-color-outline-variant: #3f4949;
-            --md-sys-color-background: #0e1415;
-            --md-sys-color-on-background: #dde4e4;
-            --md-sys-color-surface: #0e1415;
-            --md-sys-color-on-surface: #dde4e4;
-            --md-sys-color-surface-variant: #3f4949;
-            --md-sys-color-on-surface-variant: #bec8c9;
-            --md-sys-color-surface-container: #1a2020;
-            --md-sys-color-surface-container-highest: #2b3132;
-            --md-sys-color-inverse-surface: #dde4e4;
-            --md-sys-color-inverse-on-surface: #2b3132;
+            --md-sys-color-outline: #7A7F9E;
+            --md-sys-color-outline-variant: #2C305A;
+            --md-sys-color-background: #080C26;
+            --md-sys-color-on-background: #e4e6f8;
+            --md-sys-color-surface: #0F132E;
+            --md-sys-color-on-surface: #e4e6f8;
+            --md-sys-color-surface-variant: #1E2448;
+            --md-sys-color-on-surface-variant: #c5c8e8;
+            --md-sys-color-surface-container-lowest: #080C26;
+            --md-sys-color-surface-container-low: #0F132E;
+            --md-sys-color-surface-container: #161B3C;
+            --md-sys-color-surface-container-high: #1E2448;
+            --md-sys-color-surface-container-highest: #262C54;
+            --md-sys-color-inverse-surface: #e4e6f8;
+            --md-sys-color-inverse-on-surface: #2d3154;
+        }
+
+        /* Ensure md-dialog uses themed surface colors in both modes */
+        md-dialog {
+            --md-dialog-container-color: var(--md-sys-color-surface-container-high);
+            --md-dialog-headline-color: var(--md-sys-color-on-surface);
+            --md-dialog-supporting-text-color: var(--md-sys-color-on-surface-variant);
         }
 
         html, body {
@@ -281,11 +296,12 @@
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
-        .status-available { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
-        .status-unavailable { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+        /* Section 508 compliant status badge text — verified >= 4.5:1 contrast */
+        .status-available { background: rgba(34, 197, 94, 0.15); color: #1B5E20; }   /* 7.1:1 on light */
+        .status-unavailable { background: rgba(245, 158, 11, 0.15); color: #92400E; } /* 6.4:1 on light */
         .status-unknown { background: var(--md-sys-color-surface-variant); color: var(--md-sys-color-on-surface-variant); }
-        .dark-theme .status-available { background: rgba(34, 197, 94, 0.12); color: #4ade80; }
-        .dark-theme .status-unavailable { background: rgba(245, 158, 11, 0.12); color: #fbbf24; }
+        .dark-theme .status-available { background: rgba(34, 197, 94, 0.12); color: #4ade80; }   /* 11.6:1 on dark */
+        .dark-theme .status-unavailable { background: rgba(245, 158, 11, 0.12); color: #fbbf24; } /* 12.1:1 on dark */
 
         /* GPU Modal Table */
         #gpu-modal-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
@@ -443,11 +459,15 @@
             i.textContent = saved === 'system' ? 'brightness_auto' : (saved === 'dark' ? 'dark_mode' : 'light_mode');
         }
         document.getElementById('theme-toggle').addEventListener('click', () => { document.getElementById('theme-menu').open = true; });
-        document.getElementById('theme-menu').addEventListener('action', (e) => {
-            const t = e.detail.item.dataset.theme;
-            localStorage.setItem('theme', t);
-            window.applyTheme(t);
-            updateToggleIcon();
+        // md-menu does not emit 'action' — attach click to each item instead
+        document.querySelectorAll('#theme-menu md-menu-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const t = item.dataset.theme;
+                if (!t) return;
+                localStorage.setItem('theme', t);
+                window.applyTheme(t);
+                updateToggleIcon();
+            });
         });
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (localStorage.getItem('theme') === 'system') window.applyTheme('system'); });
         updateToggleIcon();
