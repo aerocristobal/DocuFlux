@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     # --- Flask-SocketIO Settings ---
     socketio_async_mode: Literal["eventlet", "gevent", "threading", "fork"] = Field("eventlet", validation_alias="SOCKETIO_ASYNC_MODE")
     socketio_message_queue: Optional[str] = Field(None, validation_alias="SOCKETIO_MESSAGE_QUEUE") # Defaults to REDIS_METADATA_URL if None, handled below in settings instance creation
-    socketio_cors_allowed_origins: Optional[str] = Field(None, validation_alias="SOCKETIO_CORS_ALLOWED_ORIGINS")
+    socketio_cors_allowed_origins: Optional[str] = Field("*", validation_alias="SOCKETIO_CORS_ALLOWED_ORIGINS")
 
     # --- Secrets (handled by secrets_manager or directly if available) ---
     # These are usually handled by secrets_manager, but defining them here ensures Pydantic validation

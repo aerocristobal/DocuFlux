@@ -8,6 +8,8 @@
 
 let autoModeActive = false;
 let pollInterval = null;
+let activeSocket = null;
+const SOCKET_CONNECT_TIMEOUT_MS = 5000;
 
 // ─── DOM References ───────────────────────────────────────────────────────────
 
@@ -141,7 +143,7 @@ async function init() {
     checkServerPageCount(session);
   } else if (session.status === 'assembling' && session.jobId) {
     showSection('progress-section');
-    startPolling(session.jobId);
+    startWatching(session.jobId);
   } else {
     showSection('no-session-section');
   }
@@ -290,7 +292,7 @@ async function doFinishSession(buttonEl) {
     const result = await bg('FINISH_SESSION');
     showSection('progress-section');
     setProgress(5, 'Assembling pages...');
-    startPolling(result.job_id);
+    startWatching(result.job_id);
   } catch (e) {
     showStatus(e.message, 'error');
     buttonEl.disabled = false;
@@ -301,12 +303,13 @@ els.endBtn.addEventListener('click', () => doFinishSession(els.endBtn));
 els.endBtnPaused.addEventListener('click', () => doFinishSession(els.endBtnPaused));
 
 els.newCaptureBtn.addEventListener('click', async () => {
+  stopWatching();
   await bg('CLEAR_SESSION');
   showSection('no-session-section');
 });
 
 els.cancelAssemblyBtn.addEventListener('click', async () => {
-  clearInterval(pollInterval);
+  stopWatching();
   await bg('CLEAR_SESSION');
   showSection('no-session-section');
   showStatus('Assembly cancelled', 'info');
@@ -335,6 +338,75 @@ chrome.runtime.onMessage.addListener((message) => {
     els.pageCount.textContent = `${message.pageCount} page${message.pageCount !== 1 ? 's' : ''}`;
   }
 });
+
+// ─── WebSocket Watching ───────────────────────────────────────────────────────
+
+function stopWatching() {
+  clearInterval(pollInterval);
+  if (activeSocket) { activeSocket.disconnect(); activeSocket = null; }
+}
+
+async function startWatching(jobId) {
+  stopWatching();
+  pollErrorCount = 0;
+
+  const config = await bg('GET_CONFIG');
+  let socketConnected = false;
+
+  const connectTimeoutId = setTimeout(() => {
+    if (!socketConnected) {
+      if (activeSocket) { activeSocket.disconnect(); activeSocket = null; }
+      startPolling(jobId);
+    }
+  }, SOCKET_CONNECT_TIMEOUT_MS);
+
+  const socket = io(config.serverUrl, { transports: ['websocket', 'polling'] });
+  activeSocket = socket;
+
+  socket.on('connect', () => {
+    socketConnected = true;
+    clearTimeout(connectTimeoutId);
+  });
+
+  socket.on('connect_error', () => {
+    if (!socketConnected) {
+      clearTimeout(connectTimeoutId);
+      socket.disconnect(); activeSocket = null;
+      startPolling(jobId);
+    }
+  });
+
+  socket.on('job_update', (update) => {
+    if (update.id !== jobId) return;
+    handleJobUpdate(update);
+  });
+
+  socket.on('disconnect', () => {
+    if (activeSocket) { activeSocket = null; startPolling(jobId); }
+  });
+}
+
+function handleJobUpdate(status) {
+  const pct = parseInt(status.progress, 10) || 0;
+  setProgress(pct, `Status: ${status.status}`);
+
+  if (status.status === 'SUCCESS' || status.status === 'success') {
+    stopWatching();
+    bg('GET_CONFIG').then(config => {
+      els.downloadLink.href = `${config.serverUrl.replace(/\/$/, '')}${status.download_url}`;
+      showSection('result-section');
+      if (status.batch_warnings) showStatus(`⚠ ${status.batch_warnings}`, 'error');
+    });
+  } else if (status.status === 'FAILURE' || status.status === 'failure') {
+    stopWatching();
+    showStatus(`Assembly failed: ${status.error || status.result || 'Unknown error'}`, 'error');
+    bg('GET_SESSION').then(session => {
+      if (session?.status === 'paused') showPausedSection(session);
+      else if (session) showActiveSection(session);
+      else showSection('no-session-section');
+    });
+  }
+}
 
 // ─── Polling ──────────────────────────────────────────────────────────────────
 
