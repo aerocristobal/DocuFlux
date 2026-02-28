@@ -17,6 +17,12 @@
       "matches": ["<all_urls>"],
       "js": ["purify.min.js", "content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://cdn2.percipio.com/*"],
+      "js": ["percipio-frame.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }
