@@ -3,7 +3,8 @@
  *
  * Extracts page content and images from the DOM.
  * Supports Kindle Cloud Reader and generic article/main content.
- * Provides MutationObserver-based auto-capture mode.
+ * Provides MutationObserver-based auto-capture mode (DOM readers) and
+ * screenshot-comparison polling mode (canvas readers like Kindle Cloud Reader).
  */
 
 (function () {
@@ -29,8 +30,11 @@
     '.article-body',
   ];
 
-  const MIN_IMAGE_SIZE = 50; // px
-  const AUTO_CAPTURE_DEBOUNCE = 800; // ms
+  const MIN_IMAGE_SIZE = 50;            // px — minimum image dimension to include
+  const AUTO_CAPTURE_DEBOUNCE = 800;    // ms — DOM mutation debounce
+  const PAGE_TURN_POLL_MS = 1500;       // ms — screenshot poll interval (canvas mode)
+  const PAGE_TURN_TIMEOUT_MS = 8000;    // ms — give up waiting for page turn
+  const MAX_AUTO_RETRIES = 3;           // max submit retries before stopping auto-capture
 
   // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -38,7 +42,11 @@
   let autoModeActive = false;
   let autoModeObserver = null;
   let debounceTimer = null;
+  let pageTurnTimer = null;
+  let screenshotPollInterval = null;
   let autoModeConfig = {};
+  let autoRetryCount = 0;
+  let lastScreenshotHash = null;
 
   // ─── Content Extraction ──────────────────────────────────────────────────────
 
@@ -169,20 +177,203 @@
     return 0;
   }
 
+  // ─── Page Advancement ────────────────────────────────────────────────────────
+
+  /**
+   * Attempt to advance to the next page using the configured method.
+   * Returns the method used ('click' | 'key' | 'area' | null).
+   */
+  function advancePage(config) {
+    const method = config.nextMethod || 'selector';
+
+    // CSS selector click
+    if (method === 'selector' && config.nextButtonSelector) {
+      const btn = document.querySelector(config.nextButtonSelector);
+      if (btn) {
+        btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        return 'click';
+      }
+    }
+
+    // Keyboard: ArrowRight (default for Kindle)
+    if (method === 'key-right') {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowRight', keyCode: 39, which: 39,
+        bubbles: true, cancelable: true
+      }));
+      return 'key';
+    }
+
+    // Keyboard: Space
+    if (method === 'key-space') {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', keyCode: 32, which: 32,
+        bubbles: true, cancelable: true
+      }));
+      return 'key';
+    }
+
+    // Area click: right 75% of viewport
+    if (method === 'area-click') {
+      const el = document.elementFromPoint(window.innerWidth * 0.75, window.innerHeight / 2);
+      if (el) {
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        return 'area';
+      }
+    }
+
+    return null;
+  }
+
+  // ─── Screenshot Helpers ───────────────────────────────────────────────────────
+
+  function requestScreenshot() {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: 'REQUEST_SCREENSHOT' }, response => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (response?.error) return reject(new Error(response.error));
+        resolve(response?.dataUrl || null);
+      });
+    });
+  }
+
+  /** Simple hash of a data URL string for change detection. */
+  function hashString(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+    }
+    return h;
+  }
+
   // ─── Auto-capture Mode ────────────────────────────────────────────────────────
 
-  function startAutoCapture(config) {
+  async function startAutoCapture(config) {
     autoModeConfig = config;
     autoModeActive = true;
+    autoRetryCount = 0;
 
+    // Detect canvas pages by capturing first page
+    const firstPageData = await captureCurrentPage();
+    const isCanvasPage = firstPageData.needs_screenshot;
+
+    // Submit first page
+    chrome.runtime.sendMessage({ type: 'SUBMIT_PAGE', pageData: firstPageData }, response => {
+      if (!autoModeActive) return;
+      if (response?.error) {
+        console.warn('[DocuFlux] Failed to submit first page:', response.error);
+        stopAutoCapture();
+        chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_ERROR', reason: 'submit_failed' });
+        return;
+      }
+
+      const pageCount = response?.page_count || 1;
+      const maxPages = config.maxPages || 100;
+      if (pageCount >= maxPages) {
+        stopAutoCapture();
+        chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_DONE', pageCount });
+        return;
+      }
+
+      if (isCanvasPage) {
+        // Canvas mode: use screenshot polling
+        requestScreenshot().then(dataUrl => {
+          lastScreenshotHash = dataUrl ? hashString(dataUrl) : null;
+          advancePage(config);
+          startScreenshotPoll(pageCount, maxPages);
+        }).catch(() => {
+          // No screenshot capability — fall through to DOM mode
+          startDomObserver();
+          advancePage(config);
+          armPageTurnTimeout();
+        });
+      } else {
+        // DOM mode: use MutationObserver
+        startDomObserver();
+        advancePage(config);
+        armPageTurnTimeout();
+      }
+    });
+
+    console.log('[DocuFlux] Auto-capture started');
+  }
+
+  function startDomObserver() {
     const { element } = findContentElement();
     autoModeObserver = new MutationObserver(() => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(handleMutation, AUTO_CAPTURE_DEBOUNCE);
     });
-
     autoModeObserver.observe(element, { childList: true, subtree: true });
-    console.log('[DocuFlux] Auto-capture started');
+  }
+
+  function startScreenshotPoll(currentPageCount, maxPages) {
+    if (!autoModeActive) return;
+    clearInterval(screenshotPollInterval);
+    screenshotPollInterval = setInterval(async () => {
+      if (!autoModeActive) { clearInterval(screenshotPollInterval); return; }
+
+      let dataUrl;
+      try {
+        dataUrl = await requestScreenshot();
+      } catch (e) {
+        console.warn('[DocuFlux] Screenshot failed during poll:', e.message);
+        return;
+      }
+      if (!dataUrl) return;
+
+      const newHash = hashString(dataUrl);
+      if (newHash === lastScreenshotHash) return; // Page hasn't changed yet
+
+      // Page changed — clear turn timeout, capture the new page
+      clearTimeout(pageTurnTimer);
+      lastScreenshotHash = newHash;
+
+      const pageData = {
+        url: location.href,
+        title: document.title,
+        text: '',
+        images: [],
+        extraction_method: 'screenshot',
+        page_hint: getPageHint(),
+        needs_screenshot: true,
+      };
+
+      chrome.runtime.sendMessage({ type: 'SUBMIT_PAGE', pageData }, response => {
+        if (!autoModeActive) return;
+        if (response?.error) {
+          autoRetryCount++;
+          if (autoRetryCount >= MAX_AUTO_RETRIES) {
+            stopAutoCapture();
+            chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_ERROR', reason: 'max_retries' });
+          }
+          return;
+        }
+        autoRetryCount = 0;
+        const newCount = response?.page_count || currentPageCount + 1;
+        currentPageCount = newCount;
+
+        if (newCount >= maxPages) {
+          stopAutoCapture();
+          chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_DONE', pageCount: newCount });
+          return;
+        }
+
+        advancePage(autoModeConfig);
+        armPageTurnTimeout();
+      });
+    }, PAGE_TURN_POLL_MS);
+
+    armPageTurnTimeout();
+  }
+
+  function armPageTurnTimeout() {
+    clearTimeout(pageTurnTimer);
+    pageTurnTimer = setTimeout(() => {
+      if (!autoModeActive) return;
+      stopAutoCapture();
+      chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_ERROR', reason: 'page_turn_timeout' });
+    }, PAGE_TURN_TIMEOUT_MS);
   }
 
   async function handleMutation() {
@@ -192,6 +383,9 @@
     const text = elementToMarkdown(element);
 
     if (text === lastCapturedContent) return; // No real change
+
+    // Page changed — clear turn timeout
+    clearTimeout(pageTurnTimer);
 
     const images = await captureImages(element);
     const pageData = {
@@ -204,25 +398,34 @@
     };
 
     chrome.runtime.sendMessage({ type: 'SUBMIT_PAGE', pageData }, response => {
-      if (response?.error) {
-        console.warn('[DocuFlux] Failed to submit page:', response.error);
-        return;
-      }
-      lastCapturedContent = text;
-      const pageCount = response?.page_count || 0;
-      const maxPages = autoModeConfig.maxPages || 500;
+      if (!autoModeActive) return;
 
-      // Click next page button
-      const nextSel = autoModeConfig.nextButtonSelector;
-      if (nextSel) {
-        const btn = document.querySelector(nextSel);
-        if (btn && pageCount < maxPages) {
-          btn.click();
+      if (response?.error) {
+        autoRetryCount++;
+        console.warn('[DocuFlux] Failed to submit page (attempt', autoRetryCount, '):', response.error);
+        if (autoRetryCount < MAX_AUTO_RETRIES) {
+          // Retry: re-arm timer so handleMutation fires again shortly
+          debounceTimer = setTimeout(handleMutation, 1500);
         } else {
           stopAutoCapture();
-          chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_DONE', pageCount });
+          chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_ERROR', reason: 'max_retries' });
         }
+        return;
       }
+
+      autoRetryCount = 0;
+      lastCapturedContent = text;
+      const pageCount = response?.page_count || 0;
+      const maxPages = autoModeConfig.maxPages || 100;
+
+      if (pageCount >= maxPages) {
+        stopAutoCapture();
+        chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_DONE', pageCount });
+        return;
+      }
+
+      advancePage(autoModeConfig);
+      armPageTurnTimeout();
     });
   }
 
@@ -233,6 +436,9 @@
       autoModeObserver = null;
     }
     clearTimeout(debounceTimer);
+    clearTimeout(pageTurnTimer);
+    clearInterval(screenshotPollInterval);
+    screenshotPollInterval = null;
     console.log('[DocuFlux] Auto-capture stopped');
   }
 
@@ -244,7 +450,9 @@
       return true;
     }
     if (message.type === 'START_AUTO_CAPTURE') {
-      startAutoCapture(message.config || {});
+      startAutoCapture(message.config || {}).catch(e => {
+        chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_ERROR', reason: e.message });
+      });
       sendResponse({ ok: true });
     }
     if (message.type === 'STOP_AUTO_CAPTURE') {

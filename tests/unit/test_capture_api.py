@@ -137,6 +137,37 @@ class TestCaptureAddPage:
         assert stored['page_hint'] == 5
         assert stored['text'] == '# Test'
 
+    def test_duplicate_page_sequence_returns_200_no_duplicate(self, client):
+        import web.app as app_module
+        session_id = str(uuid.uuid4())
+        app_module.redis_client.hgetall.return_value = make_session_meta()
+        # sismember returns truthy → duplicate
+        app_module.redis_client.sismember.return_value = 1
+
+        response = client.post(
+            f'/api/v1/capture/sessions/{session_id}/pages',
+            json={'text': '# Test', 'page_sequence': 42},
+        )
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['status'] == 'duplicate'
+        # rpush should NOT have been called (no duplicate stored)
+        app_module.redis_client.rpush.assert_not_called()
+
+    def test_new_page_sequence_added_to_seen_set(self, client):
+        import web.app as app_module
+        session_id = str(uuid.uuid4())
+        app_module.redis_client.hgetall.return_value = make_session_meta()
+        # sismember returns falsy → new sequence
+        app_module.redis_client.sismember.return_value = 0
+
+        client.post(
+            f'/api/v1/capture/sessions/{session_id}/pages',
+            json={'text': '# Test', 'page_sequence': 7},
+        )
+        seen_key = f"capture:session:{session_id}:seen_pages"
+        app_module.redis_client.sadd.assert_called_with(seen_key, '7')
+
 
 # ─── POST /api/v1/capture/sessions/<id>/finish ────────────────────────────────
 

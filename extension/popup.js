@@ -24,7 +24,9 @@ const els = {
   capturePageBtn: $('capture-page-btn'),
   toggleAutoBtn: $('toggle-auto-btn'),
   autoSettings: $('auto-settings'),
+  nextMethod: $('next-method'),
   nextSelector: $('next-selector'),
+  pageTurnDelay: $('page-turn-delay'),
   maxPages: $('max-pages'),
   pauseBtn: $('pause-btn'),
   endBtn: $('end-btn'),
@@ -133,13 +135,35 @@ async function init() {
     showSection('no-session-section');
   } else if (session.status === 'active') {
     showActiveSection(session);
+    checkServerPageCount(session);
   } else if (session.status === 'paused') {
     showPausedSection(session);
+    checkServerPageCount(session);
   } else if (session.status === 'assembling' && session.jobId) {
     showSection('progress-section');
     startPolling(session.jobId);
   } else {
     showSection('no-session-section');
+  }
+}
+
+/**
+ * Reconcile local page count with server page count.
+ * If pages were lost (e.g. service worker killed mid-submit), warn the user.
+ * Also triggers outbox drain in background.
+ */
+async function checkServerPageCount(session) {
+  try {
+    const serverStatus = await bg('GET_SESSION_SERVER_STATUS');
+    if (!serverStatus) return;
+    const serverCount = serverStatus.page_count || 0;
+    const localCount = session.pageCount || 0;
+    if (localCount > serverCount) {
+      const diff = localCount - serverCount;
+      showStatus(`Syncing ${diff} page(s) not yet on server...`, 'info');
+    }
+  } catch (e) {
+    // Non-critical — silently ignore
   }
 }
 
@@ -224,7 +248,9 @@ els.toggleAutoBtn.addEventListener('click', async () => {
   } else {
     els.autoSettings.classList.remove('hidden');
     const config = {
+      nextMethod: els.nextMethod.value || 'selector',
       nextButtonSelector: els.nextSelector.value.trim() || null,
+      pageTurnDelayMs: parseInt(els.pageTurnDelay.value, 10) || 1500,
       maxPages: parseInt(els.maxPages.value, 10) || 100,
     };
     await sendToContent('START_AUTO_CAPTURE', { config });
@@ -292,6 +318,18 @@ chrome.runtime.onMessage.addListener((message) => {
     autoModeActive = false;
     els.toggleAutoBtn.textContent = '\u25B6 Auto';
     showStatus(`Auto-capture complete: ${message.pageCount} pages`, 'success');
+  }
+  if (message.type === 'AUTO_CAPTURE_ERROR') {
+    autoModeActive = false;
+    els.toggleAutoBtn.textContent = '\u25B6 Auto';
+    const reasons = {
+      page_turn_timeout: 'Page did not turn — check your advance method',
+      max_retries: 'Too many submit failures — check server connection',
+      submit_failed: 'Could not submit first page',
+    };
+    const detail = reasons[message.reason] || message.reason || 'Unknown error';
+    showStatus(`Auto-capture stopped: ${detail}`, 'error');
+    els.statusMsg.classList.remove('hidden'); // keep visible longer
   }
   if (message.type === 'PAGE_SUBMITTED') {
     els.pageCount.textContent = `${message.pageCount} page${message.pageCount !== 1 ? 's' : ''}`;

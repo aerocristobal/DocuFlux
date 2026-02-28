@@ -1585,6 +1585,18 @@ def capture_add_page(session_id):
         return jsonify({'error': f'Maximum pages ({app_settings.max_capture_pages}) reached'}), 422
 
     data = request.get_json(silent=True) or {}
+
+    # Idempotent deduplication via client-supplied page_sequence.
+    # If the extension re-submits a page after a crash/retry, the server
+    # returns a success response with the current count instead of duplicating.
+    page_sequence = data.get('page_sequence')
+    if page_sequence is not None:
+        seen_key = f"capture:session:{session_id}:seen_pages"
+        if redis_client.sismember(seen_key, str(page_sequence)):
+            return jsonify({'status': 'duplicate', 'page_count': page_count}), 200
+        redis_client.sadd(seen_key, str(page_sequence))
+        redis_client.expire(seen_key, app_settings.capture_session_ttl)
+
     page_data = {
         'url': data.get('url', '')[:500],
         'title': data.get('title', '')[:200],
