@@ -34,6 +34,7 @@
   const AUTO_CAPTURE_DEBOUNCE = 800;    // ms — DOM mutation debounce
   const PAGE_TURN_POLL_MS = 1500;       // ms — screenshot poll interval (canvas mode)
   const PAGE_TURN_TIMEOUT_MS = 8000;    // ms — give up waiting for page turn
+  const KINDLE_PAGE_TURN_TIMEOUT_MS = 30000; // ms — Kindle needs longer for buffer reloads
   const MAX_AUTO_RETRIES = 3;           // max submit retries before stopping auto-capture
 
   // ─── State ───────────────────────────────────────────────────────────────────
@@ -46,6 +47,7 @@
   let screenshotPollInterval = null;
   let autoModeConfig = {};
   let autoRetryCount = 0;
+  let turnTimeoutRetries = 0;
   let lastScreenshotHash = null;
 
   // ─── Content Extraction ──────────────────────────────────────────────────────
@@ -322,6 +324,7 @@
     autoModeConfig = config;
     autoModeActive = true;
     autoRetryCount = 0;
+    turnTimeoutRetries = 0;
 
     // Auto-detect Percipio and force passive mode (page events don't reach the cross-origin reader)
     if (isPercipioReader() && !config.nextMethod) {
@@ -453,11 +456,32 @@
   function armPageTurnTimeout() {
     if (autoModeConfig?.nextMethod === 'passive') return;
     clearTimeout(pageTurnTimer);
-    pageTurnTimer = setTimeout(() => {
+    const timeout = isKindleReader() ? KINDLE_PAGE_TURN_TIMEOUT_MS : PAGE_TURN_TIMEOUT_MS;
+    pageTurnTimer = setTimeout(async () => {
       if (!autoModeActive) return;
+      // Before giving up, check if content changed (observer may have missed it during buffer reload)
+      if (isKindleReader()) {
+        const { element } = findContentElement();
+        const text = elementToMarkdown(element);
+        if (text !== lastCapturedContent && text.trim().length > 50) {
+          // Content changed but observer missed it — process it
+          handleMutation();
+          return;
+        }
+        // Try advancing once more in case the page stalled (limit retries)
+        turnTimeoutRetries++;
+        if (turnTimeoutRetries > MAX_AUTO_RETRIES) {
+          stopAutoCapture();
+          chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_ERROR', reason: 'page_turn_timeout' });
+          return;
+        }
+        advancePage(autoModeConfig);
+        armPageTurnTimeout();
+        return;
+      }
       stopAutoCapture();
       chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_ERROR', reason: 'page_turn_timeout' });
-    }, PAGE_TURN_TIMEOUT_MS);
+    }, timeout);
   }
 
   async function handleMutation() {
@@ -499,6 +523,7 @@
       }
 
       autoRetryCount = 0;
+      turnTimeoutRetries = 0;
       lastCapturedContent = text;
       const pageCount = response?.page_count || 0;
       const maxPages = autoModeConfig.maxPages || 100;
