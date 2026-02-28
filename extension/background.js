@@ -6,6 +6,10 @@
  *
  * All chrome.storage calls use the callback form for Firefox MV2 compatibility
  * (Firefox's chrome shim does not always promisify storage APIs).
+ *
+ * Reliability: An IndexedDB outbox is used as a write-ahead log before each
+ * page POST. If the service worker is killed mid-submission, pages left in the
+ * outbox are re-submitted on the next startup/wake, preventing data loss.
  */
 
 const DEFAULT_SERVER_URL = 'http://localhost:5000';
@@ -36,6 +40,108 @@ function storageRemove(keys) {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
       resolve();
     });
+  });
+}
+
+// ─── IndexedDB Outbox ────────────────────────────────────────────────────────
+//
+// Schema: database "docuflux_outbox" v1
+//   object store "pending_pages"
+//     keyPath: "sequence" (auto-increment)
+//     index: "sessionId"
+//
+// Each record:
+//   { sequence, sessionId, pageData, addedAt, retryCount }
+
+const OUTBOX_DB_NAME = 'docuflux_outbox';
+const OUTBOX_DB_VERSION = 1;
+const OUTBOX_STORE = 'pending_pages';
+const OUTBOX_MAX_RETRIES = 5;
+
+let _outboxDb = null;
+
+function openOutboxDB() {
+  if (_outboxDb) return Promise.resolve(_outboxDb);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(OUTBOX_DB_NAME, OUTBOX_DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
+        const store = db.createObjectStore(OUTBOX_STORE, { keyPath: 'sequence', autoIncrement: true });
+        store.createIndex('sessionId', 'sessionId', { unique: false });
+      }
+    };
+    req.onsuccess = e => { _outboxDb = e.target.result; resolve(_outboxDb); };
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+async function writeToOutbox(sessionId, pageData) {
+  const db = await openOutboxDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, 'readwrite');
+    const req = tx.objectStore(OUTBOX_STORE).add({
+      sessionId,
+      pageData,
+      addedAt: Date.now(),
+      retryCount: 0,
+    });
+    req.onsuccess = () => resolve(req.result); // returns auto-assigned sequence
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+async function removeFromOutbox(sequence) {
+  const db = await openOutboxDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, 'readwrite');
+    const req = tx.objectStore(OUTBOX_STORE).delete(sequence);
+    req.onsuccess = () => resolve();
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+async function getPendingForSession(sessionId) {
+  const db = await openOutboxDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, 'readonly');
+    const idx = tx.objectStore(OUTBOX_STORE).index('sessionId');
+    const req = idx.getAll(sessionId);
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+async function clearOutboxForSession(sessionId) {
+  const db = await openOutboxDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, 'readwrite');
+    const idx = tx.objectStore(OUTBOX_STORE).index('sessionId');
+    const req = idx.openCursor(IDBKeyRange.only(sessionId));
+    req.onsuccess = e => {
+      const cursor = e.target.result;
+      if (cursor) { cursor.delete(); cursor.continue(); }
+      else resolve();
+    };
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+async function incrementOutboxRetry(sequence) {
+  const db = await openOutboxDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, 'readwrite');
+    const store = tx.objectStore(OUTBOX_STORE);
+    const getReq = store.get(sequence);
+    getReq.onsuccess = () => {
+      const record = getReq.result;
+      if (!record) { resolve(); return; }
+      record.retryCount = (record.retryCount || 0) + 1;
+      const putReq = store.put(record);
+      putReq.onsuccess = () => resolve();
+      putReq.onerror = e => reject(e.target.error);
+    };
+    getReq.onerror = e => reject(e.target.error);
   });
 }
 
@@ -100,12 +206,13 @@ async function createSession(title, toFormat, sourceUrl, forceOcr) {
     toFormat,
     pageCount: 0,
     status: 'active',
+    nextSequence: 0,
   };
   await storageSet({ activeSession: session });
   return session;
 }
 
-async function submitPage(pageData) {
+async function submitPageWithSequence(pageData, sequence) {
   const result = await storageGet('activeSession');
   const activeSession = result.activeSession;
   if (!activeSession) throw new Error('No active session');
@@ -127,11 +234,30 @@ async function submitPage(pageData) {
 
   const apiResult = await apiPost(
     `/api/v1/capture/sessions/${activeSession.sessionId}/pages`,
-    pageData
+    { ...pageData, page_sequence: sequence }
   );
   activeSession.pageCount = apiResult.page_count;
   await storageSet({ activeSession });
   return apiResult;
+}
+
+async function submitPage(pageData) {
+  // Allocate a monotonically increasing sequence number for deduplication.
+  const result = await storageGet('activeSession');
+  const activeSession = result.activeSession;
+  if (!activeSession) throw new Error('No active session');
+
+  const sequence = await writeToOutbox(activeSession.sessionId, pageData);
+
+  try {
+    const apiResult = await submitPageWithSequence(pageData, sequence);
+    await removeFromOutbox(sequence);
+    return apiResult;
+  } catch (e) {
+    // Page left in outbox — will be drained on next startup
+    await incrementOutboxRetry(sequence).catch(() => {});
+    throw e;
+  }
 }
 
 async function submitPageWithRetry(pageData) {
@@ -168,7 +294,63 @@ async function pollJobStatus() {
 }
 
 async function clearSession() {
+  const result = await storageGet('activeSession');
+  const activeSession = result.activeSession;
+  if (activeSession?.sessionId) {
+    await clearOutboxForSession(activeSession.sessionId).catch(() => {});
+  }
   await storageRemove('activeSession');
+}
+
+async function getSessionServerStatus() {
+  const result = await storageGet('activeSession');
+  const activeSession = result.activeSession;
+  if (!activeSession?.sessionId) return null;
+  try {
+    return await apiGet(`/api/v1/capture/sessions/${activeSession.sessionId}/status`);
+  } catch (e) {
+    return null;
+  }
+}
+
+// ─── Outbox Drain (run on startup/wake) ──────────────────────────────────────
+
+async function drainOutbox() {
+  const result = await storageGet('activeSession');
+  const activeSession = result.activeSession;
+  if (!activeSession?.sessionId) return;
+
+  const pending = await getPendingForSession(activeSession.sessionId).catch(() => []);
+  if (!pending.length) return;
+
+  // Verify session is still active on server before draining
+  let serverStatus;
+  try {
+    serverStatus = await apiGet(`/api/v1/capture/sessions/${activeSession.sessionId}/status`);
+  } catch (e) {
+    console.warn('[DocuFlux] Cannot drain outbox: session status check failed:', e.message);
+    return;
+  }
+
+  if (serverStatus?.status !== 'active') {
+    await clearOutboxForSession(activeSession.sessionId).catch(() => {});
+    return;
+  }
+
+  console.log(`[DocuFlux] Draining ${pending.length} pending page(s) from outbox`);
+  for (const item of pending) {
+    if ((item.retryCount || 0) > OUTBOX_MAX_RETRIES) {
+      await removeFromOutbox(item.sequence).catch(() => {});
+      continue;
+    }
+    try {
+      await submitPageWithSequence(item.pageData, item.sequence);
+      await removeFromOutbox(item.sequence);
+    } catch (e) {
+      console.warn('[DocuFlux] Outbox drain failed for seq', item.sequence, ':', e.message);
+      await incrementOutboxRetry(item.sequence).catch(() => {});
+    }
+  }
 }
 
 // ─── Auto-capture coordination ────────────────────────────────────────────────
@@ -183,14 +365,24 @@ function triggerContentCapture(tabId) {
   });
 }
 
+// ─── Startup Hook ─────────────────────────────────────────────────────────────
+
+chrome.runtime.onStartup.addListener(() => {
+  drainOutbox().catch(e => console.warn('[DocuFlux] Outbox drain error on startup:', e.message));
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  drainOutbox().catch(e => console.warn('[DocuFlux] Outbox drain error on install:', e.message));
+});
+
 // ─── Message Handler ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  handleMessage(message).then(sendResponse).catch(err => sendResponse({ error: err.message }));
+  handleMessage(message, sender).then(sendResponse).catch(err => sendResponse({ error: err.message }));
   return true; // Keep channel open for async response
 });
 
-async function handleMessage(message) {
+async function handleMessage(message, sender) {
   switch (message.type) {
     case 'CREATE_SESSION':
       return createSession(message.title, message.toFormat, message.sourceUrl, message.forceOcr);
@@ -230,6 +422,22 @@ async function handleMessage(message) {
       await triggerContentCapture(tabs[0].id);
       return { ok: true };
     }
+
+    case 'REQUEST_SCREENSHOT': {
+      // Called by content script — only background can call captureVisibleTab
+      const dataUrl = await captureScreenshot();
+      return { dataUrl };
+    }
+
+    case 'AUTO_CAPTURE_ERROR':
+    case 'AUTO_CAPTURE_DONE': {
+      // Forward to popup if it's open
+      chrome.runtime.sendMessage(message).catch(() => {});
+      return { ok: true };
+    }
+
+    case 'GET_SESSION_SERVER_STATUS':
+      return getSessionServerStatus();
 
     default:
       throw new Error(`Unknown message type: ${message.type}`);

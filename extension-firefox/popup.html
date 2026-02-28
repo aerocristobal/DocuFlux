@@ -46,8 +46,17 @@
 
     <!-- Auto-capture settings -->
     <div id="auto-settings" class="subsection hidden">
-      <label for="next-selector">Next Button Selector</label>
+      <label for="next-method">Advance Method</label>
+      <select id="next-method">
+        <option value="selector">CSS Selector (click)</option>
+        <option value="key-right">Keyboard: → (Kindle)</option>
+        <option value="key-space">Keyboard: Space</option>
+        <option value="area-click">Area Click (right side)</option>
+      </select>
+      <label for="next-selector">CSS Selector</label>
       <input type="text" id="next-selector" placeholder=".next-page, #nextBtn">
+      <label for="page-turn-delay">Page Turn Delay (ms)</label>
+      <input type="number" id="page-turn-delay" value="1500" min="300" max="10000">
       <label for="max-pages">Max Pages</label>
       <input type="number" id="max-pages" value="100" min="1" max="500">
     </div>
