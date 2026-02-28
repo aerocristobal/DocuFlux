@@ -387,8 +387,10 @@ async function handleMessage(message, sender) {
     case 'CREATE_SESSION':
       return createSession(message.title, message.toFormat, message.sourceUrl, message.forceOcr);
 
-    case 'SUBMIT_PAGE':
-      return submitPageWithRetry(message.pageData);
+    case 'SUBMIT_PAGE': {
+      const result = await submitPageWithRetry(message.pageData);
+      return { ...result, skipped_image_count: message.pageData.skipped_image_count || 0 };
+    }
 
     case 'FINISH_SESSION':
       return finishSession();
