@@ -1,19 +1,15 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "DocuFlux Capture",
   "version": "1.0.0",
   "description": "Capture authenticated web content and send to DocuFlux for conversion",
-  "permissions": [
-    "activeTab",
-    "storage",
-    "tabs",
-    "<all_urls>"
-  ],
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["<all_urls>"],
   "background": {
-    "scripts": ["background.js"],
-    "persistent": false
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
   },
-  "browser_action": {
+  "action": {
     "default_popup": "popup.html",
     "default_title": "DocuFlux Capture"
   },
