@@ -441,6 +441,113 @@ async function handleMessage(message, sender) {
     case 'GET_SESSION_SERVER_STATUS':
       return getSessionServerStatus();
 
+    case 'PERCIPIO_CONTENT': {
+      // Cache latest page content from the EPUB reader frame (used by percipio-frame.js)
+      await storageSet({ percipio_last_content: { ...message, timestamp: Date.now() } });
+      return { ok: true };
+    }
+
+    case 'GET_PERCIPIO_CONTENT': {
+      const data = await storageGet('percipio_last_content');
+      const content = data?.percipio_last_content;
+      // Only return if fresh (within last 2 minutes)
+      if (content && Date.now() - content.timestamp < 120000) {
+        return content;
+      }
+      return null;
+    }
+
+    case 'CAPTURE_PERCIPIO_CONTENT': {
+      // On-demand extraction: execute in all frames and read the cdn2.percipio.com EPUB
+      // reader frame's child srcdoc iframes.
+      const tabs = await new Promise(resolve =>
+        chrome.tabs.query({ active: true, currentWindow: true }, t => resolve(t || []))
+      );
+      if (!tabs[0]) return null;
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tabs[0].id, allFrames: true },
+          func: function () {
+            var diag = {
+              hostname: location.hostname,
+              isCdn2: location.hostname.includes('cdn2.percipio.com'),
+            };
+            if (!diag.isCdn2) return diag;
+
+            var frames = document.querySelectorAll('iframe');
+            diag.iframeCount = frames.length;
+            diag.frames = [];
+            var text = '';
+
+            for (var i = 0; i < frames.length; i++) {
+              var frame = frames[i];
+              var fd = {
+                i: i,
+                sandbox: frame.getAttribute('sandbox'),
+                hasSrcdoc: frame.hasAttribute('srcdoc'),
+                srcdocLen: (frame.getAttribute('srcdoc') || '').length,
+                src: (frame.src || '').substring(0, 60),
+                w: Math.round(frame.getBoundingClientRect().width),
+                h: Math.round(frame.getBoundingClientRect().height),
+              };
+
+              // Skip invisible frames
+              if (fd.w === 0 || fd.h === 0) { fd.skip = 'zero-size'; diag.frames.push(fd); continue; }
+              var style = getComputedStyle(frame);
+              if (style.display === 'none' || style.visibility === 'hidden') {
+                fd.skip = 'hidden'; diag.frames.push(fd); continue;
+              }
+
+              // Method 1: contentDocument
+              try {
+                var doc = frame.contentDocument;
+                fd.cdAccess = true;
+                fd.cdHasBody = !!(doc && doc.body);
+                if (doc && doc.body) {
+                  fd.cdTextLen = (doc.body.innerText || '').length;
+                  if (fd.cdTextLen > 20) { text += (doc.body.innerText || '') + '\n'; }
+                }
+              } catch (e) {
+                fd.cdAccess = false;
+                fd.cdErr = e.name;
+              }
+
+              // Method 2: srcdoc attribute
+              if (fd.srcdocLen > 50) {
+                try {
+                  var parser = new DOMParser();
+                  var parsed = parser.parseFromString(frame.getAttribute('srcdoc'), 'text/html');
+                  fd.srcdocTextLen = parsed.body ? (parsed.body.innerText || '').length : 0;
+                  if (fd.srcdocTextLen > 20 && !(fd.cdAccess && fd.cdTextLen > 20)) {
+                    text += (parsed.body.innerText || '') + '\n';
+                  }
+                } catch (e) {
+                  fd.srcdocErr = e.name;
+                }
+              }
+
+              diag.frames.push(fd);
+            }
+
+            diag.textLen = text.trim().length;
+            diag.text = text.trim() || null;
+            return diag;
+          },
+        });
+        // Return ALL diagnostics plus any text found
+        const allDiag = results.map(function (r) { return r.result; }).filter(Boolean);
+        const cdn2Diag = allDiag.find(function (d) { return d.isCdn2; });
+        const text = cdn2Diag?.text;
+        return {
+          text: (text && text.length > 50) ? text : null,
+          _diag: allDiag,
+        };
+      } catch (e) {
+        console.warn('[DocuFlux] Percipio executeScript failed:', e.message);
+        return { text: null, _diag: [{ error: e.message }] };
+      }
+    }
+
     default:
       throw new Error(`Unknown message type: ${message.type}`);
   }

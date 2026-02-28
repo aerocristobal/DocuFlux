@@ -127,10 +127,50 @@ async function sendToContent(type, data = {}) {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+async function detectSiteRecommendations(tabUrl) {
+  if (!tabUrl) return;
+  try {
+    const hostname = new URL(tabUrl).hostname;
+    if (hostname.endsWith('.percipio.com')) {
+      els.nextMethod.value = 'passive';
+
+      // Check if we have host permissions for cross-origin frame access
+      const hasPerms = await new Promise(resolve => {
+        chrome.permissions.contains({ origins: ['https://cdn2.percipio.com/*'] }, resolve);
+      });
+      if (!hasPerms) {
+        showStatus('Percipio: grant "On all sites" access (click Grant below)', 'error');
+        // Insert a one-time grant button after the status message
+        const btn = document.createElement('button');
+        btn.textContent = 'Grant Site Access';
+        btn.className = 'btn-secondary';
+        btn.style.marginTop = '6px';
+        btn.addEventListener('click', async () => {
+          const granted = await new Promise(resolve => {
+            chrome.permissions.request({ origins: ['<all_urls>'] }, resolve);
+          });
+          if (granted) {
+            btn.remove();
+            showStatus('Permissions granted! Reload the Percipio page, then capture.', 'success');
+          } else {
+            showStatus('Permission denied. Right-click extension icon → "On all sites"', 'error');
+          }
+        });
+        els.statusMsg.after(btn);
+      } else {
+        showStatus('Percipio detected: use Passive mode and turn pages manually', 'info');
+      }
+    }
+  } catch (e) {}
+}
+
 async function init() {
   const config = await bg('GET_CONFIG');
   els.serverUrl.value = config.serverUrl;
   els.serverUrlDisplay.textContent = config.serverUrl.replace(/^https?:\/\//, '');
+
+  const tab = await getActiveTab().catch(() => null);
+  await detectSiteRecommendations(tab?.url);
 
   const session = await bg('GET_SESSION');
   if (!session) {

@@ -147,9 +147,67 @@
     return { images, skipped };
   }
 
+  // ─── Percipio Detection ───────────────────────────────────────────────────────
+
+  function isPercipioReader() {
+    return /\.percipio\.com$/.test(location.hostname);
+  }
+
   // ─── Main Capture ─────────────────────────────────────────────────────────────
 
   async function captureCurrentPage() {
+    // On Percipio: request on-demand extraction from the EPUB reader frame via background.
+    // We cannot read the cross-origin cdn2.percipio.com iframe directly from here, so the
+    // background uses chrome.scripting.executeScript (which can cross the frame boundary).
+    // If that returns nothing, we fall back to a screenshot — never to the nav-chrome body.
+    if (isPercipioReader()) {
+      // Try on-demand extraction via chrome.scripting.executeScript (requires host permissions)
+      let percipioText = null;
+      const result = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ type: 'CAPTURE_PERCIPIO_CONTENT' }, response => {
+          resolve(chrome.runtime.lastError ? null : response);
+        });
+      });
+      console.log('[DocuFlux] CAPTURE_PERCIPIO_CONTENT result:', JSON.stringify(result, null, 2));
+      if (result?.text?.length > 50) percipioText = result.text;
+
+      // Fallback: try cached content from percipio-frame.js content script
+      if (!percipioText) {
+        const cached = await new Promise(resolve => {
+          chrome.runtime.sendMessage({ type: 'GET_PERCIPIO_CONTENT' }, response => {
+            resolve(chrome.runtime.lastError ? null : response);
+          });
+        });
+        console.log('[DocuFlux] GET_PERCIPIO_CONTENT cache:', cached?.text?.length || 0, 'chars');
+        if (cached?.text?.length > 50) percipioText = cached.text;
+      }
+
+      if (percipioText) {
+        return {
+          url: location.href,
+          title: document.title,
+          text: percipioText,
+          images: [],
+          extraction_method: 'percipio_frame',
+          page_hint: 0,
+          needs_screenshot: false,
+          skipped_image_count: 0,
+        };
+      }
+      // EPUB content unavailable — screenshot the visible tab instead of capturing nav chrome
+      console.warn('[DocuFlux] Percipio: no text extracted. Grant extension "On all sites" access.');
+      return {
+        url: location.href,
+        title: document.title,
+        text: '',
+        images: [],
+        extraction_method: 'percipio_screenshot',
+        page_hint: 0,
+        needs_screenshot: true,
+        skipped_image_count: 0,
+      };
+    }
+
     const { element, method } = findContentElement();
     const text = elementToMarkdown(element);
     const { images, skipped } = await captureImages(element);
@@ -184,10 +242,15 @@
 
   /**
    * Attempt to advance to the next page using the configured method.
-   * Returns the method used ('click' | 'key' | 'area' | null).
+   * Returns the method used ('click' | 'key' | 'area' | 'passive' | null).
    */
   function advancePage(config) {
     const method = config.nextMethod || 'selector';
+
+    // Passive: user navigates manually, no automation
+    if (method === 'passive') {
+      return 'passive';
+    }
 
     // CSS selector click
     if (method === 'selector' && config.nextButtonSelector) {
@@ -255,6 +318,11 @@
     autoModeConfig = config;
     autoModeActive = true;
     autoRetryCount = 0;
+
+    // Auto-detect Percipio and force passive mode (page events don't reach the cross-origin reader)
+    if (isPercipioReader() && !config.nextMethod) {
+      autoModeConfig.nextMethod = 'passive';
+    }
 
     // Detect canvas pages by capturing first page
     const firstPageData = await captureCurrentPage();
@@ -371,6 +439,7 @@
   }
 
   function armPageTurnTimeout() {
+    if (autoModeConfig?.nextMethod === 'passive') return;
     clearTimeout(pageTurnTimer);
     pageTurnTimer = setTimeout(() => {
       if (!autoModeActive) return;
