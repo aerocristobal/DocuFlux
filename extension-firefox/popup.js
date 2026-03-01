@@ -185,7 +185,7 @@ async function detectSiteRecommendations(tabUrl) {
         });
         els.statusMsg.after(btn);
       } else {
-        showStatus('Percipio detected: use Passive mode and turn pages manually', 'info');
+        showStatus('Percipio detected: Passive mode (or use Playwright CDP for auto-capture)', 'info');
       }
     }
   } catch (e) {}

@@ -572,6 +572,25 @@
     }
   });
 
+  // ─── DOM Attribute Bridge (Playwright CDP integration) ────────────────────
+
+  let lastBridgeRequest = '';
+  const bridgeObserver = new MutationObserver(() => {
+    const reqTs = document.body.dataset.docufluxCaptureRequest;
+    if (reqTs && reqTs !== lastBridgeRequest) {
+      lastBridgeRequest = reqTs;
+      captureCurrentPage().then(result => {
+        document.body.dataset.docufluxCaptureResult = JSON.stringify({
+          ts: reqTs,
+          text: result.text,
+          method: result.extraction_method,
+          hasImages: (result.images || []).length > 0,
+        });
+      });
+    }
+  });
+  bridgeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-docuflux-capture-request'] });
+
   // Expose for scripting.executeScript
   window.__docufluxCapture = { captureCurrentPage };
 })();
