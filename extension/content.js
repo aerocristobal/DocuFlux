@@ -182,7 +182,8 @@
         });
       });
       console.log('[DocuFlux] CAPTURE_PERCIPIO_CONTENT result: text=', result?.text?.length || 0,
-        'chars, images=', (result?.images || []).length);
+        'chars, images=', (result?.images || []).length,
+        'imageDiag=', JSON.stringify(result?.imageDiag || null));
       if (result?.text?.length > 50) {
         percipioText = result.text;
         percipioImages = result.images || [];

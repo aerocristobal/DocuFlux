@@ -478,26 +478,126 @@ async function handleMessage(message, sender) {
             // Skip frames that aren't part of Percipio (e.g. ads)
             if (!diag.isPercipio && !diag.isCdn2 && location.hostname !== '') return diag;
 
-            /** Draw img elements to canvas and return as base64 data URLs. */
+            /**
+             * Extract images from a DOM root. Tries multiple methods:
+             * 1. data: URL src — pass through directly
+             * 2. Canvas capture — works for same-origin images
+             * 3. blob: URL — fetch via sync XHR and convert to data URL
+             * Also scans for <svg>, <canvas>, and CSS background images.
+             * Returns { images: [...], imageDiag: {...} }
+             */
             function extractImages(imgRoot) {
               var result = [];
+              var diag = { imgCount: 0, svgCount: 0, canvasCount: 0, bgImgCount: 0, skipped: [] };
+
+              // Scan <img> elements
               var imgEls = imgRoot.querySelectorAll('img');
+              diag.imgCount = imgEls.length;
               for (var j = 0; j < imgEls.length; j++) {
                 var img = imgEls[j];
-                if (img.naturalWidth < 50 || img.naturalHeight < 50) continue;
+                var srcPrefix = (img.src || '').substring(0, 40);
+                if (img.naturalWidth < 50 || img.naturalHeight < 50) {
+                  diag.skipped.push({ src: srcPrefix, w: img.naturalWidth, h: img.naturalHeight, reason: 'small' });
+                  continue;
+                }
+
+                // Method 1: data: URL — use directly (already base64)
+                if (img.src && img.src.startsWith('data:')) {
+                  result.push({
+                    filename: 'percipio_img_' + result.length + '.png',
+                    b64: img.src,
+                    alt: img.alt || '',
+                  });
+                  continue;
+                }
+
+                // Method 2: canvas capture (same-origin images)
                 try {
-                  var c = document.createElement('canvas');
+                  var c = imgRoot.ownerDocument.createElement('canvas');
                   c.width = img.naturalWidth;
                   c.height = img.naturalHeight;
                   c.getContext('2d').drawImage(img, 0, 0);
+                  var b64 = c.toDataURL('image/png');
                   result.push({
                     filename: 'percipio_img_' + result.length + '.png',
-                    b64: c.toDataURL('image/png'),
+                    b64: b64,
                     alt: img.alt || '',
                   });
-                } catch (e) { /* CORS-tainted — skip */ }
+                  continue;
+                } catch (e) {
+                  // Canvas tainted — try fetch fallback
+                  diag.skipped.push({ src: srcPrefix, w: img.naturalWidth, h: img.naturalHeight, reason: 'canvas_' + e.name });
+                }
+
+                // Method 3: blob: URL — fetch via sync XHR in page context
+                if (img.src && img.src.startsWith('blob:')) {
+                  try {
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('GET', img.src, false); // synchronous
+                    xhr.responseType = 'blob';
+                    xhr.send();
+                    if (xhr.status === 200 && xhr.response) {
+                      // Read blob as data URL synchronously via FileReaderSync (Workers only)
+                      // or fall back to canvas with the fetched blob
+                      var blobUrl = URL.createObjectURL(xhr.response);
+                      var tempImg = new Image();
+                      tempImg.src = blobUrl;
+                      // sync XHR gave us the blob; try canvas again with a fresh element
+                      var c2 = imgRoot.ownerDocument.createElement('canvas');
+                      c2.width = img.naturalWidth;
+                      c2.height = img.naturalHeight;
+                      c2.getContext('2d').drawImage(img, 0, 0);
+                      result.push({
+                        filename: 'percipio_img_' + result.length + '.png',
+                        b64: c2.toDataURL('image/png'),
+                        alt: img.alt || '',
+                      });
+                      URL.revokeObjectURL(blobUrl);
+                      continue;
+                    }
+                  } catch (e2) {
+                    diag.skipped.push({ src: srcPrefix, reason: 'blob_fetch_' + e2.name });
+                  }
+                }
               }
-              return result;
+
+              // Scan <svg> elements (EPUB readers often render pages as SVG)
+              var svgEls = imgRoot.querySelectorAll('svg');
+              diag.svgCount = svgEls.length;
+              for (var s = 0; s < svgEls.length; s++) {
+                var svg = svgEls[s];
+                var rect = svg.getBoundingClientRect();
+                if (rect.width < 50 || rect.height < 50) continue;
+                try {
+                  var svgData = new XMLSerializer().serializeToString(svg);
+                  var svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+                  var svgUrl = URL.createObjectURL(svgBlob);
+                  // Convert SVG to PNG via canvas
+                  var svgImg = new Image();
+                  svgImg.width = Math.round(rect.width);
+                  svgImg.height = Math.round(rect.height);
+                  // We can't wait for onload synchronously, so serialize as SVG data URL
+                  var svgB64 = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+                  result.push({
+                    filename: 'percipio_img_' + result.length + '.svg',
+                    b64: svgB64,
+                    alt: '',
+                  });
+                  URL.revokeObjectURL(svgUrl);
+                } catch (e) {
+                  diag.skipped.push({ type: 'svg', reason: e.name });
+                }
+              }
+
+              // Count <canvas> elements and CSS background images for diagnostics
+              diag.canvasCount = imgRoot.querySelectorAll('canvas').length;
+              var allEls = imgRoot.querySelectorAll('*');
+              for (var b = 0; b < allEls.length && b < 200; b++) {
+                var bgImg = getComputedStyle(allEls[b]).backgroundImage;
+                if (bgImg && bgImg !== 'none' && bgImg.startsWith('url(')) diag.bgImgCount++;
+              }
+
+              return { images: result, imageDiag: diag };
             }
 
             // For about:srcdoc frames: return own body text and images directly
@@ -507,7 +607,9 @@ async function handleMessage(message, sender) {
                 diag.text = bodyText;
                 diag.textLen = bodyText.length;
                 diag.source = 'self_body';
-                diag.images = extractImages(document.body);
+                var extracted = extractImages(document.body);
+                diag.images = extracted.images;
+                diag.imageDiag = extracted.imageDiag;
               }
               return diag;
             }
@@ -547,10 +649,11 @@ async function handleMessage(message, sender) {
                   fd.cdTextLen = (doc.body.innerText || '').length;
                   if (fd.cdTextLen > 20) {
                     text += (doc.body.innerText || '') + '\n';
-                    var frameImgs = extractImages(doc.body);
-                    for (var k = 0; k < frameImgs.length; k++) {
-                      frameImgs[k].filename = 'percipio_img_' + images.length + '.png';
-                      images.push(frameImgs[k]);
+                    var extracted = extractImages(doc.body);
+                    fd.imageDiag = extracted.imageDiag;
+                    for (var k = 0; k < extracted.images.length; k++) {
+                      extracted.images[k].filename = 'percipio_img_' + images.length + '.png';
+                      images.push(extracted.images[k]);
                     }
                   }
                 }
@@ -589,7 +692,7 @@ async function handleMessage(message, sender) {
         const best = withText.find(function (d) { return d.isCdn2; })
           || withText.find(function (d) { return d.isPercipio; })
           || withText[0];
-        // Strip large image data from diagnostic payload
+        // Strip large image b64 data from diagnostic payload, keep imageDiag
         const allDiag = allResults.map(function (d) {
           var copy = Object.assign({}, d);
           if (copy.images) { copy.imageCount = copy.images.length; delete copy.images; }
@@ -598,6 +701,7 @@ async function handleMessage(message, sender) {
         return {
           text: best?.text || null,
           images: best?.images || [],
+          imageDiag: best?.imageDiag || null,
           _diag: allDiag,
         };
       } catch (e) {
