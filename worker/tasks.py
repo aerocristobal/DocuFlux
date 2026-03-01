@@ -1782,7 +1782,11 @@ def assemble_capture_session(session_id, job_id):
                             img_save_path = os.path.join(images_dir, safe_img_filename)
                             with open(img_save_path, 'wb') as f:
                                 f.write(img_data)
-                            page_text = page_text.replace(f"({img_filename})", f"(images/{safe_img_filename})")
+                            if f"({img_filename})" in page_text:
+                                page_text = page_text.replace(f"({img_filename})", f"(images/{safe_img_filename})")
+                            else:
+                                alt = img_info.get('alt', '')
+                                page_text += f"\n\n![{alt}](images/{safe_img_filename})"
                             image_count += 1
                         except Exception as e:
                             logging.warning(f"Failed to save image {img_filename}: {e}")
