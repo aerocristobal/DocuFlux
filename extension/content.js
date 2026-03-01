@@ -175,13 +175,18 @@
     if (isPercipioReader()) {
       // Try on-demand extraction via chrome.scripting.executeScript (requires host permissions)
       let percipioText = null;
+      let percipioImages = [];
       const result = await new Promise(resolve => {
         chrome.runtime.sendMessage({ type: 'CAPTURE_PERCIPIO_CONTENT' }, response => {
           resolve(chrome.runtime.lastError ? null : response);
         });
       });
-      console.log('[DocuFlux] CAPTURE_PERCIPIO_CONTENT result:', JSON.stringify(result, null, 2));
-      if (result?.text?.length > 50) percipioText = result.text;
+      console.log('[DocuFlux] CAPTURE_PERCIPIO_CONTENT result: text=', result?.text?.length || 0,
+        'chars, images=', (result?.images || []).length);
+      if (result?.text?.length > 50) {
+        percipioText = result.text;
+        percipioImages = result.images || [];
+      }
 
       // Fallback: try cached content from percipio-frame.js content script
       if (!percipioText) {
@@ -199,7 +204,7 @@
           url: location.href,
           title: document.title,
           text: percipioText,
-          images: [],
+          images: percipioImages,
           extraction_method: 'percipio_frame',
           page_hint: 0,
           needs_screenshot: false,
