@@ -88,6 +88,16 @@
     }).catch(e => console.warn('[DocuFlux-Percipio] sendMessage failed:', e));
   }
 
+  // ─── Settle-based timing ──────────────────────────────────────────────────
+  // Wait for DOM mutations to stop for 500ms before extracting, rather than
+  // using fixed timeouts. This ensures content is fully rendered.
+
+  let settleTimer = null;
+  function onMutationSettle() {
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(maybeNotify, 500);
+  }
+
   // Watch for new iframes added to the body (childList) and for srcdoc/src attribute
   // changes on existing iframes (Percipio may update srcdoc in-place when turning pages).
   const observer = new MutationObserver((mutations) => {
@@ -95,7 +105,7 @@
       m.type === 'childList' ||
       (m.type === 'attributes' && (m.attributeName === 'srcdoc' || m.attributeName === 'src'))
     );
-    if (relevant) setTimeout(maybeNotify, 300);
+    if (relevant) onMutationSettle();
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
@@ -106,7 +116,6 @@
   });
 
   // Run immediately — content script injects at document_idle (after load),
-  // so the 'load' event won't fire. Extract on injection and again after a delay.
-  setTimeout(maybeNotify, 300);
-  setTimeout(maybeNotify, 1500);
+  // so the 'load' event won't fire. Trigger settle-based extraction.
+  onMutationSettle();
 })();
