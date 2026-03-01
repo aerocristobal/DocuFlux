@@ -127,15 +127,39 @@ async function sendToContent(type, data = {}) {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+function saveAutoCaptureSettings() {
+  const settings = {
+    nextMethod: els.nextMethod.value,
+    nextSelector: els.nextSelector.value,
+    pageTurnDelay: els.pageTurnDelay.value,
+    maxPages: els.maxPages.value,
+  };
+  return new Promise(resolve => chrome.storage.local.set({ autoCaptureSettings: settings }, resolve));
+}
+
+function restoreAutoCaptureSettings() {
+  return new Promise(resolve => {
+    chrome.storage.local.get('autoCaptureSettings', result => {
+      const s = result?.autoCaptureSettings;
+      if (!s) return resolve();
+      if (s.nextMethod) els.nextMethod.value = s.nextMethod;
+      if (s.nextSelector) els.nextSelector.value = s.nextSelector;
+      if (s.pageTurnDelay) els.pageTurnDelay.value = s.pageTurnDelay;
+      if (s.maxPages) els.maxPages.value = s.maxPages;
+      resolve();
+    });
+  });
+}
+
 async function detectSiteRecommendations(tabUrl) {
   if (!tabUrl) return;
   try {
     const hostname = new URL(tabUrl).hostname;
     if (hostname === 'read.amazon.com') {
-      els.nextMethod.value = 'key-right';
+      if (els.nextMethod.value === 'selector') els.nextMethod.value = 'key-right';
       showStatus('Kindle detected: using Arrow Right for page advance', 'info');
     } else if (hostname.endsWith('.percipio.com')) {
-      els.nextMethod.value = 'passive';
+      if (els.nextMethod.value === 'selector') els.nextMethod.value = 'passive';
 
       // Check if we have host permissions for cross-origin frame access
       const hasPerms = await new Promise(resolve => {
@@ -174,6 +198,7 @@ async function init() {
 
   const tab = await getActiveTab().catch(() => null);
   await detectSiteRecommendations(tab?.url);
+  await restoreAutoCaptureSettings();
 
   const session = await bg('GET_SESSION');
   if (!session) {
@@ -303,6 +328,7 @@ els.toggleAutoBtn.addEventListener('click', async () => {
       pageTurnDelayMs: parseInt(els.pageTurnDelay.value, 10) || 1500,
       maxPages: parseInt(els.maxPages.value, 10) || 100,
     };
+    saveAutoCaptureSettings();
     await sendToContent('START_AUTO_CAPTURE', { config });
     autoModeActive = true;
     els.toggleAutoBtn.textContent = '\u25A0 Stop';
