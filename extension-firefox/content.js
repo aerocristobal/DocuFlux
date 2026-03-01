@@ -36,6 +36,7 @@
   const PAGE_TURN_TIMEOUT_MS = 8000;    // ms — give up waiting for page turn
   const KINDLE_PAGE_TURN_TIMEOUT_MS = 30000; // ms — Kindle needs longer for buffer reloads
   const MAX_AUTO_RETRIES = 3;           // max submit retries before stopping auto-capture
+  const KINDLE_MAX_TURN_RETRIES = 10;   // Kindle buffer reloads recur every ~70-100 pages
 
   // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -470,7 +471,7 @@
         }
         // Try advancing once more in case the page stalled (limit retries)
         turnTimeoutRetries++;
-        if (turnTimeoutRetries > MAX_AUTO_RETRIES) {
+        if (turnTimeoutRetries > KINDLE_MAX_TURN_RETRIES) {
           stopAutoCapture();
           chrome.runtime.sendMessage({ type: 'AUTO_CAPTURE_ERROR', reason: 'page_turn_timeout' });
           return;
