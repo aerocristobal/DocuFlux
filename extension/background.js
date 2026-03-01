@@ -458,8 +458,9 @@ async function handleMessage(message, sender) {
     }
 
     case 'CAPTURE_PERCIPIO_CONTENT': {
-      // On-demand extraction: execute in all frames and read the cdn2.percipio.com EPUB
-      // reader frame's child srcdoc iframes.
+      // On-demand extraction: execute in all frames and scan for srcdoc iframes
+      // containing EPUB page content. The reader may render srcdoc iframes on
+      // the main page OR inside a cdn2.percipio.com intermediate frame.
       const tabs = await new Promise(resolve =>
         chrome.tabs.query({ active: true, currentWindow: true }, t => resolve(t || []))
       );
@@ -471,9 +472,24 @@ async function handleMessage(message, sender) {
             var diag = {
               hostname: location.hostname,
               isCdn2: location.hostname.includes('cdn2.percipio.com'),
+              isPercipio: location.hostname.includes('percipio.com'),
             };
-            if (!diag.isCdn2) return diag;
 
+            // Skip frames that aren't part of Percipio (e.g. ads)
+            if (!diag.isPercipio && !diag.isCdn2 && location.hostname !== '') return diag;
+
+            // For about:srcdoc frames: return own body text directly
+            if (location.hostname === '' && document.body) {
+              var bodyText = (document.body.innerText || '').trim();
+              if (bodyText.length > 20) {
+                diag.text = bodyText;
+                diag.textLen = bodyText.length;
+                diag.source = 'self_body';
+              }
+              return diag;
+            }
+
+            // For Percipio / cdn2 frames: scan child iframes for srcdoc content
             var frames = document.querySelectorAll('iframe');
             diag.iframeCount = frames.length;
             diag.frames = [];
@@ -512,7 +528,7 @@ async function handleMessage(message, sender) {
                 fd.cdErr = e.name;
               }
 
-              // Method 2: srcdoc attribute
+              // Method 2: srcdoc attribute (always readable from parent DOM)
               if (fd.srcdocLen > 50) {
                 try {
                   var parser = new DOMParser();
@@ -531,15 +547,18 @@ async function handleMessage(message, sender) {
 
             diag.textLen = text.trim().length;
             diag.text = text.trim() || null;
+            diag.source = diag.isCdn2 ? 'cdn2_iframes' : 'main_iframes';
             return diag;
           },
         });
-        // Return ALL diagnostics plus any text found
+        // Return text from any frame that found content (prefer cdn2, then main, then about:srcdoc)
         const allDiag = results.map(function (r) { return r.result; }).filter(Boolean);
-        const cdn2Diag = allDiag.find(function (d) { return d.isCdn2; });
-        const text = cdn2Diag?.text;
+        const withText = allDiag.filter(function (d) { return d.text && d.text.length > 50; });
+        const best = withText.find(function (d) { return d.isCdn2; })
+          || withText.find(function (d) { return d.isPercipio; })
+          || withText[0];
         return {
-          text: (text && text.length > 50) ? text : null,
+          text: best?.text || null,
           _diag: allDiag,
         };
       } catch (e) {
