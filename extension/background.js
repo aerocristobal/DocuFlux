@@ -478,13 +478,36 @@ async function handleMessage(message, sender) {
             // Skip frames that aren't part of Percipio (e.g. ads)
             if (!diag.isPercipio && !diag.isCdn2 && location.hostname !== '') return diag;
 
-            // For about:srcdoc frames: return own body text directly
+            /** Draw img elements to canvas and return as base64 data URLs. */
+            function extractImages(imgRoot) {
+              var result = [];
+              var imgEls = imgRoot.querySelectorAll('img');
+              for (var j = 0; j < imgEls.length; j++) {
+                var img = imgEls[j];
+                if (img.naturalWidth < 50 || img.naturalHeight < 50) continue;
+                try {
+                  var c = document.createElement('canvas');
+                  c.width = img.naturalWidth;
+                  c.height = img.naturalHeight;
+                  c.getContext('2d').drawImage(img, 0, 0);
+                  result.push({
+                    filename: 'percipio_img_' + result.length + '.png',
+                    b64: c.toDataURL('image/png'),
+                    alt: img.alt || '',
+                  });
+                } catch (e) { /* CORS-tainted — skip */ }
+              }
+              return result;
+            }
+
+            // For about:srcdoc frames: return own body text and images directly
             if (location.hostname === '' && document.body) {
               var bodyText = (document.body.innerText || '').trim();
               if (bodyText.length > 20) {
                 diag.text = bodyText;
                 diag.textLen = bodyText.length;
                 diag.source = 'self_body';
+                diag.images = extractImages(document.body);
               }
               return diag;
             }
@@ -494,6 +517,7 @@ async function handleMessage(message, sender) {
             diag.iframeCount = frames.length;
             diag.frames = [];
             var text = '';
+            var images = [];
 
             for (var i = 0; i < frames.length; i++) {
               var frame = frames[i];
@@ -514,21 +538,28 @@ async function handleMessage(message, sender) {
                 fd.skip = 'hidden'; diag.frames.push(fd); continue;
               }
 
-              // Method 1: contentDocument
+              // Method 1: contentDocument (live DOM — can extract text + images)
               try {
                 var doc = frame.contentDocument;
                 fd.cdAccess = true;
                 fd.cdHasBody = !!(doc && doc.body);
                 if (doc && doc.body) {
                   fd.cdTextLen = (doc.body.innerText || '').length;
-                  if (fd.cdTextLen > 20) { text += (doc.body.innerText || '') + '\n'; }
+                  if (fd.cdTextLen > 20) {
+                    text += (doc.body.innerText || '') + '\n';
+                    var frameImgs = extractImages(doc.body);
+                    for (var k = 0; k < frameImgs.length; k++) {
+                      frameImgs[k].filename = 'percipio_img_' + images.length + '.png';
+                      images.push(frameImgs[k]);
+                    }
+                  }
                 }
               } catch (e) {
                 fd.cdAccess = false;
                 fd.cdErr = e.name;
               }
 
-              // Method 2: srcdoc attribute (always readable from parent DOM)
+              // Method 2: srcdoc attribute (parsed DOM — text only, images not rendered)
               if (fd.srcdocLen > 50) {
                 try {
                   var parser = new DOMParser();
@@ -547,18 +578,26 @@ async function handleMessage(message, sender) {
 
             diag.textLen = text.trim().length;
             diag.text = text.trim() || null;
+            diag.images = images;
             diag.source = diag.isCdn2 ? 'cdn2_iframes' : 'main_iframes';
             return diag;
           },
         });
-        // Return text from any frame that found content (prefer cdn2, then main, then about:srcdoc)
-        const allDiag = results.map(function (r) { return r.result; }).filter(Boolean);
-        const withText = allDiag.filter(function (d) { return d.text && d.text.length > 50; });
+        // Return text + images from the best frame (prefer cdn2, then main, then about:srcdoc)
+        const allResults = results.map(function (r) { return r.result; }).filter(Boolean);
+        const withText = allResults.filter(function (d) { return d.text && d.text.length > 50; });
         const best = withText.find(function (d) { return d.isCdn2; })
           || withText.find(function (d) { return d.isPercipio; })
           || withText[0];
+        // Strip large image data from diagnostic payload
+        const allDiag = allResults.map(function (d) {
+          var copy = Object.assign({}, d);
+          if (copy.images) { copy.imageCount = copy.images.length; delete copy.images; }
+          return copy;
+        });
         return {
           text: best?.text || null,
+          images: best?.images || [],
           _diag: allDiag,
         };
       } catch (e) {
