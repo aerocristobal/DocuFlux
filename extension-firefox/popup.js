@@ -114,15 +114,30 @@ function getActiveTab() {
   });
 }
 
-async function sendToContent(type, data = {}) {
+async function sendToContent(type, data = {}, _retried = false) {
   const tab = await getActiveTab();
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tab.id, { type, ...data }, response => {
-      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-      if (response?.error) return reject(new Error(response.error));
-      resolve(response);
+  try {
+    return await new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tab.id, { type, ...data }, response => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (response?.error) return reject(new Error(response.error));
+        resolve(response);
+      });
     });
-  });
+  } catch (e) {
+    // Content script not injected (e.g. extension updated while tab was open).
+    // Inject on-demand via chrome.scripting, then retry once.
+    if (!_retried && e.message.includes('Receiving end does not exist')) {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['purify.min.js', 'content.js'],
+      });
+      // Brief delay for script initialization
+      await new Promise(r => setTimeout(r, 200));
+      return sendToContent(type, data, true);
+    }
+    throw e;
+  }
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
