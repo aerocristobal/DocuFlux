@@ -19,7 +19,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://cdn2.percipio.com/*"],
+      "matches": ["https://cdn2.percipio.com/*", "*://*.percipio.com/*"],
       "js": ["percipio-frame.js"],
       "run_at": "document_idle",
       "all_frames": true
