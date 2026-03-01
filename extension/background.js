@@ -683,6 +683,20 @@ async function handleMessage(message, sender) {
             diag.text = text.trim() || null;
             diag.images = images;
             diag.source = diag.isCdn2 ? 'cdn2_iframes' : 'main_iframes';
+
+            // Aggregate imageDiag from all child frames
+            var aggDiag = { imgCount: 0, svgCount: 0, canvasCount: 0, bgImgCount: 0, skipped: [] };
+            for (var ai = 0; ai < diag.frames.length; ai++) {
+              var fid = diag.frames[ai].imageDiag;
+              if (fid) {
+                aggDiag.imgCount += fid.imgCount || 0;
+                aggDiag.svgCount += fid.svgCount || 0;
+                aggDiag.canvasCount += fid.canvasCount || 0;
+                aggDiag.bgImgCount += fid.bgImgCount || 0;
+                if (fid.skipped) aggDiag.skipped = aggDiag.skipped.concat(fid.skipped);
+              }
+            }
+            diag.imageDiag = aggDiag;
             return diag;
           },
         });
