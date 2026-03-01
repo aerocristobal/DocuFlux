@@ -488,6 +488,7 @@ async function handleMessage(message, sender) {
              */
             function extractImages(imgRoot) {
               var result = [];
+              var needsFetch = [];
               var diag = { imgCount: 0, svgCount: 0, canvasCount: 0, bgImgCount: 0, skipped: [] };
 
               // Scan <img> elements
@@ -525,7 +526,10 @@ async function handleMessage(message, sender) {
                   });
                   continue;
                 } catch (e) {
-                  // Canvas tainted — try fetch fallback
+                  // Canvas tainted by CORS — queue for background fetch
+                  if (e.name === 'SecurityError' && img.src && (img.src.startsWith('http:') || img.src.startsWith('https:'))) {
+                    needsFetch.push({ url: img.src, w: img.naturalWidth, h: img.naturalHeight, alt: img.alt || '' });
+                  }
                   diag.skipped.push({ src: srcPrefix, w: img.naturalWidth, h: img.naturalHeight, reason: 'canvas_' + e.name });
                 }
 
@@ -597,7 +601,7 @@ async function handleMessage(message, sender) {
                 if (bgImg && bgImg !== 'none' && bgImg.startsWith('url(')) diag.bgImgCount++;
               }
 
-              return { images: result, imageDiag: diag };
+              return { images: result, imageDiag: diag, needsFetch: needsFetch };
             }
 
             // For about:srcdoc frames: return own body text and images directly
@@ -610,6 +614,7 @@ async function handleMessage(message, sender) {
                 var extracted = extractImages(document.body);
                 diag.images = extracted.images;
                 diag.imageDiag = extracted.imageDiag;
+                diag.needsFetch = extracted.needsFetch;
               }
               return diag;
             }
@@ -620,6 +625,7 @@ async function handleMessage(message, sender) {
             diag.frames = [];
             var text = '';
             var images = [];
+            var allNeedsFetch = [];
 
             for (var i = 0; i < frames.length; i++) {
               var frame = frames[i];
@@ -655,6 +661,9 @@ async function handleMessage(message, sender) {
                       extracted.images[k].filename = 'percipio_img_' + images.length + '.png';
                       images.push(extracted.images[k]);
                     }
+                    for (var nf = 0; nf < extracted.needsFetch.length; nf++) {
+                      allNeedsFetch.push(extracted.needsFetch[nf]);
+                    }
                   }
                 }
               } catch (e) {
@@ -682,6 +691,7 @@ async function handleMessage(message, sender) {
             diag.textLen = text.trim().length;
             diag.text = text.trim() || null;
             diag.images = images;
+            diag.needsFetch = allNeedsFetch;
             diag.source = diag.isCdn2 ? 'cdn2_iframes' : 'main_iframes';
 
             // Aggregate imageDiag from all child frames
@@ -712,9 +722,40 @@ async function handleMessage(message, sender) {
           if (copy.images) { copy.imageCount = copy.images.length; delete copy.images; }
           return copy;
         });
+        // Fetch CORS-blocked images from background (has host_permissions)
+        let images = best?.images || [];
+        const toFetch = best?.needsFetch || [];
+        if (toFetch.length > 0) {
+          const fetched = await Promise.all(toFetch.map(async (item) => {
+            try {
+              const resp = await fetch(item.url);
+              if (!resp.ok) return null;
+              const blob = await resp.blob();
+              const buf = await blob.arrayBuffer();
+              const bytes = new Uint8Array(buf);
+              let binary = '';
+              for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+              const b64 = 'data:' + (blob.type || 'image/png') + ';base64,' + btoa(binary);
+              return {
+                filename: 'percipio_img_' + (images.length) + '.png',
+                b64: b64,
+                alt: item.alt || '',
+              };
+            } catch (e) {
+              console.warn('[DocuFlux] Background fetch failed for', item.url, e.message);
+              return null;
+            }
+          }));
+          for (const img of fetched) {
+            if (img) {
+              img.filename = 'percipio_img_' + images.length + '.png';
+              images.push(img);
+            }
+          }
+        }
         return {
           text: best?.text || null,
-          images: best?.images || [],
+          images: images,
           imageDiag: best?.imageDiag || null,
           _diag: allDiag,
         };
