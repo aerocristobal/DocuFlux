@@ -51,6 +51,11 @@
   let turnTimeoutRetries = 0;
   let lastScreenshotHash = null;
 
+  /** Returns false when the extension context has been invalidated (e.g. extension reload). */
+  function isContextValid() {
+    return typeof chrome !== 'undefined' && !!chrome.runtime?.id;
+  }
+
   // ─── Content Extraction ──────────────────────────────────────────────────────
 
   function findContentElement() {
@@ -339,11 +344,14 @@
 
     // Detect canvas pages by capturing first page
     const firstPageData = await captureCurrentPage();
-    const isCanvasPage = firstPageData.needs_screenshot;
+    // Percipio: never use screenshot mode — text extraction works via executeScript
+    // even if the first attempt returns empty (timing). Always use DOM observer.
+    const isCanvasPage = isPercipioReader() ? false : firstPageData.needs_screenshot;
 
     // Submit first page
     chrome.runtime.sendMessage({ type: 'SUBMIT_PAGE', pageData: firstPageData }, response => {
       if (!autoModeActive) return;
+      if (!isContextValid()) { stopAutoCapture(); return; }
       if (response?.error) {
         console.warn('[DocuFlux] Failed to submit first page:', response.error);
         stopAutoCapture();
@@ -384,10 +392,11 @@
 
   function startDomObserver() {
     const { element } = findContentElement();
-    // Kindle replaces content elements when its page buffer refreshes (~6-7 pages).
-    // Observe document.body so the observer survives element replacement.
-    const target = isKindleReader() ? document.body : element;
+    // Kindle/Percipio: observe document.body. Kindle replaces content elements
+    // on buffer refresh; Percipio swaps srcdoc iframes at the body level.
+    const target = (isKindleReader() || isPercipioReader()) ? document.body : element;
     autoModeObserver = new MutationObserver(() => {
+      if (!isContextValid()) { stopAutoCapture(); return; }
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(handleMutation, AUTO_CAPTURE_DEBOUNCE);
     });
@@ -398,7 +407,7 @@
     if (!autoModeActive) return;
     clearInterval(screenshotPollInterval);
     screenshotPollInterval = setInterval(async () => {
-      if (!autoModeActive) { clearInterval(screenshotPollInterval); return; }
+      if (!autoModeActive || !isContextValid()) { clearInterval(screenshotPollInterval); stopAutoCapture(); return; }
 
       let dataUrl;
       try {
@@ -459,7 +468,7 @@
     clearTimeout(pageTurnTimer);
     const timeout = isKindleReader() ? KINDLE_PAGE_TURN_TIMEOUT_MS : PAGE_TURN_TIMEOUT_MS;
     pageTurnTimer = setTimeout(async () => {
-      if (!autoModeActive) return;
+      if (!autoModeActive || !isContextValid()) { stopAutoCapture(); return; }
       // Before giving up, check if content changed (observer may have missed it during buffer reload)
       if (isKindleReader()) {
         const { element } = findContentElement();
@@ -487,6 +496,17 @@
 
   async function handleMutation() {
     if (!autoModeActive) return;
+    if (!isContextValid()) { stopAutoCapture(); return; }
+
+    // Percipio: use captureCurrentPage() which extracts via executeScript across
+    // cross-origin frames. Local DOM only contains nav chrome on Percipio pages.
+    if (isPercipioReader()) {
+      const pageData = await captureCurrentPage();
+      if (!pageData.text || pageData.text === lastCapturedContent) return;
+      clearTimeout(pageTurnTimer);
+      submitAutoPage(pageData);
+      return;
+    }
 
     const { element, method } = findContentElement();
     const text = elementToMarkdown(element);
@@ -507,14 +527,18 @@
       skipped_image_count: skipped,
     };
 
+    submitAutoPage(pageData);
+  }
+
+  function submitAutoPage(pageData) {
     chrome.runtime.sendMessage({ type: 'SUBMIT_PAGE', pageData }, response => {
       if (!autoModeActive) return;
+      if (!isContextValid()) { stopAutoCapture(); return; }
 
       if (response?.error) {
         autoRetryCount++;
         console.warn('[DocuFlux] Failed to submit page (attempt', autoRetryCount, '):', response.error);
         if (autoRetryCount < MAX_AUTO_RETRIES) {
-          // Retry: re-arm timer so handleMutation fires again shortly
           debounceTimer = setTimeout(handleMutation, 1500);
         } else {
           stopAutoCapture();
@@ -525,7 +549,7 @@
 
       autoRetryCount = 0;
       turnTimeoutRetries = 0;
-      lastCapturedContent = text;
+      lastCapturedContent = pageData.text;
       const pageCount = response?.page_count || 0;
       const maxPages = autoModeConfig.maxPages || 100;
 
