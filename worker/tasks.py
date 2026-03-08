@@ -1793,10 +1793,11 @@ def assemble_capture_session(session_id, job_id):
                         except Exception as e:
                             logging.warning(f"Failed to save image {img_filename}: {e}")
 
-                # Strip blob: and absolute URL image references — they won't resolve
-                # in the downloaded file (Kindle renders pages as blob: img elements)
+                # Strip blob: URL image references — they won't resolve in the
+                # downloaded file (Kindle renders pages as blob: img elements).
+                # Preserve https:// refs as they may be valid CDN image URLs.
                 import re as re_module
-                page_text = re_module.sub(r'!\[[^\]]*\]\((blob:[^)]+|https?://[^)]+)\)', '', page_text)
+                page_text = re_module.sub(r'!\[[^\]]*\]\(blob:[^)]+\)', '', page_text)
                 all_markdown_parts.append(page_text)
 
             front_matter = f"---\ntitle: {title}\nsource: {source_url}\npages: {len(pages)}\n---\n\n"

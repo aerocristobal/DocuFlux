@@ -849,7 +849,7 @@ def download_zip(job_id):
     is_encrypted = job_meta.get('encrypted') == 'true'
 
     def _generate_zip():
-        """Stream ZIP contents chunk-by-chunk to avoid loading entire archive in memory."""
+        """Build ZIP archive in memory and yield the complete result."""
         buf = io.BytesIO()
         temp_files = []
         try:
@@ -869,19 +869,9 @@ def download_zip(job_id):
                         else:
                             zf.write(abs_path, rel_path)
 
-                        # Flush completed entries to the stream
-                        buf.seek(0)
-                        chunk = buf.read()
-                        if chunk:
-                            yield chunk
-                        buf.seek(0)
-                        buf.truncate()
-
-            # Flush remaining data (central directory)
+            # Yield the complete archive after ZipFile is closed
             buf.seek(0)
-            remaining = buf.read()
-            if remaining:
-                yield remaining
+            yield buf.read()
         finally:
             for temp_file in temp_files:
                 if os.path.exists(temp_file):
