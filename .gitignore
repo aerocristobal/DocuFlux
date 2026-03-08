@@ -5,3 +5,13 @@ __pycache__/
 .DS_Store
 cloudflare/credentials.ini
 certs/*.pem
+.beads/
+.memory/
+.claude/skills/
+.playwright/
+.playwright-cli/
+.coverage
+build.log
+*.egg-info/
+.venv/
+node_modules/

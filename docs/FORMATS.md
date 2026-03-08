@@ -43,7 +43,7 @@ Most text-based formats (Markdown, HTML, LaTeX, RST, Wiki) can be converted to a
     - Standard PDF input is **not** supported by Pandoc directly with high quality.
     - We use **PDF (High Accuracy)** which converts PDF -> Markdown. From there, you can convert that Markdown to any other format in a second step (or if we implement chaining later). Currently, `pdf_marker` output is **Markdown**.
 - **Output**:
-    - We generate PDFs using the `pdflatex` engine. This requires the source document to be convertible to LaTeX first (which Pandoc handles).
+    - We generate PDFs using the `xelatex` engine (with CJK/Unicode support). This requires the source document to be convertible to LaTeX first (which Pandoc handles).
 
 ### Common Conversions
 - **Markdown -> PDF**: Excellent.
