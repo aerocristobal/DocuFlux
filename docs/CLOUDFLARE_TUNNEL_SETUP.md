@@ -362,4 +362,4 @@ After setting up HTTPS:
 
 For issues with:
 - **Cloudflare Tunnel**: Check [Cloudflare Community](https://community.cloudflare.com/)
-- **DocuFlux HTTPS**: Open issue at [GitHub](https://github.com/your-repo/pandoc-web/issues)
+- **DocuFlux HTTPS**: Open issue at [GitHub](https://github.com/aerocristobal/DocuFlux/issues)

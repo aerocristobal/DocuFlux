@@ -325,6 +325,7 @@ python3 -m py_compile web/app.py worker/tasks.py worker/warmup.py
 
 | Document | Description |
 |----------|-------------|
+| [Build Guide](BUILD.md) | GPU/CPU build profiles and deployment |
 | [API Reference](docs/API.md) | Full REST API documentation |
 | [OpenAPI Spec](docs/openapi.yaml) | Machine-readable API spec |
 | [Configuration](docs/CONFIGURATION.md) | All environment variables |
@@ -334,8 +335,9 @@ python3 -m py_compile web/app.py worker/tasks.py worker/warmup.py
 | [Cloudflare Tunnel Setup](docs/CLOUDFLARE_TUNNEL_SETUP.md) | HTTPS via Cloudflare |
 | [Certificate Management](docs/CERTIFICATE_MANAGEMENT.md) | TLS certificate setup |
 | [Alerting](docs/ALERTING.md) | Prometheus alerting rules |
-| [Security Fixes](docs/SECURITY_FIXES.md) | Security changelog |
+| [Security Fixes](docs/SECURITY_FIXES.md) | Historical security remediation stories |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
+| [CJK Implementation](docs/IMPLEMENTATION_SUMMARY_CJK.md) | CJK/Unicode support implementation record |
 
 ## License
 

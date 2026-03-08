@@ -1,5 +1,7 @@
 # Security Remediation Plan
 
+> **Historical:** This document records the security remediation stories from the original CodeQL scan (2026). All stories have been addressed. Kept for audit trail.
+
 This document outlines the user stories to remediate security vulnerabilities identified by GitHub CodeQL scans.
 
 ## Epic: Security Remediation from CodeQL Scans

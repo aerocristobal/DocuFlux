@@ -20,7 +20,7 @@ When a user selects **"PDF (High Accuracy)"** (`pdf_marker`) as the input format
 Since AI inference is heavy and can fail:
 1. **Retry Logic**: Failed conversions are retried up to 3 times automatically.
 2. **Timeouts**: AI jobs have a higher timeout (20 minutes) compared to standard jobs (10 minutes).
-3. **Error Handling**: Subprocess errors are captured and reported to the user with detailed error messages.
+3. **Error Handling**: Errors are captured and reported to the user with detailed error messages.
 
 ## Technical Details
 - **Models**: Uses `surya` for OCR/Layout. Weights are cached in `/app/models` inside the container.
