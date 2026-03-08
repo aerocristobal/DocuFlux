@@ -471,8 +471,8 @@ async function handleMessage(message, sender) {
           func: function () {
             var diag = {
               hostname: location.hostname,
-              isCdn2: location.hostname.includes('cdn2.percipio.com'),
-              isPercipio: location.hostname.includes('percipio.com'),
+              isCdn2: location.hostname === 'cdn2.percipio.com' || location.hostname.endsWith('.cdn2.percipio.com'),
+              isPercipio: location.hostname === 'percipio.com' || location.hostname.endsWith('.percipio.com'),
             };
 
             // Skip frames that aren't part of Percipio (e.g. ads)

@@ -68,7 +68,10 @@ async function findPercipioPage(browser) {
   for (const context of browser.contexts()) {
     for (const page of context.pages()) {
       const url = page.url();
-      if (url.includes('percipio.com')) return page;
+      try {
+        const hostname = new URL(url).hostname;
+        if (hostname === 'percipio.com' || hostname.endsWith('.percipio.com')) return page;
+      } catch { /* skip invalid URLs */ }
     }
   }
   return null;
