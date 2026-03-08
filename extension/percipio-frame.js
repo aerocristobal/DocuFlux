@@ -10,6 +10,10 @@
 (function () {
   'use strict';
 
+  // Guard against re-injection: if observers are already active, skip setup
+  if (window.__docufluxObserverActive) return;
+  window.__docufluxObserverActive = true;
+
   console.log('[DocuFlux-Percipio] Frame script loaded in', location.href.substring(0, 80));
 
   let lastText = '';

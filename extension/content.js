@@ -31,8 +31,8 @@
   ];
 
   const MIN_IMAGE_SIZE = 50;            // px — minimum image dimension to include
-  const AUTO_CAPTURE_DEBOUNCE = 800;    // ms — DOM mutation debounce
-  const PAGE_TURN_POLL_MS = 1500;       // ms — screenshot poll interval (canvas mode)
+  const AUTO_CAPTURE_DEBOUNCE = 1200;   // ms — DOM mutation debounce
+  const PAGE_TURN_POLL_MS = 3000;       // ms — screenshot poll interval (canvas mode)
   const PAGE_TURN_TIMEOUT_MS = 8000;    // ms — give up waiting for page turn
   const KINDLE_PAGE_TURN_TIMEOUT_MS = 30000; // ms — Kindle needs longer for buffer reloads
   const MAX_AUTO_RETRIES = 3;           // max submit retries before stopping auto-capture

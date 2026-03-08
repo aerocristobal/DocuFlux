@@ -431,7 +431,7 @@ chrome.runtime.onMessage.addListener((message) => {
 // ─── WebSocket Watching ───────────────────────────────────────────────────────
 
 function stopWatching() {
-  clearInterval(pollInterval);
+  clearTimeout(pollInterval); pollInterval = null;
   if (activeSocket) { activeSocket.disconnect(); activeSocket = null; }
 }
 
@@ -501,11 +501,24 @@ function handleJobUpdate(status) {
 
 let pollErrorCount = 0;
 const POLL_ERROR_LIMIT = 5;
+let pollBackoffMs = 2000;
+const POLL_BACKOFF_MAX = 15000;
+let lastPollStatus = null;
 
 function startPolling(jobId) {
   clearInterval(pollInterval);
   pollErrorCount = 0;
-  pollInterval = setInterval(() => pollJob(jobId), 2000);
+  pollBackoffMs = 2000;
+  lastPollStatus = null;
+  schedulePoll(jobId);
+}
+
+function schedulePoll(jobId) {
+  clearInterval(pollInterval);
+  pollInterval = setTimeout(async () => {
+    await pollJob(jobId);
+    if (pollInterval !== null) schedulePoll(jobId);
+  }, pollBackoffMs);
 }
 
 async function pollJob(jobId) {
@@ -515,8 +528,16 @@ async function pollJob(jobId) {
     const pct = parseInt(status.progress, 10) || 0;
     setProgress(pct, `Status: ${status.status}`);
 
+    // Reset backoff on status change, increase on same status
+    if (status.status !== lastPollStatus) {
+      pollBackoffMs = 2000;
+      lastPollStatus = status.status;
+    } else {
+      pollBackoffMs = Math.min(pollBackoffMs * 2, POLL_BACKOFF_MAX);
+    }
+
     if (status.status === 'SUCCESS' || status.status === 'success') {
-      clearInterval(pollInterval);
+      clearTimeout(pollInterval); pollInterval = null;
       const config = await bg('GET_CONFIG');
       const url = `${config.serverUrl.replace(/\/$/, '')}${status.download_url}`;
       els.downloadLink.href = url;
@@ -525,7 +546,7 @@ async function pollJob(jobId) {
         showStatus(`⚠ ${status.batch_warnings}`, 'error');
       }
     } else if (status.status === 'FAILURE' || status.status === 'failure') {
-      clearInterval(pollInterval);
+      clearTimeout(pollInterval); pollInterval = null;
       showStatus(`Assembly failed: ${status.error || status.result || 'Unknown error'}`, 'error');
       const session = await bg('GET_SESSION');
       if (session?.status === 'paused') {
@@ -538,9 +559,10 @@ async function pollJob(jobId) {
     }
   } catch (e) {
     pollErrorCount++;
+    pollBackoffMs = Math.min(pollBackoffMs * 2, POLL_BACKOFF_MAX);
     console.warn(`[DocuFlux] Poll error (${pollErrorCount}/${POLL_ERROR_LIMIT}):`, e.message);
     if (pollErrorCount >= POLL_ERROR_LIMIT) {
-      clearInterval(pollInterval);
+      clearTimeout(pollInterval); pollInterval = null;
       showStatus('Assembly status unavailable — job may have failed', 'error');
       setProgress(0, 'Could not reach server');
     }
