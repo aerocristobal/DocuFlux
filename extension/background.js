@@ -720,7 +720,7 @@ async function handleMessage(message, sender) {
             return diag;
           },
         });
-        // Return text + images from the best frame (prefer cdn2, then main, then about:srcdoc)
+        // Return text from the best frame, but aggregate images from ALL frames
         const allResults = results.map(function (r) { return r.result; }).filter(Boolean);
         const withText = allResults.filter(function (d) { return d.text && d.text.length > 50; });
         const best = withText.find(function (d) { return d.isCdn2; })
@@ -732,9 +732,24 @@ async function handleMessage(message, sender) {
           if (copy.images) { copy.imageCount = copy.images.length; delete copy.images; }
           return copy;
         });
-        // Fetch CORS-blocked images from background (has host_permissions)
-        let images = best?.images || [];
-        const toFetch = best?.needsFetch || [];
+        // Aggregate images and needsFetch from ALL frame results (not just "best"),
+        // because about:srcdoc frames can extract images from their own DOM even when
+        // the parent cdn2 frame can't access them due to sandbox restrictions.
+        let images = [];
+        const toFetch = [];
+        const seenB64 = new Set();
+        for (const result of allResults) {
+          for (const img of (result.images || [])) {
+            if (img.b64 && !seenB64.has(img.b64)) {
+              seenB64.add(img.b64);
+              img.filename = 'percipio_img_' + images.length + '.png';
+              images.push(img);
+            }
+          }
+          for (const item of (result.needsFetch || [])) {
+            toFetch.push(item);
+          }
+        }
         if (toFetch.length > 0) {
           const fetched = await Promise.all(toFetch.map(async (item) => {
             try {

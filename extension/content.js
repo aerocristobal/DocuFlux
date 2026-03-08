@@ -197,7 +197,13 @@
           });
         });
         console.log('[DocuFlux] GET_PERCIPIO_CONTENT cache:', cached?.text?.length || 0, 'chars');
-        if (cached?.text?.length > 50) percipioText = cached.text;
+        if (cached?.text?.length > 50) {
+          percipioText = cached.text;
+          // Cache may have images with b64 data from percipio-frame.js
+          if (cached.images?.length && percipioImages.length === 0) {
+            percipioImages = cached.images.filter(img => img.b64);
+          }
+        }
       }
 
       if (percipioText) {
