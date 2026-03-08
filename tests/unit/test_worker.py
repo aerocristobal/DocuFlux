@@ -1226,3 +1226,41 @@ class TestConvertWithHybrid:
             tasks.convert_with_hybrid(
                 job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown'
             )
+
+
+# ============================================================
+# Performance & Resource Optimization config tests
+# ============================================================
+
+class TestCeleryConfig:
+    """Verify Celery and Redis config values for performance optimization."""
+
+    def test_celery_result_expires_configured(self):
+        """Verify result_expires is set to prevent Redis memory leak."""
+        import tasks
+        assert tasks.celery.conf.result_expires == 3600
+
+    def test_celery_max_tasks_per_child_configured(self):
+        """Verify worker recycling is enabled to reclaim VRAM."""
+        import tasks
+        assert tasks.celery.conf.worker_max_tasks_per_child == 50
+
+    def test_redis_client_has_socket_timeouts(self):
+        """Verify Redis connections have timeouts to prevent hanging."""
+        import tasks
+        pool = tasks.redis_client.connection_pool
+        kwargs = pool.connection_kwargs
+        assert kwargs.get('socket_connect_timeout') == 5
+        assert kwargs.get('socket_timeout') == 10
+
+    def test_cleanup_schedule_interval(self):
+        """Cleanup should not run more often than every 30 minutes."""
+        import tasks
+        schedule = tasks.celery.conf.beat_schedule['cleanup-every-5-minutes']
+        assert '*/30' in str(schedule['schedule'])
+
+    def test_metrics_schedule_interval(self):
+        """Metrics should not run more often than every 120 seconds."""
+        import tasks
+        schedule = tasks.celery.conf.beat_schedule['update-queue-metrics']
+        assert schedule['schedule'] >= 120.0

@@ -315,42 +315,52 @@ async function getSessionServerStatus() {
 
 // ─── Outbox Drain (run on startup/wake) ──────────────────────────────────────
 
+const DRAIN_TIMEOUT_MS = 30000;
+
 async function drainOutbox() {
-  const result = await storageGet('activeSession');
-  const activeSession = result.activeSession;
-  if (!activeSession?.sessionId) return;
+  const drainWork = async () => {
+    const result = await storageGet('activeSession');
+    const activeSession = result.activeSession;
+    if (!activeSession?.sessionId) return;
 
-  const pending = await getPendingForSession(activeSession.sessionId).catch(() => []);
-  if (!pending.length) return;
+    const pending = await getPendingForSession(activeSession.sessionId).catch(() => []);
+    if (!pending.length) return;
 
-  // Verify session is still active on server before draining
-  let serverStatus;
-  try {
-    serverStatus = await apiGet(`/api/v1/capture/sessions/${activeSession.sessionId}/status`);
-  } catch (e) {
-    console.warn('[DocuFlux] Cannot drain outbox: session status check failed:', e.message);
-    return;
-  }
-
-  if (serverStatus?.status !== 'active') {
-    await clearOutboxForSession(activeSession.sessionId).catch(() => {});
-    return;
-  }
-
-  console.log(`[DocuFlux] Draining ${pending.length} pending page(s) from outbox`);
-  for (const item of pending) {
-    if ((item.retryCount || 0) > OUTBOX_MAX_RETRIES) {
-      await removeFromOutbox(item.sequence).catch(() => {});
-      continue;
-    }
+    // Verify session is still active on server before draining
+    let serverStatus;
     try {
-      await submitPageWithSequence(item.pageData, item.sequence);
-      await removeFromOutbox(item.sequence);
+      serverStatus = await apiGet(`/api/v1/capture/sessions/${activeSession.sessionId}/status`);
     } catch (e) {
-      console.warn('[DocuFlux] Outbox drain failed for seq', item.sequence, ':', e.message);
-      await incrementOutboxRetry(item.sequence).catch(() => {});
+      console.warn('[DocuFlux] Cannot drain outbox: session status check failed:', e.message);
+      return;
     }
-  }
+
+    if (serverStatus?.status !== 'active') {
+      await clearOutboxForSession(activeSession.sessionId).catch(() => {});
+      return;
+    }
+
+    console.log(`[DocuFlux] Draining ${pending.length} pending page(s) from outbox`);
+    for (const item of pending) {
+      if ((item.retryCount || 0) > OUTBOX_MAX_RETRIES) {
+        await removeFromOutbox(item.sequence).catch(() => {});
+        continue;
+      }
+      try {
+        await submitPageWithSequence(item.pageData, item.sequence);
+        await removeFromOutbox(item.sequence);
+      } catch (e) {
+        console.warn('[DocuFlux] Outbox drain failed for seq', item.sequence, ':', e.message);
+        await incrementOutboxRetry(item.sequence).catch(() => {});
+      }
+    }
+  };
+
+  // Race against a timeout to prevent service worker from hanging indefinitely
+  await Promise.race([
+    drainWork(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Drain timeout')), DRAIN_TIMEOUT_MS)),
+  ]).catch(e => console.warn('[DocuFlux] Outbox drain aborted:', e.message));
 }
 
 // ─── Auto-capture coordination ────────────────────────────────────────────────

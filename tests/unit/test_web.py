@@ -520,6 +520,35 @@ class TestHealthEndpoints:
         data = response.json
         assert data['components']['redis']['status'] == 'down'
 
+    @patch('app.celery')
+    @patch('app.shutil')
+    @patch('app.redis_client')
+    def test_health_check_does_not_hang_when_worker_down(self, mock_redis, mock_shutil, mock_celery, client):
+        """Health check should return within timeout even if worker is unreachable."""
+        mock_shutil.disk_usage.return_value = (100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
+        mock_redis.ping.return_value = True
+        mock_redis.get.return_value = None
+        mock_redis.hgetall.return_value = {}
+        # Simulate worker not responding — inspect returns None
+        mock_celery.control.inspect.return_value.active.return_value = None
+        response = client.get('/api/health')
+        assert response.status_code == 200
+        # Verify inspect was called with timeout
+        mock_celery.control.inspect.assert_called_with(timeout=3)
+
+    @patch('app.celery')
+    @patch('app.shutil')
+    @patch('app.redis_client')
+    def test_health_check_handles_inspect_exception(self, mock_redis, mock_shutil, mock_celery, client):
+        """Health check should not crash if Celery inspect raises."""
+        mock_shutil.disk_usage.return_value = (100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
+        mock_redis.ping.return_value = True
+        mock_redis.get.return_value = None
+        mock_redis.hgetall.return_value = {}
+        mock_celery.control.inspect.return_value.active.side_effect = Exception("timeout")
+        response = client.get('/api/health')
+        assert response.status_code in (200, 503)  # degraded but not 500
+
 
 class TestApiV1Status:
 

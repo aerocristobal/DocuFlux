@@ -11,7 +11,7 @@ import logging
 import zipfile
 import io
 import json
-from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file, g
+from flask import Flask, render_template, request, send_from_directory, jsonify, session, send_file, g, Response
 from urllib.parse import urlparse
 try:
     from prometheus_flask_exporter import PrometheusMetrics
@@ -26,6 +26,7 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from flask_socketio import SocketIO
 from flask_cors import CORS
+from flask_compress import Compress
 from datetime import datetime
 
 from config import settings
@@ -111,6 +112,7 @@ CORS(app, resources={r"/api/v1/capture/*": {
     "methods": ["GET", "POST", "OPTIONS"],
     "allow_headers": ["Content-Type", "X-Client-ID"]
 }})
+Compress(app)
 if _has_prometheus:
     metrics = PrometheusMetrics(app)
     metrics.info('app_info', 'DocuFlux web service', version='1.0')
@@ -846,51 +848,59 @@ def download_zip(job_id):
     job_meta = redis_client.hgetall(f"job:{job_id}")
     is_encrypted = job_meta.get('encrypted') == 'true'
 
-    memory_file = io.BytesIO()
-    temp_files = []  # Track temporary decrypted files for cleanup
+    def _generate_zip():
+        """Stream ZIP contents chunk-by-chunk to avoid loading entire archive in memory."""
+        buf = io.BytesIO()
+        temp_files = []
+        try:
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for root, dirs, files in os.walk(job_dir):
+                    for file in files:
+                        abs_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(abs_path, job_dir)
 
-    try:
-        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for root, dirs, files in os.walk(job_dir):
-                for file in files:
-                    abs_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(abs_path, job_dir)
+                        if is_encrypted:
+                            decrypted_path = decrypt_file_to_temp(abs_path, job_id)
+                            if decrypted_path is None:
+                                logging.error(f"Failed to decrypt {abs_path} for zip download")
+                                continue
+                            zf.write(decrypted_path, rel_path)
+                            temp_files.append(decrypted_path)
+                        else:
+                            zf.write(abs_path, rel_path)
 
-                    if is_encrypted:
-                        # Decrypt file to temporary location
-                        decrypted_path = decrypt_file_to_temp(abs_path, job_id)
-                        if decrypted_path is None:
-                            logging.error(f"Failed to decrypt {abs_path} for zip download")
-                            continue
+                        # Flush completed entries to the stream
+                        buf.seek(0)
+                        chunk = buf.read()
+                        if chunk:
+                            yield chunk
+                        buf.seek(0)
+                        buf.truncate()
 
-                        # Add decrypted file to zip with original relative path
-                        zf.write(decrypted_path, rel_path)
-                        temp_files.append(decrypted_path)
-                    else:
-                        # Add file directly to zip
-                        zf.write(abs_path, rel_path)
+            # Flush remaining data (central directory)
+            buf.seek(0)
+            remaining = buf.read()
+            if remaining:
+                yield remaining
+        finally:
+            for temp_file in temp_files:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
 
-        memory_file.seek(0)
+    # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
+    current_time = str(time.time())
+    update_job_metadata(job_id, {
+        'downloaded_at': str(time.time()),
+        'last_viewed': current_time
+    })
 
-        # Epic 21.6: Track both downloaded_at (first download) and last_viewed (latest access)
-        current_time = str(time.time())
-        update_job_metadata(job_id, {
-            'downloaded_at': str(time.time()),
-            'last_viewed': current_time
-        })
-
-        return send_file(
-            memory_file,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name=f"conversion_{job_id}.zip"
-        )
-
-    finally:
-        # Clean up temporary decrypted files
-        for temp_file in temp_files:
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+    return Response(
+        _generate_zip(),
+        mimetype='application/zip',
+        headers={
+            'Content-Disposition': f'attachment; filename="conversion_{job_id}.zip"',
+        }
+    )
 
 
 # Epic 21.10: Enhanced Health Check Endpoints
@@ -1010,7 +1020,7 @@ def health_detailed():
     # Check Celery worker availability
     try:
         # Check if workers are available
-        inspect = celery.control.inspect()
+        inspect = celery.control.inspect(timeout=3)
         active_workers = inspect.active()
 
         if active_workers and len(active_workers) > 0:

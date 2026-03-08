@@ -63,11 +63,13 @@ celery.conf.update(
     task_serializer='json',
     result_serializer='json',
     accept_content=['json'],
+    result_expires=3600,              # Auto-expire results after 1 hour
+    worker_max_tasks_per_child=50,    # Restart worker process every 50 tasks to reclaim VRAM
 )
 
 # Redis metadata client (DB 1) — supports TLS via rediss:// URL + cert env vars
 _redis_url = app_settings.redis_metadata_url
-_redis_kwargs = {'max_connections': 20, 'decode_responses': True}
+_redis_kwargs = {'max_connections': 20, 'decode_responses': True, 'socket_connect_timeout': 5, 'socket_timeout': 10}
 if _redis_url.startswith('rediss://'):
     _redis_kwargs['ssl'] = True
     _redis_kwargs['ssl_cert_reqs'] = 'required'
@@ -1867,10 +1869,10 @@ def assemble_capture_session(session_id, job_id):
 celery.conf.beat_schedule = {
     'cleanup-every-5-minutes': {
         'task': 'tasks.cleanup_old_files',
-        'schedule': crontab(minute='*/5'),  # Every 5 minutes
+        'schedule': crontab(minute='*/30'),  # Every 30 minutes
     },
     'update-queue-metrics': {
         'task': 'tasks.update_metrics',
-        'schedule': 30.0,  # Every 30 seconds
+        'schedule': 120.0,  # Every 120 seconds
     },
 }
