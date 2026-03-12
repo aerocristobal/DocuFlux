@@ -1264,3 +1264,76 @@ class TestCeleryConfig:
         import tasks
         schedule = tasks.celery.conf.beat_schedule['update-queue-metrics']
         assert schedule['schedule'] >= 120.0
+
+
+# ============================================================================
+# build_pandoc_cmd Tests
+# ============================================================================
+
+class TestBuildPandocCmd:
+    """Tests for the build_pandoc_cmd helper function."""
+
+    def test_pdf_defaults_applied_without_options(self):
+        """PDF conversion includes CJK defaults when no options provided."""
+        import tasks
+        cmd = tasks.build_pandoc_cmd('markdown', 'pdf', '/in/f.md', '/out/f.pdf')
+        cmd_str = ' '.join(cmd)
+        assert '--pdf-engine=xelatex' in cmd_str
+        assert 'mainfont=Noto Sans CJK SC' in cmd_str
+        assert 'CJKmainfont=Noto Sans CJK SC' in cmd_str
+        assert 'monofont=DejaVu Sans Mono' in cmd_str
+        assert 'geometry=margin=1in' in cmd_str
+
+    def test_non_pdf_no_defaults(self):
+        """Non-PDF conversion has no default options."""
+        import tasks
+        cmd = tasks.build_pandoc_cmd('markdown', 'html', '/in/f.md', '/out/f.html')
+        assert cmd == ['pandoc', '-f', 'markdown', '-t', 'html', '/in/f.md', '-o', '/out/f.html']
+
+    def test_user_options_merge_with_defaults(self):
+        """User variable overrides one default; others preserved."""
+        import tasks
+        opts = {'variables': {'fontsize': '12pt', 'mainfont': 'Arial'}}
+        cmd = tasks.build_pandoc_cmd('markdown', 'pdf', '/in/f.md', '/out/f.pdf', opts)
+        cmd_str = ' '.join(cmd)
+        # User override wins
+        assert 'mainfont=Arial' in cmd_str
+        # Other defaults preserved
+        assert 'CJKmainfont=Noto Sans CJK SC' in cmd_str
+        assert 'monofont=DejaVu Sans Mono' in cmd_str
+        # New user value present
+        assert 'fontsize=12pt' in cmd_str
+
+    def test_user_pdf_engine_overrides_default(self):
+        """User can override the default pdf_engine."""
+        import tasks
+        opts = {'pdf_engine': 'lualatex'}
+        cmd = tasks.build_pandoc_cmd('markdown', 'pdf', '/in/f.md', '/out/f.pdf', opts)
+        assert '--pdf-engine=lualatex' in cmd
+        assert '--pdf-engine=xelatex' not in cmd
+
+    def test_boolean_options_produce_flags(self):
+        """Boolean True options produce flags, False are omitted."""
+        import tasks
+        opts = {'toc': True, 'number_sections': True, 'listings': False}
+        cmd = tasks.build_pandoc_cmd('markdown', 'html', '/in/f.md', '/out/f.html', opts)
+        assert '--toc' in cmd
+        assert '--number-sections' in cmd
+        assert '--listings' not in cmd
+
+    def test_int_options_produce_value_flags(self):
+        """Integer options produce --flag=value."""
+        import tasks
+        opts = {'dpi': 150, 'toc_depth': 3}
+        cmd = tasks.build_pandoc_cmd('markdown', 'html', '/in/f.md', '/out/f.html', opts)
+        assert '--dpi=150' in cmd
+        assert '--toc-depth=3' in cmd
+
+    def test_metadata_dict_options(self):
+        """Metadata dict produces --metadata key=value pairs."""
+        import tasks
+        opts = {'metadata': {'title': 'My Doc', 'author': 'Jane'}}
+        cmd = tasks.build_pandoc_cmd('markdown', 'html', '/in/f.md', '/out/f.html', opts)
+        assert '--metadata' in cmd
+        title_idx = cmd.index('--metadata')
+        assert cmd[title_idx + 1] == 'title=My Doc'

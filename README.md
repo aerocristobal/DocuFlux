@@ -125,6 +125,13 @@ curl -X POST http://localhost:5000/api/v1/convert \
   -F "to_format=markdown" \
   -F "engine=pdf_hybrid"
 
+# Convert with advanced Pandoc options (TOC, custom font size)
+curl -X POST http://localhost:5000/api/v1/convert \
+  -H "X-API-Key: dk_abc123..." \
+  -F "file=@report.md" \
+  -F "to_format=pdf" \
+  -F 'pandoc_options={"toc": true, "variables": {"fontsize": "11pt"}}'
+
 # → {"job_id": "550e8400-...", "status": "queued", "status_url": "/api/v1/status/550e8400-..."}
 
 # Poll status (no key required)
@@ -144,6 +151,7 @@ curl -OJ http://localhost:5000/api/v1/download/550e8400-e29b-41d4-a716-446655440
 | `engine` | No | `pandoc`, `marker`, or `pdf_hybrid` |
 | `force_ocr` | No | Enable OCR in Marker (default: false) |
 | `use_llm` | No | Use LLM assist in Marker (default: false) |
+| `pandoc_options` | No | JSON object of Pandoc options (engine=pandoc only, see [API docs](docs/API.md#pandoc-options)) |
 
 ### All Endpoints
 
