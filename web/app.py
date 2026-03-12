@@ -486,6 +486,101 @@ def detect_format_from_extension(ext):
             return fmt['key']
     return None
 
+
+# --- Pandoc options validation (mirrors worker PANDOC_OPTIONS_SCHEMA) ---
+import re as _re
+_SHELL_METACHAR_RE = _re.compile(r'[;&|$`\\<>(){}\n\r]')
+_MAX_VALUE_LEN = 200
+
+PANDOC_OPTIONS_SCHEMA = {
+    'pdf_engine': {'type': 'enum', 'values': ['xelatex', 'lualatex', 'pdflatex', 'tectonic', 'wkhtmltopdf']},
+    'toc': {'type': 'bool'},
+    'toc_depth': {'type': 'int', 'min': 1, 'max': 6},
+    'number_sections': {'type': 'bool'},
+    'highlight_style': {'type': 'enum', 'values': ['pygments', 'tango', 'espresso', 'zenburn', 'kate', 'monochrome', 'breezedark', 'haddock']},
+    'listings': {'type': 'bool'},
+    'dpi': {'type': 'int', 'min': 72, 'max': 600},
+    'columns': {'type': 'int', 'min': 1, 'max': 200},
+    'standalone': {'type': 'bool'},
+    'wrap': {'type': 'enum', 'values': ['auto', 'none', 'preserve']},
+    'strip_comments': {'type': 'bool'},
+    'shift_heading_level_by': {'type': 'int', 'min': -5, 'max': 5},
+    'variables': {'type': 'dict', 'allowed_keys': ['mainfont', 'CJKmainfont', 'monofont', 'fontsize', 'geometry', 'linestretch', 'margin-left', 'margin-right', 'margin-top', 'margin-bottom', 'papersize', 'documentclass']},
+    'metadata': {'type': 'dict', 'allowed_keys': ['title', 'author', 'date', 'lang', 'subject', 'description']},
+}
+
+
+def validate_pandoc_options(raw_opts):
+    """Validate a pandoc_options dict against the whitelist.
+
+    Returns (cleaned_dict, errors_list).  If errors is non-empty, cleaned
+    should be discarded.
+    """
+    errors = []
+    cleaned = {}
+    for key, val in raw_opts.items():
+        if key not in PANDOC_OPTIONS_SCHEMA:
+            errors.append(f"Unknown option: {key}")
+            continue
+        schema = PANDOC_OPTIONS_SCHEMA[key]
+        t = schema['type']
+
+        if t == 'bool':
+            if not isinstance(val, bool):
+                errors.append(f"{key}: must be a boolean")
+            else:
+                cleaned[key] = val
+
+        elif t == 'enum':
+            if val not in schema['values']:
+                errors.append(f"{key}: must be one of {schema['values']}")
+            else:
+                cleaned[key] = val
+
+        elif t == 'int':
+            if not isinstance(val, int) or isinstance(val, bool):
+                errors.append(f"{key}: must be an integer")
+            elif val < schema['min'] or val > schema['max']:
+                errors.append(f"{key}: must be between {schema['min']} and {schema['max']}")
+            else:
+                cleaned[key] = val
+
+        elif t == 'dict':
+            if not isinstance(val, dict):
+                errors.append(f"{key}: must be an object")
+                continue
+            allowed = set(schema['allowed_keys'])
+            sub = {}
+            for dk, dv in val.items():
+                if dk not in allowed:
+                    errors.append(f"{key}.{dk}: not an allowed key (allowed: {', '.join(sorted(allowed))})")
+                    continue
+                sv = str(dv)
+                if len(sv) > _MAX_VALUE_LEN:
+                    errors.append(f"{key}.{dk}: value too long (max {_MAX_VALUE_LEN} chars)")
+                elif _SHELL_METACHAR_RE.search(sv):
+                    errors.append(f"{key}.{dk}: value contains disallowed characters")
+                else:
+                    sub[dk] = sv
+            if sub:
+                cleaned[key] = sub
+
+    return cleaned, errors
+
+
+@app.route('/api')
+@csrf.exempt
+def api_agent_docs():
+    """Machine-readable API reference for AI coding agents."""
+    base_url = request.host_url.rstrip('/')
+    formats_in = [f"{f['key']} ({f['extension']})" for f in FORMATS if f['direction'] in ('Both', 'Input Only')]
+    formats_out = [f"{f['key']} ({f['extension']})" for f in FORMATS if f['direction'] in ('Both', 'Output Only')]
+    return Response(
+        render_template('api_agent_docs.md', base_url=base_url, formats_in=formats_in, formats_out=formats_out),
+        mimetype='text/plain; charset=utf-8'
+    )
+
+
 @app.route('/')
 def index():
     if 'session_id' not in session:
@@ -1094,6 +1189,23 @@ def api_v1_convert():
     if engine not in ['pandoc', 'marker']:
         return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc" or "marker"'}), 422
 
+    # Parse and validate pandoc_options
+    pandoc_options = None
+    raw_pandoc = request.form.get('pandoc_options')
+    if raw_pandoc:
+        try:
+            pandoc_options = json.loads(raw_pandoc)
+        except (json.JSONDecodeError, ValueError):
+            return jsonify({'error': 'pandoc_options must be valid JSON'}), 400
+        if not isinstance(pandoc_options, dict):
+            return jsonify({'error': 'pandoc_options must be a JSON object'}), 400
+        if engine != 'pandoc':
+            return jsonify({'error': 'pandoc_options only valid with engine=pandoc'}), 422
+        cleaned, errors = validate_pandoc_options(pandoc_options)
+        if errors:
+            return jsonify({'error': 'Invalid pandoc_options', 'details': errors}), 422
+        pandoc_options = cleaned if cleaned else None
+
     # Auto-detect from_format if not provided
     if not from_format:
         ext = os.path.splitext(file.filename)[1].lower()
@@ -1174,9 +1286,13 @@ def api_v1_convert():
             queue=queue_name
         )
     else:
+        task_kwargs = {}
+        if pandoc_options:
+            task_kwargs['pandoc_options'] = pandoc_options
         celery.send_task(
             'tasks.convert_document',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format],
+            kwargs=task_kwargs,
             queue=queue_name
         )
 

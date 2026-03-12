@@ -661,3 +661,118 @@ class TestApiV1ExtractMetadata:
                 headers=api_headers,
             )
         assert r.status_code == 404
+
+
+# ============================================================================
+# POST /api/v1/convert — pandoc_options Tests
+# ============================================================================
+
+class TestApiV1PandocOptions:
+    """Tests for the pandoc_options parameter on /api/v1/convert."""
+
+    def test_valid_pandoc_options_passed_to_celery(self, client, mock_redis, mock_celery, mock_disk_space, api_headers):
+        """Valid pandoc_options are forwarded to Celery kwargs."""
+        mock_redis.hset = Mock()
+        mock_redis.hgetall = Mock(return_value={})
+        mock_celery.send_task = Mock()
+
+        import json
+        opts = json.dumps({'toc': True, 'variables': {'fontsize': '11pt'}})
+        data = {
+            'file': (io.BytesIO(b"# Test"), 'test.md'),
+            'to_format': 'pdf',
+            'pandoc_options': opts,
+        }
+
+        r = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+        assert r.status_code == 202
+
+        call_args = mock_celery.send_task.call_args
+        assert call_args[1]['kwargs']['pandoc_options'] == {'toc': True, 'variables': {'fontsize': '11pt'}}
+
+    def test_invalid_json_returns_400(self, client, mock_disk_space, api_headers):
+        """Non-JSON pandoc_options returns 400."""
+        data = {
+            'file': (io.BytesIO(b"# Test"), 'test.md'),
+            'to_format': 'pdf',
+            'pandoc_options': 'not json{',
+        }
+
+        r = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+        assert r.status_code == 400
+        assert 'JSON' in r.get_json()['error']
+
+    def test_unknown_option_key_returns_422(self, client, mock_disk_space, api_headers):
+        """Unknown option key returns 422 with details."""
+        import json
+        data = {
+            'file': (io.BytesIO(b"# Test"), 'test.md'),
+            'to_format': 'pdf',
+            'pandoc_options': json.dumps({'lua_filter': '/etc/passwd'}),
+        }
+
+        r = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+        assert r.status_code == 422
+        body = r.get_json()
+        assert 'details' in body
+        assert any('Unknown' in d for d in body['details'])
+
+    def test_out_of_range_int_returns_422(self, client, mock_disk_space, api_headers):
+        """Out-of-range integer returns 422."""
+        import json
+        data = {
+            'file': (io.BytesIO(b"# Test"), 'test.md'),
+            'to_format': 'pdf',
+            'pandoc_options': json.dumps({'dpi': 9999}),
+        }
+
+        r = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+        assert r.status_code == 422
+        assert any('between' in d for d in r.get_json()['details'])
+
+    def test_pandoc_options_with_marker_engine_returns_422(self, client, mock_redis, mock_disk_space, api_headers):
+        """pandoc_options with engine=marker returns 422."""
+        import json
+        mock_redis.hset = Mock()
+        mock_redis.hgetall = Mock(return_value={})
+
+        data = {
+            'file': (io.BytesIO(b"PDF content"), 'test.pdf'),
+            'to_format': 'markdown',
+            'engine': 'marker',
+            'pandoc_options': json.dumps({'toc': True}),
+        }
+
+        r = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+        assert r.status_code == 422
+        assert 'pandoc' in r.get_json()['error'].lower()
+
+    def test_shell_metacharacters_in_variable_returns_422(self, client, mock_disk_space, api_headers):
+        """Shell metacharacters in variable values are rejected."""
+        import json
+        data = {
+            'file': (io.BytesIO(b"# Test"), 'test.md'),
+            'to_format': 'pdf',
+            'pandoc_options': json.dumps({'variables': {'mainfont': 'foo;rm -rf /'}}),
+        }
+
+        r = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+        assert r.status_code == 422
+        assert any('disallowed' in d for d in r.get_json()['details'])
+
+    def test_no_pandoc_options_still_works(self, client, mock_redis, mock_celery, mock_disk_space, api_headers):
+        """Conversion without pandoc_options still dispatches normally."""
+        mock_redis.hset = Mock()
+        mock_redis.hgetall = Mock(return_value={})
+        mock_celery.send_task = Mock()
+
+        data = {
+            'file': (io.BytesIO(b"# Test"), 'test.md'),
+            'to_format': 'pdf',
+        }
+
+        r = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+        assert r.status_code == 202
+        # kwargs should be empty (no pandoc_options key)
+        call_kwargs = mock_celery.send_task.call_args[1].get('kwargs', {})
+        assert 'pandoc_options' not in call_kwargs

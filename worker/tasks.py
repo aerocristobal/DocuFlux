@@ -14,6 +14,8 @@ from werkzeug.utils import secure_filename
 from warmup import get_slm_model  # Epic 26: SLM model getter
 from PIL import Image  # Epic 28: For image processing in analyze_screenshot_layout
 
+import re
+
 from config import settings
 from secrets_manager import load_all_secrets
 from encryption import EncryptionService
@@ -157,6 +159,72 @@ def call_mcp_server(action, args):
         logging.error(f"Error calling MCP server for action '{action}': {e}")
         raise
 
+# --- Pandoc options whitelist ---
+_SHELL_METACHAR_RE = re.compile(r'[;&|$`\\<>(){}\n\r]')
+_MAX_VALUE_LEN = 200
+
+PANDOC_OPTIONS_SCHEMA = {
+    'pdf_engine': {'type': 'enum', 'flag': '--pdf-engine', 'values': ['xelatex', 'lualatex', 'pdflatex', 'tectonic', 'wkhtmltopdf']},
+    'toc': {'type': 'bool', 'flag': '--toc'},
+    'toc_depth': {'type': 'int', 'flag': '--toc-depth', 'min': 1, 'max': 6},
+    'number_sections': {'type': 'bool', 'flag': '--number-sections'},
+    'highlight_style': {'type': 'enum', 'flag': '--highlight-style', 'values': ['pygments', 'tango', 'espresso', 'zenburn', 'kate', 'monochrome', 'breezedark', 'haddock']},
+    'listings': {'type': 'bool', 'flag': '--listings'},
+    'dpi': {'type': 'int', 'flag': '--dpi', 'min': 72, 'max': 600},
+    'columns': {'type': 'int', 'flag': '--columns', 'min': 1, 'max': 200},
+    'standalone': {'type': 'bool', 'flag': '--standalone'},
+    'wrap': {'type': 'enum', 'flag': '--wrap', 'values': ['auto', 'none', 'preserve']},
+    'strip_comments': {'type': 'bool', 'flag': '--strip-comments'},
+    'shift_heading_level_by': {'type': 'int', 'flag': '--shift-heading-level-by', 'min': -5, 'max': 5},
+    'variables': {'type': 'dict', 'flag': '--variable', 'allowed_keys': ['mainfont', 'CJKmainfont', 'monofont', 'fontsize', 'geometry', 'linestretch', 'margin-left', 'margin-right', 'margin-top', 'margin-bottom', 'papersize', 'documentclass']},
+    'metadata': {'type': 'dict', 'flag': '--metadata', 'allowed_keys': ['title', 'author', 'date', 'lang', 'subject', 'description']},
+}
+
+PDF_DEFAULTS = {
+    'pdf_engine': 'xelatex',
+    'variables': {
+        'mainfont': 'Noto Sans CJK SC',
+        'CJKmainfont': 'Noto Sans CJK SC',
+        'monofont': 'DejaVu Sans Mono',
+        'geometry': 'margin=1in',
+    },
+}
+
+
+def build_pandoc_cmd(from_format, to_format, input_path, output_path, pandoc_options=None):
+    """Build a Pandoc command list with validated options merged over PDF defaults."""
+    cmd = ['pandoc', '-f', from_format, '-t', to_format if to_format != 'pdf' else 'pdf',
+           input_path, '-o', output_path]
+
+    # Start with PDF defaults when targeting PDF
+    if to_format == 'pdf':
+        effective = {k: (dict(v) if isinstance(v, dict) else v) for k, v in PDF_DEFAULTS.items()}
+    else:
+        effective = {}
+
+    # Overlay user options (user values win; dicts are merged)
+    if pandoc_options:
+        for k, v in pandoc_options.items():
+            if k in ('variables', 'metadata') and k in effective:
+                effective[k] = {**effective[k], **v}
+            else:
+                effective[k] = v
+
+    # Convert effective options to command-line flags
+    for key, val in effective.items():
+        schema = PANDOC_OPTIONS_SCHEMA[key]
+        if schema['type'] == 'bool':
+            if val:
+                cmd.append(schema['flag'])
+        elif schema['type'] in ('enum', 'int'):
+            cmd.append(f"{schema['flag']}={val}")
+        elif schema['type'] == 'dict':
+            for dk, dv in val.items():
+                cmd.extend([schema['flag'], f'{dk}={dv}'])
+
+    return cmd
+
+
 @celery.task(
     name='tasks.convert_document',
     time_limit=600,           # Hard limit: 10 minutes
@@ -164,7 +232,7 @@ def call_mcp_server(action, args):
     acks_late=True,           # Re-queue if worker dies
     reject_on_worker_lost=True
 )
-def convert_document(job_id, input_filename, output_filename, from_format, to_format):
+def convert_document(job_id, input_filename, output_filename, from_format, to_format, pandoc_options=None):
     """Convert a document using Pandoc.
 
     Args:
@@ -173,6 +241,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         output_filename: Desired name for the converted output file.
         from_format: Pandoc source format key (e.g. 'docx', 'markdown').
         to_format: Pandoc target format key (e.g. 'html', 'pdf').
+        pandoc_options: Optional dict of validated Pandoc options (see PANDOC_OPTIONS_SCHEMA).
 
     Side Effects:
         Updates Redis job metadata with progress and final status.
@@ -227,23 +296,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     update_job_metadata(job_id, {'progress': '20'})
 
-    cmd = [
-        'pandoc',
-        '-f', from_format,
-        '-t', to_format if to_format != 'pdf' else 'pdf',
-        input_path,
-        '-o', output_path
-    ]
-
-    # Add PDF-specific options for CJK support
-    if to_format == 'pdf':
-        cmd.extend([
-            '--pdf-engine=xelatex',
-            '--variable', 'mainfont=Noto Sans CJK SC',
-            '--variable', 'CJKmainfont=Noto Sans CJK SC',
-            '--variable', 'monofont=DejaVu Sans Mono',
-            '--variable', 'geometry:margin=1in',
-        ])
+    cmd = build_pandoc_cmd(from_format, to_format, input_path, output_path, pandoc_options)
 
     try:
         process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)

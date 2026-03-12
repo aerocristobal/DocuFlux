@@ -12,6 +12,7 @@ This document provides comprehensive documentation for the DocuFlux REST API v1,
   - [GET /api/v1/status/{job_id}](#get-apiv1statusjob_id)
   - [GET /api/v1/download/{job_id}](#get-apiv1downloadjob_id)
   - [GET /api/v1/formats](#get-apiv1formats)
+  - [Pandoc Options](#pandoc-options)
 - [Error Handling](#error-handling)
 - [Examples](#examples)
 
@@ -92,6 +93,7 @@ Submit a document conversion job.
 | `engine` | String | No | Conversion engine: "pandoc" or "marker" (default: "pandoc") |
 | `force_ocr` | Boolean | No | Force OCR for Marker engine (default: false) |
 | `use_llm` | Boolean | No | Use LLM for Marker engine (default: false) |
+| `pandoc_options` | JSON | No | JSON object of advanced Pandoc options (only valid with engine=pandoc). See [Pandoc Options](#pandoc-options) |
 
 **Success Response (202 Accepted)**:
 
@@ -115,6 +117,9 @@ Submit a document conversion job.
 | 422 | Invalid engine | `{"error": "Invalid engine: foo. Must be \"pandoc\" or \"marker\""}` |
 | 422 | Cannot auto-detect format | `{"error": "Cannot auto-detect format from extension: .xyz"}` |
 | 507 | Server storage full | `{"error": "Server storage full"}` |
+| 400 | Invalid pandoc_options JSON | `{"error": "pandoc_options must be valid JSON"}` |
+| 422 | Invalid pandoc_options | `{"error": "Invalid pandoc_options", "details": [...]}` |
+| 422 | pandoc_options with wrong engine | `{"error": "pandoc_options only valid with engine=pandoc"}` |
 
 **Example**:
 
@@ -137,6 +142,12 @@ curl -X POST http://localhost:5000/api/v1/convert \
   -F "from_format=markdown" \
   -F "to_format=docx" \
   -F "engine=pandoc"
+
+# Conversion with advanced Pandoc options
+curl -X POST http://localhost:5000/api/v1/convert \
+  -F "file=@report.md" \
+  -F "to_format=pdf" \
+  -F 'pandoc_options={"toc": true, "number_sections": true, "variables": {"fontsize": "11pt", "geometry": "margin=0.75in"}}'
 ```
 
 ---
@@ -384,6 +395,61 @@ curl http://localhost:5000/api/v1/formats | jq '.input_formats'
 curl http://localhost:5000/api/v1/formats | jq '.input_formats[] | select(.supports_marker == true)'
 ```
 
+### Pandoc Options
+
+When using `engine=pandoc`, you can pass a `pandoc_options` JSON object to control Pandoc behavior. For PDF output, CJK font defaults (`xelatex`, `Noto Sans CJK SC`) apply automatically unless overridden.
+
+**Whitelisted Options**:
+
+| Key | Pandoc Flag | Type | Constraint |
+|-----|-------------|------|------------|
+| `pdf_engine` | `--pdf-engine` | enum | `xelatex`, `lualatex`, `pdflatex`, `tectonic`, `wkhtmltopdf` |
+| `toc` | `--toc` | bool | |
+| `toc_depth` | `--toc-depth` | int | 1–6 |
+| `number_sections` | `--number-sections` | bool | |
+| `highlight_style` | `--highlight-style` | enum | `pygments`, `tango`, `espresso`, `zenburn`, `kate`, `monochrome`, `breezedark`, `haddock` |
+| `listings` | `--listings` | bool | |
+| `dpi` | `--dpi` | int | 72–600 |
+| `columns` | `--columns` | int | 1–200 |
+| `standalone` | `--standalone` | bool | |
+| `wrap` | `--wrap` | enum | `auto`, `none`, `preserve` |
+| `strip_comments` | `--strip-comments` | bool | |
+| `shift_heading_level_by` | `--shift-heading-level-by` | int | -5 to 5 |
+| `variables` | `--variable` | object | Keys: `mainfont`, `CJKmainfont`, `monofont`, `fontsize`, `geometry`, `linestretch`, `margin-left`, `margin-right`, `margin-top`, `margin-bottom`, `papersize`, `documentclass` |
+| `metadata` | `--metadata` | object | Keys: `title`, `author`, `date`, `lang`, `subject`, `description` |
+
+> **Security note:** Options like `--filter`, `--lua-filter`, `--template`, and `--include-*` are deliberately excluded to prevent arbitrary file reads or code execution.
+
+**Curl Example**:
+
+```bash
+curl -X POST http://localhost:5000/api/v1/convert \
+  -F "file=@report.md" \
+  -F "to_format=pdf" \
+  -F 'pandoc_options={"toc": true, "number_sections": true, "variables": {"fontsize": "11pt", "geometry": "margin=0.75in"}}'
+```
+
+**Python Example**:
+
+```python
+import json
+import requests
+
+with open('report.md', 'rb') as f:
+    response = requests.post('http://localhost:5000/api/v1/convert', files={
+        'file': f,
+    }, data={
+        'to_format': 'pdf',
+        'pandoc_options': json.dumps({
+            'toc': True,
+            'number_sections': True,
+            'variables': {'fontsize': '11pt', 'geometry': 'margin=0.75in'}
+        })
+    })
+```
+
+---
+
 ## Error Handling
 
 All error responses follow a consistent JSON structure:
@@ -604,6 +670,10 @@ For issues, feature requests, or questions about the API:
 - **Documentation**: https://github.com/yourusername/docuflux/docs
 
 ## Changelog
+
+### v1.1.0 (2026-03-11)
+
+- Advanced Pandoc options support via `pandoc_options` parameter
 
 ### v1.0.0 (2026-02-01)
 
