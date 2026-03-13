@@ -581,6 +581,11 @@
             renderJobs();
         });
 
+        // Poll for job list changes (picks up server-side retention cleanup)
+        setInterval(() => {
+            if (!document.hidden) fetchJobs();
+        }, 30000);
+
         async function fetchJobs() {
             try {
                 const r = await fetch('/api/jobs');
