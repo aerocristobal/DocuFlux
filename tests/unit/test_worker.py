@@ -1254,10 +1254,10 @@ class TestCeleryConfig:
         assert kwargs.get('socket_timeout') == 10
 
     def test_cleanup_schedule_interval(self):
-        """Cleanup should not run more often than every 30 minutes."""
+        """Cleanup should run every 2 minutes (120 seconds)."""
         import tasks
         schedule = tasks.celery.conf.beat_schedule['cleanup-every-5-minutes']
-        assert '*/30' in str(schedule['schedule'])
+        assert schedule['schedule'] == 120.0
 
     def test_metrics_schedule_interval(self):
         """Metrics should not run more often than every 120 seconds."""

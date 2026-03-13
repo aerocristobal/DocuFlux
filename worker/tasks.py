@@ -1923,7 +1923,7 @@ def assemble_capture_session(session_id, job_id):
 celery.conf.beat_schedule = {
     'cleanup-every-5-minutes': {
         'task': 'tasks.cleanup_old_files',
-        'schedule': crontab(minute='*/30'),  # Every 30 minutes
+        'schedule': 120.0,  # Every 2 minutes
     },
     'update-queue-metrics': {
         'task': 'tasks.update_metrics',
