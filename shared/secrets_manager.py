@@ -1,5 +1,5 @@
 """
-Secrets Management for DocuFlux Web Service
+Secrets Management for DocuFlux
 
 Provides secure secrets loading from multiple sources with fallback priority:
 1. Docker Swarm secrets (/run/secrets/)
@@ -11,17 +11,11 @@ Epic 21.7: Secrets Management and Rotation
 
 import os
 import logging
-from pathlib import Path
 import base64
 import binascii
+from pathlib import Path
 from typing import Dict, Any, Optional
 
-import os
-import logging
-from pathlib import Path
-import base64
-import binascii
-from typing import Dict, Any, Optional
 
 def load_secret(name: str, default: Optional[str] = None, required: bool = False, reject_default_in_prod: bool = True) -> Optional[str]:
     """
@@ -174,3 +168,78 @@ def load_all_secrets() -> Dict[str, Any]:
     )
 
     return secrets
+
+
+def validate_secrets_at_startup():
+    """
+    Validate all secrets at application startup.
+
+    This function should be called during app initialization to fail fast
+    if secrets are missing or insecure in production.
+
+    Raises:
+        ValueError: If any required secret is invalid
+    """
+    logging.info("Validating secrets at startup...")
+
+    try:
+        secrets = load_all_secrets()
+        logging.info("Secrets validation passed")
+        return secrets
+    except ValueError as e:
+        logging.error(f"Secrets validation failed: {e}")
+        raise
+
+
+def get_secret_rotation_instructions():
+    """
+    Get instructions for rotating secrets.
+
+    Returns:
+        String with rotation instructions
+    """
+    return """
+    Secret Rotation Instructions
+    =============================
+
+    Docker Swarm Secrets:
+    1. Create new secret: docker secret create secret_key_v2 secret_key.txt
+    2. Update service: docker service update --secret-rm secret_key --secret-add secret_key_v2 docuflux_web
+    3. Remove old secret: docker secret rm secret_key
+
+    Environment Variables:
+    1. Update .env file or docker-compose.yml
+    2. Restart services: docker-compose restart web worker
+
+    Master Encryption Key Generation:
+    # Generate new 256-bit key:
+    python -c "import secrets, base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+
+    # Or use the built-in generator:
+    python -c "from secrets_manager import generate_master_encryption_key; print(generate_master_encryption_key())"
+
+    # Then set in environment:
+    export MASTER_ENCRYPTION_KEY="<generated-key>"
+
+    IMPORTANT - Master Key Rotation:
+    WARNING: Rotating the master encryption key will make all existing encrypted
+    files UNRECOVERABLE unless you implement a re-encryption strategy.
+
+    Rotation Strategy (Advanced):
+    1. Generate new master key (MEK_v2)
+    2. Keep old key (MEK_v1) for decryption
+    3. Decrypt old DEKs with MEK_v1, re-wrap with MEK_v2
+    4. Update MASTER_ENCRYPTION_KEY to MEK_v2
+    5. Remove MEK_v1 only after all keys re-wrapped
+
+    Recommended: Do NOT rotate master key unless compromised.
+    Instead, rotate per-job DEKs using key_manager.rotate_job_key()
+
+    Best Practices:
+    - Rotate Flask SECRET_KEY every 90 days
+    - Rotate master encryption key only if compromised
+    - Use strong random values for all secrets
+    - Never commit secrets to version control
+    - Use different secrets for dev/staging/production
+    - Back up master encryption key securely (encrypted, offline storage)
+    """

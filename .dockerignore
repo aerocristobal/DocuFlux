@@ -38,7 +38,6 @@ certs/
 logs/
 
 # Project tooling
-.beads/
 plans/
 scripts/
 

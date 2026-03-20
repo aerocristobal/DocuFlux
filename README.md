@@ -347,6 +347,10 @@ python3 -m py_compile web/app.py worker/tasks.py worker/warmup.py
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
 | [CJK Implementation](docs/IMPLEMENTATION_SUMMARY_CJK.md) | CJK/Unicode support implementation record |
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and PR guidelines.
+
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

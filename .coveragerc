@@ -1,13 +1,10 @@
 [run]
 omit =
-    web/encryption.py
-    web/key_manager.py
-    web/redis_encryption.py
-    web/secrets_manager.py
+    shared/encryption.py
+    shared/key_manager.py
+    shared/redis_encryption.py
+    shared/secrets_manager.py
     web/validation.py
-    worker/encryption.py
-    worker/key_manager.py
-    worker/redis_encryption.py
     worker/metrics.py
     worker/warmup.py
 
