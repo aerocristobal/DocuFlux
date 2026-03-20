@@ -5,7 +5,6 @@ __pycache__/
 .DS_Store
 deploy/cloudflare/credentials.ini
 deploy/certs/*.pem
-.beads/
 .memory/
 .claude/
 CLAUDE.md
