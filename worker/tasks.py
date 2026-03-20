@@ -283,7 +283,8 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         update_job_metadata(job_id, {
             'status': 'PROCESSING',
             'started_at': str(time.time()),
-            'progress': '10'
+            'progress': '10',
+            'stage': 'Preparing conversion'
         })
     except Exception:
         worker_tasks_active.dec()
@@ -294,7 +295,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    update_job_metadata(job_id, {'progress': '20'})
+    update_job_metadata(job_id, {'progress': '20', 'stage': 'Converting document'})
 
     cmd = build_pandoc_cmd(from_format, to_format, input_path, output_path, pandoc_options)
 
@@ -308,7 +309,8 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
             'completed_at': str(time.time()),
             'progress': '100',
             'encrypted': 'false',
-            'file_count': '1'
+            'file_count': '1',
+            'stage': 'Complete'
         })
         redis_client.expire(f"job:{job_id}", 7200)
         fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
@@ -327,7 +329,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
     except subprocess.TimeoutExpired:
         error_msg = "Conversion timed out after 500 seconds"
         logging.error(f"Timeout for job {job_id}: {error_msg}")
-        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg, 'progress': '0'})
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg, 'progress': '0', 'stage': 'Failed'})
         redis_client.expire(f"job:{job_id}", 600)
         fire_webhook(job_id, 'FAILURE', {'error': error_msg})
 
@@ -342,7 +344,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
     except subprocess.CalledProcessError as e:
         error_msg = e.stderr or e.stdout or "Unknown error"
         logging.error(f"Pandoc error for job {job_id}: {error_msg}")
-        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500], 'progress': '0'})
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500], 'progress': '0', 'stage': 'Failed'})
         redis_client.expire(f"job:{job_id}", 600)
         fire_webhook(job_id, 'FAILURE', {'error': str(error_msg)[:500]})
 
@@ -356,7 +358,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         raise Exception(f"Pandoc failed: {error_msg}")
     except Exception as e:
         logging.error(f"Unexpected error for job {job_id}: {str(e)}")
-        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
         redis_client.expire(f"job:{job_id}", 600)
         fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
@@ -389,6 +391,11 @@ def get_model_dict():
     return model_dict
 
 
+class PageLimitExceeded(Exception):
+    """Raised when a PDF exceeds the allowed page limit."""
+    pass
+
+
 def _check_pdf_page_limit(job_id, input_path, max_pages):
     """Check that a PDF does not exceed the page limit for Marker AI.
 
@@ -397,8 +404,8 @@ def _check_pdf_page_limit(job_id, input_path, max_pages):
         input_path: Path to the PDF file.
         max_pages: Maximum allowed page count.
 
-    Returns:
-        dict with {'status': 'error', 'message': ...} if limit exceeded, else None.
+    Raises:
+        PageLimitExceeded: If the PDF exceeds the page limit.
     """
     try:
         import pypdfium2 as pdfium
@@ -412,13 +419,17 @@ def _check_pdf_page_limit(job_id, input_path, max_pages):
             )
             update_job_metadata(job_id, {
                 'status': 'FAILURE', 'completed_at': str(time.time()),
-                'error': error_msg, 'progress': '0'
+                'error': error_msg, 'progress': '0', 'stage': 'Failed'
             })
-            return {"status": "error", "message": error_msg}
+            redis_client.expire(f"job:{job_id}", 600)
+            fire_webhook(job_id, 'FAILURE', {'error': error_msg})
+            raise PageLimitExceeded(error_msg)
+        update_job_metadata(job_id, {'page_count': str(page_count)})
         logging.info(f"PDF page count: {page_count} (limit: {max_pages})")
+    except PageLimitExceeded:
+        raise
     except Exception as e:
         logging.warning(f"Could not check PDF page count: {e}")
-    return None
 
 
 def _run_marker(input_path, options):
@@ -557,16 +568,17 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
     output_path = os.path.join(output_dir, secure_filename(output_filename))
 
     logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1}) with options: {options}")
-    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5'})
+    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
     if not os.path.exists(input_path):
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    page_limit_error = _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
-    if page_limit_error:
+    try:
+        _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
+    except PageLimitExceeded:
         worker_tasks_active.dec()
-        return page_limit_error
+        raise
 
     os.makedirs(output_dir, exist_ok=True)
     images_dir = os.path.join(output_dir, 'images')
@@ -574,18 +586,18 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
 
     converter = rendered = text = images = None
     try:
-        update_job_metadata(job_id, {'progress': '15'})
+        update_job_metadata(job_id, {'progress': '15', 'stage': 'Converting PDF with AI'})
         converter, rendered = _run_marker(input_path, options or {})
 
-        update_job_metadata(job_id, {'progress': '80'})
+        update_job_metadata(job_id, {'progress': '80', 'stage': 'Saving extracted content'})
         text, images, _, file_count = _save_marker_output(rendered, output_path, images_dir)
 
-        update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count)})
+        update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count), 'stage': 'Finalizing output'})
         logging.info(f"Marker conversion successful: {output_path}")
 
         update_job_metadata(job_id, {
             'status': 'SUCCESS', 'completed_at': str(time.time()),
-            'progress': '100', 'encrypted': 'false'
+            'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
         })
         redis_client.expire(f"job:{job_id}", 7200)
         fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
@@ -601,7 +613,7 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
 
     except Exception as e:
         logging.error(f"Marker error for job {job_id}: {e}")
-        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
         redis_client.expire(f"job:{job_id}", 600)
         fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
@@ -649,7 +661,7 @@ def _slm_refine_markdown(text, job_id):
         except Exception as e:
             logging.warning(f"[{job_id}] SLM chunk {i} failed: {e}; using original")
             refined_chunks.append(chunk_text)
-        update_job_metadata(job_id, {'progress': str(50 + int(40 * (i + 1) / len(chunks)))})
+        update_job_metadata(job_id, {'progress': str(50 + int(40 * (i + 1) / len(chunks))), 'stage': 'Refining text with language model'})
 
     return "\n\n".join(refined_chunks)
 
@@ -691,16 +703,17 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
     output_path = os.path.join(output_dir, secure_filename(output_filename))
 
     logging.info(f"Starting Marker+SLM conversion for job {job_id} with options: {options}")
-    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5'})
+    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
     if not os.path.exists(input_path):
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    page_limit_error = _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
-    if page_limit_error:
+    try:
+        _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
+    except PageLimitExceeded:
         worker_tasks_active.dec()
-        return page_limit_error
+        raise
 
     os.makedirs(output_dir, exist_ok=True)
     images_dir = os.path.join(output_dir, 'images')
@@ -709,10 +722,10 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
     converter = rendered = text = images = None
     try:
         # Step 1: Marker conversion (progress 5 → 50)
-        update_job_metadata(job_id, {'progress': '15'})
+        update_job_metadata(job_id, {'progress': '15', 'stage': 'Converting PDF with AI'})
         converter, rendered = _run_marker(input_path, options or {})
 
-        update_job_metadata(job_id, {'progress': '50'})
+        update_job_metadata(job_id, {'progress': '50', 'stage': 'Saving AI conversion output'})
         text, images, _, file_count = _save_marker_output(rendered, output_path, images_dir)
 
         # Free GPU/CPU memory before SLM to avoid OOM on single-GPU systems
@@ -725,12 +738,12 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(refined_text)
 
-        update_job_metadata(job_id, {'progress': '95', 'file_count': str(file_count)})
+        update_job_metadata(job_id, {'progress': '95', 'file_count': str(file_count), 'stage': 'Finalizing output'})
         logging.info(f"Marker+SLM conversion successful: {output_path}")
 
         update_job_metadata(job_id, {
             'status': 'SUCCESS', 'completed_at': str(time.time()),
-            'progress': '100', 'encrypted': 'false'
+            'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
         })
         redis_client.expire(f"job:{job_id}", 7200)
         fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
@@ -746,7 +759,7 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
 
     except Exception as e:
         logging.error(f"Marker+SLM error for job {job_id}: {e}")
-        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
         redis_client.expire(f"job:{job_id}", 600)
         fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
@@ -818,7 +831,7 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
     output_path = os.path.join(output_dir, secure_filename(output_filename))
 
     logging.info(f"Starting hybrid conversion for job {job_id}")
-    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5'})
+    update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
     if not os.path.exists(input_path):
         update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
@@ -834,11 +847,12 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         pdf_doc = pdfium.PdfDocument(input_path)
         page_count = len(pdf_doc)
         pdf_doc.close()
+        update_job_metadata(job_id, {'page_count': str(page_count)})
     except Exception as e:
         logging.warning(f"Could not get page count: {e}")
 
     # --- Step 2: Try Pandoc fast path ---
-    update_job_metadata(job_id, {'progress': '15', 'hybrid_engine_used': 'pandoc'})
+    update_job_metadata(job_id, {'progress': '15', 'hybrid_engine_used': 'pandoc', 'stage': 'Trying fast conversion'})
     pandoc_ok = False
     try:
         cmd = ['pandoc', '-f', 'pdf', '-t', 'markdown', input_path, '-o', output_path]
@@ -849,13 +863,13 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
     except Exception as e:
         logging.info(f"Hybrid job {job_id}: Pandoc attempt failed ({e}), trying Marker.")
 
-    update_job_metadata(job_id, {'progress': '40'})
+    update_job_metadata(job_id, {'progress': '40', 'stage': 'Checking conversion quality'})
 
     if pandoc_ok:
         update_job_metadata(job_id, {
             'status': 'SUCCESS', 'completed_at': str(time.time()),
             'progress': '100', 'encrypted': 'false', 'file_count': '1',
-            'hybrid_engine_used': 'pandoc'
+            'hybrid_engine_used': 'pandoc', 'stage': 'Complete'
         })
         redis_client.expire(f"job:{job_id}", 7200)
         fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
@@ -869,25 +883,26 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         return {"status": "success", "output_file": os.path.basename(output_path), "engine": "pandoc"}
 
     # --- Step 3: Fall back to Marker AI ---
-    page_limit_error = _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
-    if page_limit_error:
+    try:
+        _check_pdf_page_limit(job_id, input_path, app_settings.max_marker_pages)
+    except PageLimitExceeded:
         worker_tasks_active.dec()
-        return page_limit_error
+        raise
 
     images_dir = os.path.join(output_dir, 'images')
     os.makedirs(images_dir, exist_ok=True)
 
-    update_job_metadata(job_id, {'progress': '50', 'hybrid_engine_used': 'marker'})
+    update_job_metadata(job_id, {'progress': '50', 'hybrid_engine_used': 'marker', 'stage': 'Converting PDF with AI'})
     converter = rendered = text = images = None
     try:
         converter, rendered = _run_marker(input_path, options or {})
-        update_job_metadata(job_id, {'progress': '85'})
+        update_job_metadata(job_id, {'progress': '85', 'stage': 'Saving extracted content'})
         text, images, _, file_count = _save_marker_output(rendered, output_path, images_dir)
 
         update_job_metadata(job_id, {
             'status': 'SUCCESS', 'completed_at': str(time.time()),
             'progress': '100', 'encrypted': 'false', 'file_count': str(file_count),
-            'hybrid_engine_used': 'marker'
+            'hybrid_engine_used': 'marker', 'stage': 'Complete'
         })
         redis_client.expire(f"job:{job_id}", 7200)
         fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
@@ -902,7 +917,7 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
 
     except Exception as e:
         logging.error(f"Hybrid Marker fallback error for job {job_id}: {e}")
-        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0'})
+        update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
         redis_client.expire(f"job:{job_id}", 600)
         fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 

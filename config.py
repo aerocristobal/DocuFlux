@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     mcp_server_url: str = Field("http://mcp-server:8080/execute", validation_alias="MCP_SERVER_URL")
 
     # --- Marker/SLM Specific ---
-    max_marker_pages: int = Field(300, validation_alias="MAX_MARKER_PAGES")
+    max_marker_pages: int = Field(600, validation_alias="MAX_MARKER_PAGES")
     max_slm_context: int = Field(2000, validation_alias="MAX_SLM_CONTEXT")  # Example token limit
     slm_model_path: Optional[str] = Field(None, validation_alias="SLM_MODEL_PATH")  # No default, as it might be dynamically loaded
     marker_enabled: bool = Field(False, validation_alias="MARKER_ENABLED") # Default to False if not specified

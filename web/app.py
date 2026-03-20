@@ -746,6 +746,9 @@ def list_jobs():
             'is_zip': is_zip,
             'file_count': file_count,
             'slm': slm,
+            'stage': meta.get('stage', ''),
+            'page_count': meta.get('page_count', ''),
+            'started_at': meta.get('started_at', ''),
         })
     jobs_data.sort(key=lambda x: x['created_at'], reverse=True)
     return jsonify(jobs_data)
@@ -979,11 +982,18 @@ def download_zip(job_id):
         'last_viewed': current_time
     })
 
+    orig = job_meta.get('filename', '')
+    if orig:
+        stem = os.path.splitext(orig)[0]
+        zip_name = secure_filename(stem)[:200] + '.zip'
+    else:
+        zip_name = f'conversion_{job_id}.zip'
+
     return Response(
         _generate_zip(),
         mimetype='application/zip',
         headers={
-            'Content-Disposition': f'attachment; filename="conversion_{job_id}.zip"',
+            'Content-Disposition': f'attachment; filename="{zip_name}"',
         }
     )
 

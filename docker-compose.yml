@@ -60,7 +60,7 @@ services:
     cap_drop:
       - ALL
     tmpfs:
-      - /tmp:noexec,nosuid,nodev,size=100m
+      - /tmp:noexec,nosuid,nodev,size=200m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
       interval: 15s
