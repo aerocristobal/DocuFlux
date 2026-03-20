@@ -91,9 +91,9 @@ def convert():
             'force_ocr': str(request.form.get('force_ocr') == 'on'),
             'use_llm': str(request.form.get('use_llm') == 'on')
         })
+        _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
 
         file_size = os.path.getsize(input_path)
-        target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
         if from_format == 'pdf_marker':
             task_name = 'tasks.convert_with_marker'
@@ -111,6 +111,12 @@ def convert():
                 'use_llm': request.form.get('use_llm') == 'on'
             }
             task_args.append(options)
+
+        # GPU tasks go to gpu queue; CPU tasks use size-based routing
+        if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
+            target_queue = 'gpu'
+        else:
+            target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
         _app_mod.celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
 
@@ -278,6 +284,7 @@ def retry_job(job_id):
         'force_ocr': job_data.get('force_ocr'),
         'use_llm': job_data.get('use_llm')
     })
+    _app_mod.redis_client.zadd('jobs:active', {new_job_id: time.time()})
 
     original_from = job_data.get('from')
     if original_from == 'pdf_marker':
@@ -297,7 +304,12 @@ def retry_job(job_id):
         }
         task_args.append(options)
 
-    _app_mod.celery.send_task(task_name, args=task_args, task_id=new_job_id)
+    # GPU tasks go to gpu queue; CPU tasks go to default
+    if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
+        retry_queue = 'gpu'
+    else:
+        retry_queue = 'default'
+    _app_mod.celery.send_task(task_name, args=task_args, task_id=new_job_id, queue=retry_queue)
 
     session_id = session.get('session_id')
     _app_mod.redis_client.lpush(f"history:{session_id}", new_job_id)
@@ -508,35 +520,37 @@ def api_v1_convert():
         metadata['use_llm'] = str(use_llm)
 
     _app_mod.update_job_metadata(job_id, metadata)
+    _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
 
+    # GPU tasks go to gpu queue; CPU tasks use size-based routing
     file_size = os.path.getsize(input_path)
-    queue_name = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
     if internal_from_format == 'pdf_marker':
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
-            queue=queue_name
+            queue='gpu'
         )
     elif internal_from_format == 'pdf_hybrid':
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
         _app_mod.celery.send_task(
             'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
-            queue=queue_name
+            queue='gpu'
         )
     elif internal_from_format == 'pdf_marker_slm':
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
-            queue=queue_name
+            queue='gpu'
         )
     else:
         task_kwargs = {}
         if pandoc_options:
             task_kwargs['pandoc_options'] = pandoc_options
+        queue_name = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
         _app_mod.celery.send_task(
             'tasks.convert_document',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format],

@@ -35,7 +35,7 @@ spec:
             - --without-gossip
             - --concurrency=$(WORKER_CONCURRENCY)
             - -Q
-            - high_priority,default
+            - default,high_priority
           env:
             - name: FLASK_ENV
               value: production
@@ -125,7 +125,7 @@ spec:
             - --without-gossip
             - --concurrency=1
             - -Q
-            - high_priority,default
+            - gpu,high_priority,default
           env:
             - name: BUILD_GPU
               value: "true"

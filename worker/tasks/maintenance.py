@@ -92,7 +92,8 @@ def cleanup_old_files():
     upload_dir = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
     output_dir = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
 
-    job_ids = set()
+    # Primary: Redis sorted set for tracked jobs; fallback: filesystem for pre-migration jobs
+    job_ids = set(_pkg.redis_client.zrangebyscore('jobs:active', '-inf', '+inf'))
     if os.path.exists(upload_dir):
         job_ids.update(os.listdir(upload_dir))
     if os.path.exists(output_dir):
@@ -155,6 +156,7 @@ def cleanup_old_files():
                     logging.error(f"Error deleting {p}: {e}")
 
         _pkg.redis_client.delete(candidate['key'])
+        _pkg.redis_client.zrem('jobs:active', job_id)
 
     logging.info(f"Cleanup complete. Freed {total_freed / (1024 * 1024):.2f} MB")
 
@@ -169,9 +171,33 @@ def cleanup_old_files():
 
 @_pkg.celery.task(name='tasks.update_metrics')
 def update_metrics():
-    """Periodic task to update queue metrics."""
+    """Periodic task to update queue metrics and cache worker status."""
     try:
         from metrics import update_queue_metrics
         update_queue_metrics(_pkg.redis_client)
     except Exception as e:
-        logging.error(f"Error updating metrics: {e}")
+        logging.error(f"Error updating queue metrics: {e}")
+
+    try:
+        from metrics import update_redis_pool_metrics
+        update_redis_pool_metrics(_pkg.redis_client)
+    except Exception as e:
+        logging.error(f"Error updating Redis pool metrics: {e}")
+
+    # Cache worker availability in Redis for fast health-check reads
+    try:
+        inspect = _pkg.celery.control.inspect(timeout=3)
+        active_workers = inspect.active()
+        worker_count = len(active_workers) if active_workers else 0
+        _pkg.redis_client.hset('workers:status', mapping={
+            'worker_count': str(worker_count),
+            'status': 'up' if worker_count > 0 else 'down',
+            'updated_at': str(time.time()),
+        })
+    except Exception as e:
+        logging.error(f"Error caching worker status: {e}")
+        _pkg.redis_client.hset('workers:status', mapping={
+            'status': 'unknown',
+            'updated_at': str(time.time()),
+            'error': str(e),
+        })

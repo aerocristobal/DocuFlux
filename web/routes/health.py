@@ -94,25 +94,30 @@ def health_detailed():
             'error': 'Could not query GPU status from Redis'
         }
 
+    # Check Celery worker availability (read from Redis cache set by update_metrics task)
     try:
-        inspect = _app_mod.celery.control.inspect(timeout=3)
-        active_workers = inspect.active()
-        if active_workers and len(active_workers) > 0:
-            health_status['components']['celery_workers'] = {
-                'status': 'up',
-                'worker_count': len(active_workers)
-            }
+        worker_cache = _app_mod.redis_client.hgetall('workers:status')
+        if worker_cache:
+            updated_at = float(worker_cache.get('updated_at', 0))
+            stale = (time.time() - updated_at) > 300  # >5 min = stale
+            if stale:
+                health_status['components']['celery_workers'] = {
+                    'status': 'unknown', 'reason': 'cached status stale (>5min)'}
+            else:
+                count = int(worker_cache.get('worker_count', 0))
+                health_status['components']['celery_workers'] = {
+                    'status': worker_cache.get('status', 'unknown'),
+                    'worker_count': count}
+                if count == 0:
+                    health_status['status'] = 'degraded'
         else:
             health_status['components']['celery_workers'] = {
-                'status': 'down',
-                'worker_count': 0
-            }
-            health_status['status'] = 'degraded'
+                'status': 'unknown', 'reason': 'no cached worker status'}
     except Exception as e:
         logging.error(f"Health check failed for Celery workers: {e}")
         health_status['components']['celery_workers'] = {
             'status': 'unknown',
-            'error': 'Could not inspect Celery workers'
+            'error': 'Could not read worker status from Redis'
         }
 
     status_code = 200

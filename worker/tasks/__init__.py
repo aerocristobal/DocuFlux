@@ -45,6 +45,13 @@ celery.conf.update(
     worker_max_tasks_per_child=50,
 )
 
+# Fallback task routing — web routes set queue= explicitly, but this catches programmatic dispatches
+celery.conf.task_routes = {
+    'tasks.convert_with_marker': {'queue': 'gpu'},
+    'tasks.convert_with_marker_slm': {'queue': 'gpu'},
+    'tasks.convert_with_hybrid': {'queue': 'gpu'},
+}
+
 # Redis metadata client (DB 1) — supports TLS via rediss:// URL + cert env vars
 redis_client = create_redis_client(
     url=app_settings.redis_metadata_url,
