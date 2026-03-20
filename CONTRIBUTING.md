@@ -72,11 +72,15 @@ docuflux/
 ├── worker/metrics.py       # Prometheus metrics
 ├── shared/                 # Shared modules (encryption, secrets, key management)
 ├── config.py               # Pydantic Settings
+├── deploy/                 # Infrastructure configs
+│   ├── cloudflare/         # Cloudflare Tunnel config + setup
+│   ├── certs/              # TLS certificates
+│   ├── monitoring/         # Prometheus alert rules
+│   └── k8s/                # Kubernetes manifests
 ├── tests/
 │   ├── unit/               # Pytest unit tests
 │   ├── integration/        # WebSocket + pipeline E2E tests
 │   └── load/locustfile.py  # Locust load tests
-├── k8s/                    # Kubernetes manifests
 ├── scripts/build.sh        # Build wrapper (auto/gpu/cpu)
 └── docker-compose*.yml     # Compose variants (base/gpu/cpu/tls/cloudflare)
 ```

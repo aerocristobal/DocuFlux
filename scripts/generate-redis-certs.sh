@@ -11,7 +11,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CERTS_DIR="${SCRIPT_DIR}/../certs"
+CERTS_DIR="${SCRIPT_DIR}/../deploy/certs"
 REDIS_CERTS_DIR="${CERTS_DIR}/redis"
 
 # Certificate parameters

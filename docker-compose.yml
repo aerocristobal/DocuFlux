@@ -30,7 +30,7 @@ services:
       dockerfile: web/Dockerfile
     volumes:
       - ./data:/app/data
-      - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
+      - ./deploy/certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
     ports:
       - "5000:5000"
     environment:
@@ -75,7 +75,7 @@ services:
       dockerfile: worker/Dockerfile
     volumes:
       - ./data:/app/data
-      - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
+      - ./deploy/certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
 
     ports:
       - "9090:9090"  # Epic 21.5: Prometheus metrics endpoint
@@ -138,7 +138,7 @@ services:
     volumes:
       - ./data:/app/data
       - beat-data:/app/celerybeat
-      - ./certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
+      - ./deploy/certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
 
     environment:
       # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)

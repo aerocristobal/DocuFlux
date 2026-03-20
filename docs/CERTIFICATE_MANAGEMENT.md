@@ -26,8 +26,8 @@ DocuFlux uses TLS certificates for:
 
 | Certificate | Purpose | Location | Validity | Renewal |
 |-------------|---------|----------|----------|---------|
-| Redis CA | Internal PKI root | `certs/redis/ca.crt` | 10 years (dev) | Manual |
-| Redis Server | Redis TLS | `certs/redis/redis.crt` | 10 years (dev) | Manual |
+| Redis CA | Internal PKI root | `deploy/certs/redis/ca.crt` | 10 years (dev) | Manual |
+| Redis Server | Redis TLS | `deploy/certs/redis/redis.crt` | 10 years (dev) | Manual |
 
 ---
 
@@ -42,7 +42,7 @@ Generate self-signed certificates for local development:
 ./scripts/generate-redis-certs.sh
 
 # Verify generation
-ls -la certs/redis/
+ls -la deploy/certs/redis/
 # Expected files:
 #   ca.crt        - Certificate Authority (public)
 #   ca.key        - CA private key (SECRET)
@@ -66,14 +66,14 @@ ls -la certs/redis/
 
 ```bash
 # Verify certificate chain
-openssl verify -CAfile certs/redis/ca.crt certs/redis/redis.crt
-# Expected: certs/redis/redis.crt: OK
+openssl verify -CAfile deploy/certs/redis/ca.crt deploy/certs/redis/redis.crt
+# Expected: deploy/certs/redis/redis.crt: OK
 
 # Check certificate details
-openssl x509 -in certs/redis/redis.crt -noout -text
+openssl x509 -in deploy/certs/redis/redis.crt -noout -text
 
 # Check expiration
-openssl x509 -in certs/redis/redis.crt -noout -dates
+openssl x509 -in deploy/certs/redis/redis.crt -noout -dates
 # notBefore: ...
 # notAfter: ...  (should be ~10 years from generation)
 ```
@@ -90,15 +90,15 @@ Purchase certificates from a commercial CA (DigiCert, GlobalSign, etc.):
 
 1. **Generate CSR:**
    ```bash
-   openssl req -new -key certs/redis/redis.key -out certs/redis/redis.csr
+   openssl req -new -key deploy/certs/redis/redis.key -out deploy/certs/redis/redis.csr
    ```
 
 2. **Submit CSR to CA** and receive signed certificate
 
 3. **Install certificate:**
    ```bash
-   cp signed-cert.crt certs/redis/redis.crt
-   cp ca-bundle.crt certs/redis/ca.crt
+   cp signed-cert.crt deploy/certs/redis/redis.crt
+   cp ca-bundle.crt deploy/certs/redis/ca.crt
    ```
 
 4. **Reload services:**
@@ -182,7 +182,7 @@ Check certificate expiration manually:
 ./scripts/renew-redis-certs.sh
 
 # Detailed check
-openssl x509 -in certs/redis/redis.crt -noout -dates
+openssl x509 -in deploy/certs/redis/redis.crt -noout -dates
 ```
 
 ### Cron Job (Automated Monitoring)
@@ -260,13 +260,13 @@ Error: Hostname 'redis' doesn't match certificate
 **Solution:**
 ```bash
 # Check certificate SANs
-openssl x509 -in certs/redis/redis.crt -noout -ext subjectAltName
+openssl x509 -in deploy/certs/redis/redis.crt -noout -ext subjectAltName
 
 # Should include:
 # DNS:redis, DNS:localhost, IP:127.0.0.1
 
 # If missing, regenerate certificates:
-rm -rf certs/redis/*.crt certs/redis/*.key
+rm -rf deploy/certs/redis/*.crt deploy/certs/redis/*.key
 ./scripts/generate-redis-certs.sh
 docker-compose restart redis web worker beat
 ```
@@ -280,7 +280,7 @@ Error: certificate has expired
 
 **Solution:**
 ```bash
-openssl x509 -in certs/redis/redis.crt -noout -dates
+openssl x509 -in deploy/certs/redis/redis.crt -noout -dates
 ./scripts/renew-redis-certs.sh
 docker-compose restart redis web worker beat
 ```
@@ -296,8 +296,8 @@ Error: Permission denied reading /certs/redis/redis.key
 
 **Solution:**
 ```bash
-chmod 400 certs/redis/*.key
-chmod 444 certs/redis/*.crt
+chmod 400 deploy/certs/redis/*.key
+chmod 444 deploy/certs/redis/*.crt
 ```
 
 ---
@@ -336,5 +336,5 @@ chmod 444 certs/redis/*.crt
 
 - **Certificate Generation**: `scripts/generate-redis-certs.sh`
 - **Certificate Renewal**: `scripts/renew-redis-certs.sh`
-- **Redis TLS**: `certs/README.md`
+- **Redis TLS**: `deploy/certs/README.md`
 - **Epic 24**: Encryption in Transit with Redis TLS
