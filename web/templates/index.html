@@ -581,6 +581,16 @@
             renderJobs();
         });
 
+        // Re-render every 5s to tick elapsed time while any job is active
+        let elapsedTimer = null;
+        function startElapsedTimer() {
+            if (elapsedTimer) return;
+            elapsedTimer = setInterval(() => {
+                const hasActive = localJobs.some(j => ['PENDING','PROCESSING','STARTED'].includes(j.status));
+                if (hasActive) { renderJobs(); } else { clearInterval(elapsedTimer); elapsedTimer = null; }
+            }, 5000);
+        }
+
         // Poll for job list changes (picks up server-side retention cleanup)
         setInterval(() => {
             if (!document.hidden) fetchJobs();
@@ -606,9 +616,10 @@
                 let icon = 'pending', color = 'secondary', label = 'Waiting', actions = '';
                 if (j.status === 'SUCCESS') {
                     icon = 'check_circle'; color = 'primary'; label = 'Done';
-                    const dlUrl = j.download_url || `/download/${j.id}`;
-                    const dlIcon = j.is_zip ? 'folder_zip' : 'download';
-                    const dlTitle = j.is_zip ? 'Download ZIP' : 'Download File';
+                    const isZip = parseInt(j.file_count) > 1 || j.is_zip;
+                    const dlUrl = isZip ? `/download_zip/${j.id}` : `/download/${j.id}`;
+                    const dlIcon = isZip ? 'folder_zip' : 'download';
+                    const dlTitle = isZip ? 'Download ZIP' : 'Download File';
                     actions = `<a href="${dlUrl}" download slot="end" title="${dlTitle}"><md-icon-button><md-icon>${dlIcon}</md-icon></md-icon-button></a>`;
                 }
                 else if (j.status === 'FAILURE') { icon = 'error'; color = 'error'; label = 'Failed'; actions = `<md-icon-button slot="end" onclick="window.retryJob('${j.id}')"><md-icon>replay</md-icon></md-icon-button>`; }
@@ -618,6 +629,20 @@
                 const prog = active && j.progress
                     ? `<md-linear-progress value="${j.progress/100}" style="width:100px;margin-top:8px;"></md-linear-progress>`
                     : active ? `<md-linear-progress indeterminate style="width:100px;margin-top:8px;"></md-linear-progress>` : '';
+
+                let stageHtml = '';
+                if (j.stage && active) {
+                    const pageCtx = j.page_count ? ` · ${j.page_count} pages` : '';
+                    stageHtml = `<div style="font-size:0.75rem;color:var(--md-sys-color-on-surface-variant);margin-top:4px;">${escapeHtml(j.stage)}${pageCtx}</div>`;
+                }
+                let elapsedHtml = '';
+                if (active && j.started_at) {
+                    const secs = Math.floor(Date.now() / 1000 - parseFloat(j.started_at));
+                    if (secs > 0) {
+                        const m = Math.floor(secs / 60), s = secs % 60;
+                        elapsedHtml = `<div style="font-size:0.7rem;color:var(--md-sys-color-outline);margin-top:2px;">${m}m ${s.toString().padStart(2,'0')}s</div>`;
+                    }
+                }
 
                 let slmHtml = '';
                 if (j.slm) {
@@ -631,11 +656,12 @@
                 return `<md-list-item class="job-item" data-status="${escapeHtml(j.status)}">
                     <md-icon slot="start" style="color:var(--md-sys-color-${color})">${icon}</md-icon>
                     <div slot="headline">${escapeHtml(j.filename)}</div>
-                    <div slot="supporting-text">${escapeHtml(j.from)} &rarr; ${escapeHtml(j.to)} · <span class="job-time">${time}</span>${prog}${slmHtml}</div>
+                    <div slot="supporting-text">${escapeHtml(j.from)} &rarr; ${escapeHtml(j.to)} · <span class="job-time">${time}</span>${prog}${stageHtml}${elapsedHtml}${slmHtml}</div>
                     <div slot="trailing-supporting-text"><md-assist-chip label="${label}" class="status-chip"></md-assist-chip></div>
                     ${actions}${!active ? `<md-icon-button slot="end" onclick="window.deleteJob('${j.id}')"><md-icon>delete</md-icon></md-icon-button>` : ''}
                 </md-list-item><md-divider></md-divider>`;
             }).join('');
+            if (localJobs.some(j => ['PENDING','PROCESSING','STARTED'].includes(j.status))) startElapsedTimer();
         }
 
         window.cancelJob = async (id) => { if (await confirmAction('Cancel?', 'Stop?')) { await fetch(`/api/cancel/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); } };
