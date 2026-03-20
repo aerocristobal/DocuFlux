@@ -262,7 +262,7 @@ Key environment variables (full list in [docs/CONFIGURATION.md](docs/CONFIGURATI
 | `CELERY_BROKER_URL` | `redis://redis:6379/0` | Task broker |
 | `MAX_CONTENT_LENGTH` | `209715200` (200 MB) | Max upload size |
 | `MARKER_ENABLED` | `false` | Enable Marker AI (set `true` in GPU builds) |
-| `MAX_MARKER_PAGES` | `300` | PDF page limit for Marker/Hybrid |
+| `MAX_MARKER_PAGES` | `600` | PDF page limit for Marker/Hybrid |
 | `SLM_MODEL_PATH` | *(none)* | Path to GGUF model for SLM extraction |
 | `MAX_SLM_CONTEXT` | `2000` | Token context limit for SLM |
 | `CAPTURE_SESSION_TTL` | `86400` | Browser capture session TTL (seconds) |
