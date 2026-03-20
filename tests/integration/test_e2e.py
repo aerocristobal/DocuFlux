@@ -615,13 +615,13 @@ class TestWebSocketEvents:
         import shutil
         shutil.rmtree(job_dir, ignore_errors=True)
 
-    def test_update_job_metadata_redis_error_does_not_raise(self, mock_redis):
-        """update_job_metadata swallows Redis errors gracefully."""
+    def test_update_job_metadata_redis_error_propagates(self, mock_redis):
+        """update_job_metadata lets Redis errors propagate (hset is not best-effort)."""
         job_id = str(uuid.uuid4())
         mock_redis.hset.side_effect = ConnectionError("Redis gone")
 
-        # Should not raise even if Redis is down
-        web_app.update_job_metadata(job_id, {'status': 'PROCESSING'})
+        with pytest.raises(ConnectionError):
+            web_app.update_job_metadata(job_id, {'status': 'PROCESSING'})
 
 
 # ============================================================
