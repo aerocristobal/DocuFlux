@@ -488,66 +488,70 @@ class TestHealthEndpoints:
         assert response.status_code == 503
         assert response.json['status'] == 'not_ready'
 
-    @patch('app.celery')
     @patch('app.shutil')
     @patch('app.redis_client')
-    def test_health_detailed_healthy(self, mock_redis, mock_shutil, mock_celery, client):
-        """Detailed health check returns healthy when all components respond."""
+    def test_health_detailed_healthy(self, mock_redis, mock_shutil, client):
+        """Detailed health check returns healthy when cached worker status is up."""
+        import time as _time
         mock_shutil.disk_usage.return_value = (100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
         mock_redis.get.return_value = 'available'
-        mock_redis.hgetall.return_value = {}
-        mock_celery.control.inspect.return_value.active.return_value = {'worker1': []}
+        mock_redis.hgetall.side_effect = lambda key: {
+            'workers:status': {'worker_count': '2', 'status': 'up', 'updated_at': str(_time.time())},
+        }.get(key, {})
 
         response = client.get('/api/health')
         assert response.status_code == 200
         data = response.json
         assert data['status'] == 'healthy'
         assert 'components' in data
+        assert data['components']['celery_workers']['status'] == 'up'
+        assert data['components']['celery_workers']['worker_count'] == 2
 
-    @patch('app.celery')
     @patch('app.shutil')
     @patch('app.redis_client')
-    def test_health_detailed_redis_down(self, mock_redis, mock_shutil, mock_celery, client):
+    def test_health_detailed_redis_down(self, mock_redis, mock_shutil, client):
         """Detailed health check marks Redis component as down."""
         mock_redis.ping.side_effect = Exception("Connection refused")
         mock_redis.get.return_value = None
         mock_redis.hgetall.return_value = {}
         mock_shutil.disk_usage.return_value = (100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
-        # Provide workers so Celery check doesn't override to 'degraded'
-        mock_celery.control.inspect.return_value.active.return_value = {'worker1': []}
 
         response = client.get('/api/health')
         data = response.json
         assert data['components']['redis']['status'] == 'down'
 
-    @patch('app.celery')
     @patch('app.shutil')
     @patch('app.redis_client')
-    def test_health_check_does_not_hang_when_worker_down(self, mock_redis, mock_shutil, mock_celery, client):
-        """Health check should return within timeout even if worker is unreachable."""
+    def test_health_check_no_cached_worker_status(self, mock_redis, mock_shutil, client):
+        """Health check returns unknown when no cached worker status exists."""
         mock_shutil.disk_usage.return_value = (100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
         mock_redis.ping.return_value = True
         mock_redis.get.return_value = None
-        mock_redis.hgetall.return_value = {}
-        # Simulate worker not responding — inspect returns None
-        mock_celery.control.inspect.return_value.active.return_value = None
+        mock_redis.hgetall.side_effect = lambda key: {}.get(key, {})
+
         response = client.get('/api/health')
         assert response.status_code == 200
-        # Verify inspect was called with timeout
-        mock_celery.control.inspect.assert_called_with(timeout=3)
+        data = response.json
+        assert data['components']['celery_workers']['status'] == 'unknown'
 
-    @patch('app.celery')
     @patch('app.shutil')
     @patch('app.redis_client')
-    def test_health_check_handles_inspect_exception(self, mock_redis, mock_shutil, mock_celery, client):
-        """Health check should not crash if Celery inspect raises."""
+    def test_health_check_stale_worker_cache(self, mock_redis, mock_shutil, client):
+        """Health check returns unknown when cached worker status is stale (>5min)."""
+        import time as _time
         mock_shutil.disk_usage.return_value = (100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
         mock_redis.ping.return_value = True
         mock_redis.get.return_value = None
-        mock_redis.hgetall.return_value = {}
-        mock_celery.control.inspect.return_value.active.side_effect = Exception("timeout")
+        stale_time = str(_time.time() - 600)  # 10 minutes ago
+        mock_redis.hgetall.side_effect = lambda key: {
+            'workers:status': {'worker_count': '1', 'status': 'up', 'updated_at': stale_time},
+        }.get(key, {})
+
         response = client.get('/api/health')
-        assert response.status_code in (200, 503)  # degraded but not 500
+        assert response.status_code == 200
+        data = response.json
+        assert data['components']['celery_workers']['status'] == 'unknown'
+        assert 'stale' in data['components']['celery_workers'].get('reason', '')
 
 
 class TestApiV1Status:

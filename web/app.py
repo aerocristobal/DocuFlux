@@ -168,6 +168,8 @@ redis_client = create_redis_client(
     url=app_settings.redis_metadata_url,
     app_settings=app_settings,
     max_connections=50,
+    socket_connect_timeout=5,
+    socket_timeout=10,
 )
 
 # Celery configuration
@@ -178,8 +180,9 @@ celery = Celery(
 )
 celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
-    'tasks.convert_with_marker': {'queue': 'default'},
-    'tasks.convert_with_hybrid': {'queue': 'default'},
+    'tasks.convert_with_marker': {'queue': 'gpu'},
+    'tasks.convert_with_marker_slm': {'queue': 'gpu'},
+    'tasks.convert_with_hybrid': {'queue': 'gpu'},
     'tasks.assemble_capture_session': {'queue': 'default'},
 }
 

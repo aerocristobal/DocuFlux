@@ -60,6 +60,9 @@ m.conversion_failures_total = _c
 m.worker_tasks_active = _g
 m.worker_info = MagicMock()
 m.update_queue_metrics = MagicMock()
+m.update_redis_pool_metrics = MagicMock()
+m.redis_pool_active = MagicMock()
+m.redis_pool_available = MagicMock()
 m.start_metrics_server = MagicMock()
 
 # encryption/key_manager
@@ -1337,3 +1340,88 @@ class TestBuildPandocCmd:
         assert '--metadata' in cmd
         title_idx = cmd.index('--metadata')
         assert cmd[title_idx + 1] == 'title=My Doc'
+
+
+# ============================================================
+# Epic 4: Performance & Resource Utilization tests
+# ============================================================
+
+class TestGpuQueueRouting:
+    """Story 4.1: Verify task_routes maps GPU tasks to gpu queue."""
+
+    def test_task_routes_gpu_marker(self):
+        assert tasks.celery.conf.task_routes['tasks.convert_with_marker'] == {'queue': 'gpu'}
+
+    def test_task_routes_gpu_marker_slm(self):
+        assert tasks.celery.conf.task_routes['tasks.convert_with_marker_slm'] == {'queue': 'gpu'}
+
+    def test_task_routes_gpu_hybrid(self):
+        assert tasks.celery.conf.task_routes['tasks.convert_with_hybrid'] == {'queue': 'gpu'}
+
+
+class TestUpdateMetricsCachesWorkerStatus:
+    """Story 4.2: update_metrics caches worker status in Redis."""
+
+    @patch('tasks.celery')
+    @patch('tasks.redis_client')
+    @patch('tasks.maintenance.update_queue_metrics', create=True)
+    @patch('tasks.maintenance.update_redis_pool_metrics', create=True)
+    def test_caches_worker_count(self, mock_pool, mock_queue, mock_redis, mock_celery):
+        mock_celery.control.inspect.return_value.active.return_value = {'w1': [], 'w2': []}
+        mock_redis.hset = MagicMock()
+
+        tasks.update_metrics()
+
+        mock_redis.hset.assert_any_call('workers:status', mapping={
+            'worker_count': '2',
+            'status': 'up',
+            'updated_at': mock_redis.hset.call_args_list[-1][1]['mapping']['updated_at'],
+        })
+
+    @patch('tasks.celery')
+    @patch('tasks.redis_client')
+    @patch('tasks.maintenance.update_queue_metrics', create=True)
+    @patch('tasks.maintenance.update_redis_pool_metrics', create=True)
+    def test_caches_unknown_on_error(self, mock_pool, mock_queue, mock_redis, mock_celery):
+        mock_celery.control.inspect.side_effect = Exception("connection refused")
+        mock_redis.hset = MagicMock()
+
+        tasks.update_metrics()
+
+        mock_redis.hset.assert_any_call('workers:status', mapping=pytest.approx({
+            'status': 'unknown',
+            'updated_at': mock_redis.hset.call_args_list[-1][1]['mapping']['updated_at'],
+            'error': 'connection refused',
+        }))
+
+
+class TestCleanupUsesRedisSortedSet:
+    """Story 4.3: cleanup_old_files reads from jobs:active sorted set."""
+
+    @patch('tasks.redis_client')
+    @patch('os.path.exists', return_value=False)
+    def test_reads_from_sorted_set(self, mock_exists, mock_redis):
+        mock_redis.zrangebyscore.return_value = ['job-1', 'job-2']
+
+        tasks.cleanup_old_files()
+
+        mock_redis.zrangebyscore.assert_called_once_with('jobs:active', '-inf', '+inf')
+
+
+class TestRedisPoolMetrics:
+    """Story 4.4: Redis pool monitoring — verify update_metrics calls pool updater."""
+
+    @patch('tasks.celery')
+    @patch('tasks.redis_client')
+    def test_update_metrics_calls_pool_updater(self, mock_redis, mock_celery):
+        """update_metrics() invokes update_redis_pool_metrics with the redis client."""
+        mock_celery.control.inspect.return_value.active.return_value = {'w1': []}
+        mock_redis.hset = MagicMock()
+
+        # The metrics module is mocked at sys.modules level; verify it gets called
+        m = sys.modules['metrics']
+        m.update_redis_pool_metrics.reset_mock()
+
+        tasks.update_metrics()
+
+        m.update_redis_pool_metrics.assert_called_once_with(mock_redis)
