@@ -9,27 +9,12 @@ Epic 21.9: Input Validation and Sanitization
 
 import os
 import re
-import uuid
 from functools import wraps
 from flask import request, jsonify
 import logging
 
 
-def validate_uuid(value):
-    """
-    Validate that a value is a valid UUID.
-
-    Args:
-        value: Value to validate
-
-    Returns:
-        True if valid UUID, False otherwise
-    """
-    try:
-        uuid.UUID(str(value))
-        return True
-    except (ValueError, AttributeError):
-        return False
+from uuid_validation import validate_uuid  # noqa: F811 — canonical impl in shared/
 
 
 def sanitize_filename(filename, max_length=255):
@@ -101,24 +86,7 @@ def validate_job_id(job_id):
     return True, None
 
 
-def validate_format(format_str, allowed_formats):
-    """
-    Validate that format is in allowed list.
-
-    Args:
-        format_str: Format string to validate
-        allowed_formats: List of allowed format strings
-
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    if not format_str:
-        return False, "Format is required"
-
-    if format_str not in allowed_formats:
-        return False, f"Invalid format: {format_str}. Allowed: {', '.join(allowed_formats)}"
-
-    return True, None
+from formats import validate_format  # re-export from shared module
 
 
 def require_valid_uuid(param_name='job_id'):
