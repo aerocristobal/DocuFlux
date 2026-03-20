@@ -98,7 +98,7 @@ services:
       --without-mingle
       --without-gossip
       --concurrency=${WORKER_CONCURRENCY:-1}
-      -Q high_priority,default
+      -Q gpu,high_priority,default
     depends_on:
       redis:
         condition: service_healthy

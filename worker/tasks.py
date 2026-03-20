@@ -26,6 +26,7 @@ from metrics import (
     conversion_failures_total,
     conversion_duration_seconds,
     update_queue_metrics,
+    update_redis_pool_metrics,
 )
 
 # Configure Structured Logging
@@ -68,6 +69,13 @@ celery.conf.update(
     result_expires=3600,              # Auto-expire results after 1 hour
     worker_max_tasks_per_child=50,    # Restart worker process every 50 tasks to reclaim VRAM
 )
+
+# Fallback task routing — web routes set queue= explicitly, but this catches programmatic dispatches
+celery.conf.task_routes = {
+    'tasks.convert_with_marker': {'queue': 'gpu'},
+    'tasks.convert_with_marker_slm': {'queue': 'gpu'},
+    'tasks.convert_with_hybrid': {'queue': 'gpu'},
+}
 
 # Redis metadata client (DB 1) — supports TLS via rediss:// URL + cert env vars
 _redis_url = app_settings.redis_metadata_url
@@ -1041,7 +1049,8 @@ def cleanup_old_files():
     upload_dir = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
     output_dir = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
 
-    job_ids = set()
+    # Primary: Redis sorted set for tracked jobs; fallback: filesystem for pre-migration jobs
+    job_ids = set(redis_client.zrangebyscore('jobs:active', '-inf', '+inf'))
     if os.path.exists(upload_dir):
         job_ids.update(os.listdir(upload_dir))
     if os.path.exists(output_dir):
@@ -1104,6 +1113,7 @@ def cleanup_old_files():
                     logging.error(f"Error deleting {p}: {e}")
 
         redis_client.delete(candidate['key'])
+        redis_client.zrem('jobs:active', job_id)
 
 
     logging.info(f"Cleanup complete. Freed {total_freed / (1024 * 1024):.2f} MB")
@@ -1121,15 +1131,38 @@ def cleanup_old_files():
 @celery.task(name='tasks.update_metrics')
 def update_metrics():
     """
-    Periodic task to update queue metrics.
+    Periodic task to update queue metrics and cache worker status.
 
-    This task runs every 30 seconds to keep queue depth metrics current.
     Epic 21.5: Prometheus Metrics
+    Epic 4.2: Cache worker status in Redis so /api/health avoids blocking inspect() calls.
     """
     try:
         update_queue_metrics(redis_client)
     except Exception as e:
-        logging.error(f"Error updating metrics: {e}")
+        logging.error(f"Error updating queue metrics: {e}")
+
+    try:
+        update_redis_pool_metrics(redis_client)
+    except Exception as e:
+        logging.error(f"Error updating Redis pool metrics: {e}")
+
+    # Cache worker availability in Redis for fast health-check reads
+    try:
+        inspect = celery.control.inspect(timeout=3)
+        active_workers = inspect.active()
+        worker_count = len(active_workers) if active_workers else 0
+        redis_client.hset('workers:status', mapping={
+            'worker_count': str(worker_count),
+            'status': 'up' if worker_count > 0 else 'down',
+            'updated_at': str(time.time()),
+        })
+    except Exception as e:
+        logging.error(f"Error caching worker status: {e}")
+        redis_client.hset('workers:status', mapping={
+            'status': 'unknown',
+            'updated_at': str(time.time()),
+            'error': str(e),
+        })
 
 
 

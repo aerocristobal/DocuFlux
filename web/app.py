@@ -176,7 +176,9 @@ redis_url = app_settings.redis_metadata_url
 # Configure TLS parameters if using rediss://
 redis_kwargs = {
     'max_connections': 50,
-    'decode_responses': True
+    'decode_responses': True,
+    'socket_connect_timeout': 5,
+    'socket_timeout': 10,
 }
 
 if redis_url.startswith('rediss://'):
@@ -208,8 +210,9 @@ celery = Celery(
 )
 celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
-    'tasks.convert_with_marker': {'queue': 'default'},
-    'tasks.convert_with_hybrid': {'queue': 'default'},
+    'tasks.convert_with_marker': {'queue': 'gpu'},
+    'tasks.convert_with_marker_slm': {'queue': 'gpu'},
+    'tasks.convert_with_hybrid': {'queue': 'gpu'},
     'tasks.assemble_capture_session': {'queue': 'default'},
 }
 
@@ -645,10 +648,10 @@ def convert():
             'force_ocr': str(request.form.get('force_ocr') == 'on'),
             'use_llm': str(request.form.get('use_llm') == 'on')
         })
-        
+        redis_client.zadd('jobs:active', {job_id: time.time()})
+
         file_size = os.path.getsize(input_path)
-        target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
-        
+
         if from_format == 'pdf_marker':
             task_name = 'tasks.convert_with_marker'
         elif from_format == 'pdf_hybrid':
@@ -665,6 +668,12 @@ def convert():
                 'use_llm': request.form.get('use_llm') == 'on'
             }
             task_args.append(options)
+
+        # GPU tasks (marker, hybrid, slm) go to gpu queue; CPU tasks use size-based routing
+        if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
+            target_queue = 'gpu'
+        else:
+            target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
         celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
         
@@ -845,6 +854,7 @@ def retry_job(job_id):
         'force_ocr': job_data.get('force_ocr'),
         'use_llm': job_data.get('use_llm')
     })
+    redis_client.zadd('jobs:active', {new_job_id: time.time()})
 
     original_from = job_data.get('from')
     if original_from == 'pdf_marker':
@@ -864,8 +874,13 @@ def retry_job(job_id):
         }
         task_args.append(options)
 
-    celery.send_task(task_name, args=task_args, task_id=new_job_id)
-    
+    # GPU tasks go to gpu queue; CPU tasks go to default
+    if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
+        retry_queue = 'gpu'
+    else:
+        retry_queue = 'default'
+    celery.send_task(task_name, args=task_args, task_id=new_job_id, queue=retry_queue)
+
     session_id = session.get('session_id')
     redis_client.lpush(f"history:{session_id}", new_job_id)
     return jsonify({'status': 'retried', 'new_job_id': new_job_id})
@@ -1102,29 +1117,31 @@ def health_detailed():
             'error': 'Could not query GPU status from Redis'
         }
 
-    # Check Celery worker availability
+    # Check Celery worker availability (read from Redis cache set by update_metrics task)
     try:
-        # Check if workers are available
-        inspect = celery.control.inspect(timeout=3)
-        active_workers = inspect.active()
-
-        if active_workers and len(active_workers) > 0:
-            health_status['components']['celery_workers'] = {
-                'status': 'up',
-                'worker_count': len(active_workers)
-            }
+        worker_cache = redis_client.hgetall('workers:status')
+        if worker_cache:
+            updated_at = float(worker_cache.get('updated_at', 0))
+            stale = (time.time() - updated_at) > 300  # >5 min = stale
+            if stale:
+                health_status['components']['celery_workers'] = {
+                    'status': 'unknown', 'reason': 'cached status stale (>5min)'}
+            else:
+                count = int(worker_cache.get('worker_count', 0))
+                health_status['components']['celery_workers'] = {
+                    'status': worker_cache.get('status', 'unknown'),
+                    'worker_count': count}
+                if count == 0:
+                    health_status['status'] = 'degraded'
         else:
             health_status['components']['celery_workers'] = {
-                'status': 'down',
-                'worker_count': 0
-            }
-            health_status['status'] = 'degraded'
+                'status': 'unknown', 'reason': 'no cached worker status'}
 
     except Exception as e:
         logging.error(f"Health check failed for Celery workers: {e}")
         health_status['components']['celery_workers'] = {
             'status': 'unknown',
-            'error': 'Could not inspect Celery workers'
+            'error': 'Could not read worker status from Redis'
         }
 
     # Overall status code
@@ -1259,36 +1276,37 @@ def api_v1_convert():
         metadata['use_llm'] = str(use_llm)
 
     update_job_metadata(job_id, metadata)
+    redis_client.zadd('jobs:active', {job_id: time.time()})
 
-    # Dispatch to Celery
+    # Dispatch to Celery — GPU tasks go to gpu queue; CPU tasks use size-based routing
     file_size = os.path.getsize(input_path)
-    queue_name = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
     if internal_from_format == 'pdf_marker':
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
         celery.send_task(
             'tasks.convert_with_marker',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
-            queue=queue_name
+            queue='gpu'
         )
     elif internal_from_format == 'pdf_hybrid':
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
         celery.send_task(
             'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
-            queue=queue_name
+            queue='gpu'
         )
     elif internal_from_format == 'pdf_marker_slm':
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
         celery.send_task(
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
-            queue=queue_name
+            queue='gpu'
         )
     else:
         task_kwargs = {}
         if pandoc_options:
             task_kwargs['pandoc_options'] = pandoc_options
+        queue_name = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
         celery.send_task(
             'tasks.convert_document',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format],

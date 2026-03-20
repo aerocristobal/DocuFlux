@@ -86,6 +86,32 @@ disk_total_bytes = Gauge(
 )
 
 
+# Redis connection pool metrics
+redis_pool_active = Gauge(
+    'docuflux_redis_pool_active_connections',
+    'Active Redis connections in pool'
+)
+
+redis_pool_available = Gauge(
+    'docuflux_redis_pool_available_connections',
+    'Available Redis connections in pool'
+)
+
+
+def update_redis_pool_metrics(redis_client):
+    """Update Redis connection pool metrics from the client's pool state."""
+    try:
+        pool = redis_client.connection_pool
+        if hasattr(pool, '_created_connections'):
+            active = pool._created_connections - pool._available_connections.qsize()
+            redis_pool_active.set(active)
+            redis_pool_available.set(pool._available_connections.qsize())
+            if pool._available_connections.qsize() == 0:
+                logging.warning("Redis connection pool exhausted!")
+    except Exception as e:
+        logging.error(f"Error updating Redis pool metrics: {e}")
+
+
 def update_gpu_metrics():
     """
     Update GPU-related metrics using nvidia-smi or PyTorch.
@@ -158,9 +184,8 @@ def update_queue_metrics(redis_client):
     """
     try:
         # Get queue lengths from Redis
-        celery_queue_len = redis_client.llen('celery')
-
-        queue_depth.labels(queue_name='celery').set(celery_queue_len)
+        for name in ('celery', 'default', 'high_priority', 'gpu'):
+            queue_depth.labels(queue_name=name).set(redis_client.llen(name))
 
     except Exception as e:
         logging.error(f"Error updating queue metrics: {e}")
