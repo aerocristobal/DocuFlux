@@ -17,7 +17,7 @@ Containerized document conversion service combining **Pandoc** (universal conver
 - **Webhook Callbacks**: Register a POST URL per job — fired on completion or failure.
 - **End-to-End Security**: AES-256-GCM encryption at rest for files and metadata; Redis TLS in transit; Cloudflare Tunnel for zero-touch HTTPS.
 - **Observability**: Prometheus metrics endpoint, Grafana dashboard, structured JSON logging with X-Request-ID correlation.
-- **Kubernetes-Ready**: Five manifests (`k8s/`) with HPA scaling 1–10 replicas.
+- **Kubernetes-Ready**: Five manifests (`deploy/k8s/`) with HPA scaling 1–10 replicas.
 
 ## Supported Formats
 
@@ -210,14 +210,14 @@ curl -X POST http://localhost:5000/api/v1/capture/sessions/$SESSION/finish
 
 ## Kubernetes
 
-Five manifests are provided under `k8s/`. The web deployment uses an HPA (1–10 replicas).
+Five manifests are provided under `deploy/k8s/`. The web deployment uses an HPA (1–10 replicas).
 
 ```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/secrets.yaml
-kubectl apply -f k8s/redis.yaml
-kubectl apply -f k8s/web.yaml    # 2 initial replicas + HPA
-kubectl apply -f k8s/worker.yaml # CPU + GPU worker deployments
+kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/secrets.yaml
+kubectl apply -f deploy/k8s/redis.yaml
+kubectl apply -f deploy/k8s/web.yaml    # 2 initial replicas + HPA
+kubectl apply -f deploy/k8s/worker.yaml # CPU + GPU worker deployments
 ```
 
 ## Observability
@@ -294,7 +294,11 @@ docuflux/
 ├── worker/metrics.py       # Prometheus metrics definitions
 ├── worker/Dockerfile       # Multi-stage GPU/CPU build
 ├── config.py               # Pydantic Settings (25+ env vars)
-├── k8s/                    # 5 Kubernetes manifests
+├── deploy/                 # Infrastructure configs
+│   ├── cloudflare/         # Cloudflare Tunnel config + setup
+│   ├── certs/              # TLS certificates
+│   ├── monitoring/         # Prometheus alert rules
+│   └── k8s/                # 5 Kubernetes manifests
 ├── scripts/build.sh        # Build wrapper (auto/gpu/cpu)
 ├── tests/
 │   ├── unit/               # Pytest unit tests

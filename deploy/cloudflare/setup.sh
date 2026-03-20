@@ -86,48 +86,48 @@ echo ""
 echo -e "${YELLOW}Step 5: Save configuration${NC}"
 
 # Create .env file if it doesn't exist
-if [ ! -f ../.env ]; then
-    cp ../.env.example ../.env
+if [ ! -f ../../.env ]; then
+    cp ../../.env.example ../../.env
     echo -e "${GREEN}✓ Created .env file from .env.example${NC}"
 fi
 
 # Update .env file
-if grep -q "CLOUDFLARE_TUNNEL_TOKEN=" ../.env; then
+if grep -q "CLOUDFLARE_TUNNEL_TOKEN=" ../../.env; then
     # Update existing token
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s|CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=${TUNNEL_TOKEN}|" ../.env
+        sed -i '' "s|CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=${TUNNEL_TOKEN}|" ../../.env
     else
-        sed -i "s|CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=${TUNNEL_TOKEN}|" ../.env
+        sed -i "s|CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=${TUNNEL_TOKEN}|" ../../.env
     fi
     echo -e "${GREEN}✓ Updated CLOUDFLARE_TUNNEL_TOKEN in .env${NC}"
 else
     # Append new token
-    echo "" >> ../.env
-    echo "# Cloudflare Tunnel Configuration" >> ../.env
-    echo "CLOUDFLARE_TUNNEL_TOKEN=${TUNNEL_TOKEN}" >> ../.env
+    echo "" >> ../../.env
+    echo "# Cloudflare Tunnel Configuration" >> ../../.env
+    echo "CLOUDFLARE_TUNNEL_TOKEN=${TUNNEL_TOKEN}" >> ../../.env
     echo -e "${GREEN}✓ Added CLOUDFLARE_TUNNEL_TOKEN to .env${NC}"
 fi
 
 # Update SESSION_COOKIE_SECURE for HTTPS
-if grep -q "SESSION_COOKIE_SECURE=" ../.env; then
+if grep -q "SESSION_COOKIE_SECURE=" ../../.env; then
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s|SESSION_COOKIE_SECURE=.*|SESSION_COOKIE_SECURE=true|" ../.env
+        sed -i '' "s|SESSION_COOKIE_SECURE=.*|SESSION_COOKIE_SECURE=true|" ../../.env
     else
-        sed -i "s|SESSION_COOKIE_SECURE=.*|SESSION_COOKIE_SECURE=true|" ../.env
+        sed -i "s|SESSION_COOKIE_SECURE=.*|SESSION_COOKIE_SECURE=true|" ../../.env
     fi
 else
-    echo "SESSION_COOKIE_SECURE=true" >> ../.env
+    echo "SESSION_COOKIE_SECURE=true" >> ../../.env
 fi
 
 # Update BEHIND_PROXY for proxy detection
-if grep -q "BEHIND_PROXY=" ../.env; then
+if grep -q "BEHIND_PROXY=" ../../.env; then
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s|BEHIND_PROXY=.*|BEHIND_PROXY=true|" ../.env
+        sed -i '' "s|BEHIND_PROXY=.*|BEHIND_PROXY=true|" ../../.env
     else
-        sed -i "s|BEHIND_PROXY=.*|BEHIND_PROXY=true|" ../.env
+        sed -i "s|BEHIND_PROXY=.*|BEHIND_PROXY=true|" ../../.env
     fi
 else
-    echo "BEHIND_PROXY=true" >> ../.env
+    echo "BEHIND_PROXY=true" >> ../../.env
 fi
 
 echo ""
@@ -143,7 +143,7 @@ echo "2. Access your application at:"
 echo -e "   ${BLUE}https://${DOMAIN}${NC}"
 echo ""
 echo -e "${YELLOW}Configuration saved to:${NC}"
-echo "  - Tunnel Token: ../.env (CLOUDFLARE_TUNNEL_TOKEN)"
+echo "  - Tunnel Token: ../../.env (CLOUDFLARE_TUNNEL_TOKEN)"
 echo "  - Tunnel ID: ${TUNNEL_ID}"
 echo "  - Domain: ${DOMAIN}"
 echo ""

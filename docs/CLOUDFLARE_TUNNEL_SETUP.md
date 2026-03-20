@@ -37,7 +37,7 @@ curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloud
 sudo dpkg -i cloudflared.deb
 
 # 2. Run automated setup script
-cd cloudflare
+cd deploy/cloudflare
 ./setup.sh
 
 # Follow prompts to:
@@ -174,7 +174,7 @@ When `BEHIND_PROXY=true`:
 
 ## Configuration Files
 
-### cloudflare/config.yml
+### deploy/cloudflare/config.yml
 
 Optional configuration file for advanced ingress rules:
 
@@ -297,7 +297,7 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml -f docker-compose
 Route specific paths to different services:
 
 ```yaml
-# cloudflare/config.yml
+# deploy/cloudflare/config.yml
 ingress:
   - hostname: docuflux.example.com
     path: /api/*

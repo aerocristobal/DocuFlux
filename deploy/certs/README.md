@@ -7,7 +7,7 @@ This directory stores TLS certificates and private keys for securing inter-servi
 ## Structure
 
 ```
-certs/
+deploy/certs/
 ├── redis/           # Redis TLS certificates
 │   ├── ca.crt       # Certificate Authority (public)
 │   ├── ca.key       # CA private key (SECRET - never commit!)
@@ -27,7 +27,7 @@ For local development and testing:
 ./scripts/generate-redis-certs.sh
 
 # Verify generation
-ls -la certs/redis/
+ls -la deploy/certs/redis/
 ```
 
 ## Certificate Details
@@ -53,7 +53,7 @@ ls -la certs/redis/
 
 ⚠️ **Certificate Rotation**
 - Development certificates: Rotate annually or when compromised
-- Check expiration: `openssl x509 -in certs/redis/redis.crt -noout -dates`
+- Check expiration: `openssl x509 -in deploy/certs/redis/redis.crt -noout -dates`
 
 ## Verifying TLS Connection
 
@@ -63,9 +63,9 @@ ls -la certs/redis/
 # Using redis-cli
 redis-cli \
   --tls \
-  --cert certs/redis/redis.crt \
-  --key certs/redis/redis.key \
-  --cacert certs/redis/ca.crt \
+  --cert deploy/certs/redis/redis.crt \
+  --key deploy/certs/redis/redis.key \
+  --cacert deploy/certs/redis/ca.crt \
   -h localhost \
   ping
 
@@ -81,9 +81,9 @@ client = redis.Redis(
     host='localhost',
     port=6379,
     ssl=True,
-    ssl_ca_certs='certs/redis/ca.crt',
-    ssl_certfile='certs/redis/redis.crt',
-    ssl_keyfile='certs/redis/redis.key',
+    ssl_ca_certs='deploy/certs/redis/ca.crt',
+    ssl_certfile='deploy/certs/redis/redis.crt',
+    ssl_keyfile='deploy/certs/redis/redis.key',
     ssl_cert_reqs='required'
 )
 
@@ -100,7 +100,7 @@ Error: certificate verify failed
 
 **Solution**: Ensure CA certificate is properly installed and trusted:
 ```bash
-openssl verify -CAfile certs/redis/ca.crt certs/redis/redis.crt
+openssl verify -CAfile deploy/certs/redis/ca.crt deploy/certs/redis/redis.crt
 ```
 
 ### Connection Refused

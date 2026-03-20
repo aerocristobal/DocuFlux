@@ -312,7 +312,7 @@ rm /app/data/testfile
 
 ```bash
 # Check alert rules syntax
-promtool check rules monitoring/alerts.yml
+promtool check rules deploy/monitoring/alerts.yml
 
 # Test alert expression
 promtool query instant http://localhost:9090 \
