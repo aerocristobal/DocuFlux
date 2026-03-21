@@ -57,12 +57,20 @@ import web.app as web_app
 @pytest.fixture(scope='module')
 def flask_app():
     """Create Flask test application."""
+    from storage import LocalStorageBackend
     web_app.app.config['TESTING'] = True
     web_app.app.config['WTF_CSRF_ENABLED'] = False
     web_app.app.config['UPLOAD_FOLDER'] = '/tmp/docuflux_test_uploads'
     web_app.app.config['OUTPUT_FOLDER'] = '/tmp/docuflux_test_outputs'
     os.makedirs('/tmp/docuflux_test_uploads', exist_ok=True)
     os.makedirs('/tmp/docuflux_test_outputs', exist_ok=True)
+    # Epic 5: Set up storage backend with test directories
+    web_app.storage = LocalStorageBackend(
+        upload_folder='/tmp/docuflux_test_uploads',
+        output_folder='/tmp/docuflux_test_outputs',
+    )
+    web_app.UPLOAD_FOLDER = '/tmp/docuflux_test_uploads'
+    web_app.OUTPUT_FOLDER = '/tmp/docuflux_test_outputs'
     # Disable rate limiting to prevent 429 errors from accumulated test requests
     web_app.limiter.enabled = False
     return web_app.app
@@ -333,9 +341,7 @@ class TestJobManagement:
         """DELETE /api/delete/{job_id} removes files and Redis key."""
         mock_redis.pipeline.return_value.execute.return_value = [1, {}]
 
-        with patch('shutil.rmtree') as mock_rmtree, \
-             patch('os.path.exists', return_value=True):
-            response = client.post(f'/api/delete/{sample_job_id}')
+        response = client.post(f'/api/delete/{sample_job_id}')
 
         assert response.status_code == 200
         mock_redis.delete.assert_called_with(f'job:{sample_job_id}')
@@ -357,10 +363,11 @@ class TestJobManagement:
         }
         mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
 
-        with patch('os.path.exists', return_value=True), \
-             patch('shutil.copy2'), \
-             patch('os.makedirs'):
-            response = client.post(f'/api/retry/{sample_job_id}')
+        # Create actual source file in storage for retry to read
+        web_app.storage.makedirs(sample_job_id, folder='upload')
+        web_app.storage.save_file(sample_job_id, 'test.md', b'# Test', folder='upload')
+
+        response = client.post(f'/api/retry/{sample_job_id}')
 
         assert response.status_code == 200
         result = response.get_json()
@@ -377,23 +384,17 @@ class TestDownloadEndpoints:
 
     def test_download_single_file(self, client, mock_redis, sample_job_id, tmp_path):
         """GET /download/{job_id} returns the converted file."""
-        job_dir = f'/tmp/docuflux_test_outputs/{sample_job_id}'
-        os.makedirs(job_dir, exist_ok=True)
-        test_file = os.path.join(job_dir, 'output.html')
-        with open(test_file, 'w') as f:
-            f.write('<html><body>Test</body></html>')
+        web_app.storage.save_file(sample_job_id, 'output.html',
+                                  b'<html><body>Test</body></html>', folder='output')
 
         mock_redis.hgetall.return_value = {'encrypted': 'false', 'status': 'SUCCESS'}
         mock_redis.pipeline.return_value.execute.return_value = [1, {}]
 
-        # Patch module-level OUTPUT_FOLDER to match where test files are created
-        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'):
-            response = client.get(f'/download/{sample_job_id}')
+        response = client.get(f'/download/{sample_job_id}')
 
         assert response.status_code == 200
         # Cleanup
-        import shutil
-        shutil.rmtree(job_dir, ignore_errors=True)
+        web_app.storage.delete_job(sample_job_id)
 
     def test_download_invalid_uuid_returns_400(self, client):
         """Download with invalid UUID returns 400."""
@@ -402,34 +403,28 @@ class TestDownloadEndpoints:
 
     def test_download_missing_job_returns_404(self, client, sample_job_id):
         """Download for non-existent job returns 404."""
-        with patch('os.path.exists', return_value=False):
-            response = client.get(f'/download/{sample_job_id}')
+        response = client.get(f'/download/{sample_job_id}')
         assert response.status_code == 404
 
     def test_download_zip_multi_file_output(self, client, mock_redis, sample_job_id):
         """GET /download_zip/{job_id} returns a ZIP for multi-file outputs."""
-        job_dir = f'/tmp/docuflux_test_outputs/{sample_job_id}'
-        images_dir = os.path.join(job_dir, 'images')
-        os.makedirs(images_dir, exist_ok=True)
-
-        # Create multiple output files
-        with open(os.path.join(job_dir, 'output.md'), 'w') as f:
-            f.write('# Converted PDF\n\n![image](images/page1.png)\n')
-        with open(os.path.join(images_dir, 'page1.png'), 'wb') as f:
-            f.write(b'\x89PNG\r\n\x1a\n' + b'\x00' * 100)
+        web_app.storage.save_file(sample_job_id, 'output.md',
+                                  b'# Converted PDF\n\n![image](images/page1.png)\n',
+                                  folder='output')
+        web_app.storage.makedirs(sample_job_id, 'images', folder='output')
+        web_app.storage.save_file(sample_job_id, 'images/page1.png',
+                                  b'\x89PNG\r\n\x1a\n' + b'\x00' * 100,
+                                  folder='output')
 
         mock_redis.hgetall.return_value = {'encrypted': 'false'}
         mock_redis.pipeline.return_value.execute.return_value = [1, {}]
 
-        # Patch module-level OUTPUT_FOLDER to match where test files are created
-        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'):
-            response = client.get(f'/download_zip/{sample_job_id}')
+        response = client.get(f'/download_zip/{sample_job_id}')
 
         assert response.status_code == 200
         assert response.content_type == 'application/zip'
 
-        import shutil
-        shutil.rmtree(job_dir, ignore_errors=True)
+        web_app.storage.delete_job(sample_job_id)
 
 
 # ============================================================
@@ -595,16 +590,12 @@ class TestWebSocketEvents:
 
     def test_download_records_downloaded_at(self, client, mock_redis, sample_job_id):
         """GET /download/{id} records downloaded_at timestamp in Redis."""
-        job_dir = f'/tmp/docuflux_test_outputs/{sample_job_id}'
-        os.makedirs(job_dir, exist_ok=True)
-        test_file = os.path.join(job_dir, 'output.html')
-        with open(test_file, 'w') as f:
-            f.write('<html><body>Test</body></html>')
+        web_app.storage.save_file(sample_job_id, 'output.html',
+                                  b'<html><body>Test</body></html>', folder='output')
 
         mock_redis.hgetall.return_value = {'encrypted': 'false', 'status': 'SUCCESS'}
 
-        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'), \
-             patch.object(web_app.socketio, 'emit') as mock_emit:
+        with patch.object(web_app.socketio, 'emit') as mock_emit:
             client.get(f'/download/{sample_job_id}')
 
         # update_job_metadata is called to record downloaded_at
@@ -612,8 +603,7 @@ class TestWebSocketEvents:
         keys_emitted = {k for payload in emitted_payloads for k in payload}
         assert 'downloaded_at' in keys_emitted
 
-        import shutil
-        shutil.rmtree(job_dir, ignore_errors=True)
+        web_app.storage.delete_job(sample_job_id)
 
     def test_update_job_metadata_redis_error_propagates(self, mock_redis):
         """update_job_metadata lets Redis errors propagate (hset is not best-effort)."""
@@ -666,7 +656,10 @@ class TestFullPipelineFlow:
         assert poll_resp.get_json()['status'] == 'processing'
         assert poll_resp.get_json()['progress'] == 50
 
-        # 3. Poll status: SUCCESS
+        # 3. Poll status: SUCCESS — create output file so status finds it
+        web_app.storage.save_file(job_id, 'doc.html',
+                                  b'<html><body>Hello World</body></html>',
+                                  folder='output')
         mock_redis.hgetall.return_value = {
             'status': 'SUCCESS', 'filename': 'doc.html',
             'from': 'markdown', 'to': 'html',
@@ -681,18 +674,11 @@ class TestFullPipelineFlow:
         assert success_resp.get_json()['download_url']
 
         # 4. Download the output
-        job_dir = f'/tmp/docuflux_test_outputs/{job_id}'
-        os.makedirs(job_dir, exist_ok=True)
-        with open(os.path.join(job_dir, 'doc.html'), 'w') as f:
-            f.write('<html><body>Hello World</body></html>')
-
         mock_redis.hgetall.return_value = {'encrypted': 'false', 'status': 'SUCCESS'}
-        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'):
-            dl_resp = client.get(f'/download/{job_id}')
+        dl_resp = client.get(f'/download/{job_id}')
         assert dl_resp.status_code == 200
 
-        import shutil
-        shutil.rmtree(job_dir, ignore_errors=True)
+        web_app.storage.delete_job(job_id)
 
     def test_submit_poll_failure_state(self, client, mock_redis, mock_celery):
         """Pipeline correctly surfaces FAILURE state with error message."""
@@ -737,11 +723,8 @@ class TestFullPipelineFlow:
         job_id = submit_resp.get_json()['job_id']
 
         # Simulate Marker success with multiple output files (markdown + images)
-        # Create a real output dir with images subdir so the endpoint detects is_multifile
-        job_dir = f'/tmp/docuflux_test_outputs/{job_id}'
-        os.makedirs(os.path.join(job_dir, 'images'), exist_ok=True)
-        with open(os.path.join(job_dir, 'report.md'), 'w') as f:
-            f.write('# Report\n')
+        web_app.storage.save_file(job_id, 'report.md', b'# Report\n', folder='output')
+        web_app.storage.save_file(job_id, 'images/page1.png', b'\x89PNG', folder='output')
 
         mock_redis.hgetall.return_value = {
             'status': 'SUCCESS', 'filename': 'report.md',
@@ -750,9 +733,8 @@ class TestFullPipelineFlow:
             'completed_at': str(time.time()),
             'progress': '100', 'file_count': '5', 'encrypted': 'false'
         }
-        with patch.object(web_app, 'OUTPUT_FOLDER', '/tmp/docuflux_test_outputs'):
-            status_resp = client.get(f'/api/v1/status/{job_id}',
-                                     headers=self._api_headers)
+        status_resp = client.get(f'/api/v1/status/{job_id}',
+                                 headers=self._api_headers)
         assert status_resp.status_code == 200
         result = status_resp.get_json()
         assert result['status'] == 'success'
@@ -760,5 +742,4 @@ class TestFullPipelineFlow:
         assert '/api/v1/download/' in result['download_url']
         assert result['is_multifile'] is True
 
-        import shutil
-        shutil.rmtree(job_dir, ignore_errors=True)
+        web_app.storage.delete_job(job_id)
