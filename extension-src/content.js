@@ -10,6 +10,10 @@
 (function () {
   'use strict';
 
+  // Guard against double-initialization when dynamically injected
+  if (window.__docufluxContentLoaded) return;
+  window.__docufluxContentLoaded = true;
+
   // ─── Constants ───────────────────────────────────────────────────────────────
 
   const KINDLE_SELECTORS = [
@@ -136,14 +140,14 @@
     for (const img of imgEls) {
       if (img.naturalWidth < MIN_IMAGE_SIZE || img.naturalHeight < MIN_IMAGE_SIZE) continue;
 
-      const filename = `img_${Date.now()}_${images.length}.png`;
+      const filename = `img_${Date.now()}_${images.length}.jpg`;
       try {
         const canvas = document.createElement('canvas');
         canvas.width = img.naturalWidth;
         canvas.height = img.naturalHeight;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
-        const b64 = canvas.toDataURL('image/png');
+        const b64 = canvas.toDataURL('image/jpeg', 0.85);
         images.push({ filename, b64, alt: img.alt || '' });
       } catch (e) {
         // CORS-tainted image — count and skip
@@ -630,4 +634,9 @@
       }));
     }
   });
+
+  // Test exports
+  if (typeof module !== 'undefined') {
+    module.exports = { findContentElement, elementToMarkdown, captureImages };
+  }
 })();

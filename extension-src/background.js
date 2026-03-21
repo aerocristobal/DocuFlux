@@ -54,9 +54,12 @@ function storageRemove(keys) {
 //   { sequence, sessionId, pageData, addedAt, retryCount }
 
 const OUTBOX_DB_NAME = 'docuflux_outbox';
-const OUTBOX_DB_VERSION = 1;
+const OUTBOX_DB_VERSION = 2;
 const OUTBOX_STORE = 'pending_pages';
+const IMAGE_BLOB_STORE = 'image_blobs';
 const OUTBOX_MAX_RETRIES = 5;
+const MAX_IMAGE_SIZE_KB = 2048;
+const SEPARATE_UPLOAD_THRESHOLD_KB = 500;
 
 let _outboxDb = null;
 
@@ -69,6 +72,9 @@ function openOutboxDB() {
       if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
         const store = db.createObjectStore(OUTBOX_STORE, { keyPath: 'sequence', autoIncrement: true });
         store.createIndex('sessionId', 'sessionId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(IMAGE_BLOB_STORE)) {
+        db.createObjectStore(IMAGE_BLOB_STORE, { keyPath: 'key' });
       }
     };
     req.onsuccess = e => { _outboxDb = e.target.result; resolve(_outboxDb); };
@@ -145,6 +151,132 @@ async function incrementOutboxRetry(sequence) {
   });
 }
 
+// ─── Image Blob Store ────────────────────────────────────────────────────────
+
+async function storeImageBlob(key, b64Data) {
+  const db = await openOutboxDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_BLOB_STORE, 'readwrite');
+    const req = tx.objectStore(IMAGE_BLOB_STORE).put({ key, b64: b64Data, addedAt: Date.now() });
+    req.onsuccess = () => resolve(key);
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+async function getImageBlob(key) {
+  const db = await openOutboxDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_BLOB_STORE, 'readonly');
+    const req = tx.objectStore(IMAGE_BLOB_STORE).get(key);
+    req.onsuccess = () => resolve(req.result?.b64 || null);
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+async function removeImageBlob(key) {
+  const db = await openOutboxDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_BLOB_STORE, 'readwrite');
+    const req = tx.objectStore(IMAGE_BLOB_STORE).delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+function base64SizeKB(b64DataUrl) {
+  // data:image/jpeg;base64,.... — the actual data starts after the comma
+  const commaIdx = b64DataUrl.indexOf(',');
+  const rawLength = commaIdx >= 0 ? b64DataUrl.length - commaIdx - 1 : b64DataUrl.length;
+  return (rawLength * 0.75) / 1024;
+}
+
+/**
+ * For images exceeding MAX_IMAGE_SIZE_KB, store the base64 data in IndexedDB
+ * and replace it with a reference key in the page payload.  For images
+ * exceeding SEPARATE_UPLOAD_THRESHOLD_KB, upload them to the server separately
+ * and replace the b64 with a server-side reference.
+ */
+async function offloadLargeImages(sessionId, images) {
+  const processed = [];
+  for (const img of images) {
+    if (!img.b64) { processed.push(img); continue; }
+    const sizeKB = base64SizeKB(img.b64);
+
+    if (sizeKB > SEPARATE_UPLOAD_THRESHOLD_KB) {
+      // Upload separately to server
+      try {
+        const ref = await uploadImageSeparately(sessionId, img);
+        processed.push({ filename: img.filename, ref: ref.image_ref, alt: img.alt || '', is_screenshot: img.is_screenshot });
+      } catch (e) {
+        console.warn('[DocuFlux] Separate image upload failed, falling back to inline:', e.message);
+        if (sizeKB > MAX_IMAGE_SIZE_KB) {
+          const key = `img_${sessionId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          await storeImageBlob(key, img.b64);
+          processed.push({ filename: img.filename, blobRef: key, alt: img.alt || '', is_screenshot: img.is_screenshot });
+        } else {
+          processed.push(img);
+        }
+      }
+    } else {
+      processed.push(img);
+    }
+  }
+  return processed;
+}
+
+async function uploadImageSeparately(sessionId, img) {
+  const base = await getServerUrl();
+  const result = await storageGet({ clientId: generateId() });
+  const clientId = result.clientId;
+  await storageSet({ clientId });
+
+  // Convert base64 data URL to Blob for multipart upload
+  const commaIdx = img.b64.indexOf(',');
+  const mimeMatch = img.b64.slice(0, commaIdx).match(/data:([^;]+)/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const raw = atob(img.b64.slice(commaIdx + 1));
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  const blob = new Blob([arr], { type: mime });
+
+  const formData = new FormData();
+  formData.append('image', blob, img.filename);
+  formData.append('alt', img.alt || '');
+  if (img.is_screenshot) formData.append('is_screenshot', 'true');
+
+  const response = await fetch(`${base}/api/v1/capture/sessions/${sessionId}/images`, {
+    method: 'POST',
+    headers: { 'X-Client-ID': clientId },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+/**
+ * Before submitting page data, resolve any blob references back to inline
+ * base64 and clean up the IndexedDB entries.
+ */
+async function resolveImageBlobs(images) {
+  const resolved = [];
+  for (const img of images) {
+    if (img.blobRef) {
+      const b64 = await getImageBlob(img.blobRef);
+      if (b64) {
+        await removeImageBlob(img.blobRef);
+        resolved.push({ filename: img.filename, b64, alt: img.alt || '', is_screenshot: img.is_screenshot });
+      }
+    } else {
+      resolved.push(img);
+    }
+  }
+  return resolved;
+}
+
 // ─── API Client ──────────────────────────────────────────────────────────────
 
 async function getServerUrl() {
@@ -188,7 +320,7 @@ async function apiGet(path) {
 
 function captureScreenshot() {
   return new Promise((resolve, reject) => {
-    chrome.tabs.captureVisibleTab(null, { format: 'png' }, dataUrl => {
+    chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality: 85 }, dataUrl => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
       resolve(dataUrl);
     });
@@ -222,7 +354,7 @@ async function submitPageWithSequence(pageData, sequence) {
   if (pageData.needs_screenshot) {
     try {
       const screenshotDataUrl = await captureScreenshot();
-      const filename = `screenshot_${Date.now()}.png`;
+      const filename = `screenshot_${Date.now()}.jpg`;
       pageData.images = [
         { filename, b64: screenshotDataUrl, alt: '', is_screenshot: true },
         ...(pageData.images || []),
@@ -230,6 +362,16 @@ async function submitPageWithSequence(pageData, sequence) {
     } catch (e) {
       console.warn('[DocuFlux] Tab screenshot failed:', e.message);
     }
+  }
+
+  // Offload large images — upload separately or store in IndexedDB
+  if (pageData.images?.length) {
+    pageData.images = await offloadLargeImages(activeSession.sessionId, pageData.images);
+  }
+
+  // Resolve any blob references back to inline data before sending
+  if (pageData.images?.some(img => img.blobRef)) {
+    pageData.images = await resolveImageBlobs(pageData.images);
   }
 
   const apiResult = await apiPost(
@@ -422,9 +564,17 @@ async function handleMessage(message, sender) {
       return { serverUrl: result.serverUrl || DEFAULT_SERVER_URL };
     }
 
-    case 'SET_CONFIG':
+    case 'SET_CONFIG': {
+      const url = (() => { try { return new URL(message.serverUrl); } catch { return null; } })();
+      if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+        throw new Error('Invalid server URL');
+      }
+      if (url.protocol === 'http:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+        throw new Error('HTTPS required for remote servers');
+      }
       await storageSet({ serverUrl: message.serverUrl });
       return { ok: true };
+    }
 
     case 'TRIGGER_CAPTURE': {
       const tabs = await new Promise(resolve =>
@@ -720,7 +870,7 @@ async function handleMessage(message, sender) {
             return diag;
           },
         });
-        // Return text + images from the best frame (prefer cdn2, then main, then about:srcdoc)
+        // Return text from the best frame, but aggregate images from ALL frames
         const allResults = results.map(function (r) { return r.result; }).filter(Boolean);
         const withText = allResults.filter(function (d) { return d.text && d.text.length > 50; });
         const best = withText.find(function (d) { return d.isCdn2; })
@@ -732,9 +882,24 @@ async function handleMessage(message, sender) {
           if (copy.images) { copy.imageCount = copy.images.length; delete copy.images; }
           return copy;
         });
-        // Fetch CORS-blocked images from background (has host_permissions)
-        let images = best?.images || [];
-        const toFetch = best?.needsFetch || [];
+        // Aggregate images and needsFetch from ALL frame results (not just "best"),
+        // because about:srcdoc frames can extract images from their own DOM even when
+        // the parent cdn2 frame can't access them due to sandbox restrictions.
+        let images = [];
+        const toFetch = [];
+        const seenB64 = new Set();
+        for (const result of allResults) {
+          for (const img of (result.images || [])) {
+            if (img.b64 && !seenB64.has(img.b64)) {
+              seenB64.add(img.b64);
+              img.filename = 'percipio_img_' + images.length + '.png';
+              images.push(img);
+            }
+          }
+          for (const item of (result.needsFetch || [])) {
+            toFetch.push(item);
+          }
+        }
         if (toFetch.length > 0) {
           const fetched = await Promise.all(toFetch.map(async (item) => {
             try {
@@ -783,5 +948,24 @@ async function handleMessage(message, sender) {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function generateId() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ─── Test Exports ────────────────────────────────────────────────────────────
+
+if (typeof module !== 'undefined') {
+  module.exports = {
+    generateId,
+    base64SizeKB,
+    DEFAULT_SERVER_URL,
+    OUTBOX_DB_NAME,
+    OUTBOX_DB_VERSION,
+    OUTBOX_STORE,
+    IMAGE_BLOB_STORE,
+    MAX_IMAGE_SIZE_KB,
+    SEPARATE_UPLOAD_THRESHOLD_KB,
+    OUTBOX_MAX_RETRIES,
+  };
 }

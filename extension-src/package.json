@@ -1,0 +1,22 @@
+{
+  "name": "docuflux-capture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DocuFlux browser extension for capturing authenticated web content",
+  "dependencies": {
+    "dompurify": "3.3.3",
+    "socket.io-client": "4.8.3"
+  },
+  "devDependencies": {
+    "vitest": "^3.1.1",
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^26.0.0",
+    "@vitest/coverage-v8": "^3.1.1"
+  },
+  "scripts": {
+    "build": "node ../scripts/build-extension.js",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "check-deps": "npm outdated --json || true"
+  }
+}

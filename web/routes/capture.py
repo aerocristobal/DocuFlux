@@ -151,6 +151,58 @@ def capture_add_page(session_id):
     return jsonify({'status': 'accepted', 'page_count': new_count}), 200
 
 
+@capture_bp.route('/api/v1/capture/sessions/<session_id>/images', methods=['POST'])
+@_app_mod.csrf.exempt
+@_app_mod.limiter.limit("2000 per hour")
+@require_valid_uuid('session_id')
+def capture_upload_image(session_id):
+    """Upload a large image separately from a page submission."""
+
+    session_key = f"capture:session:{session_id}"
+    session_meta = _app_mod.redis_client.hgetall(session_key)
+    if not session_meta:
+        return jsonify({'error': 'Session not found or expired'}), 404
+    if session_meta.get('status') != 'active':
+        return jsonify({'error': 'Session is not active'}), 409
+
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image file provided'}), 400
+
+    image_file = request.files['image']
+    alt = request.form.get('alt', '')
+    is_screenshot = request.form.get('is_screenshot', 'false').lower() == 'true'
+
+    # Store image to session's image directory
+    upload_dir = os.path.join(_app_mod.app_settings.upload_folder, session_id, 'images')
+    os.makedirs(upload_dir, exist_ok=True)
+
+    # Use a deterministic filename based on content hash
+    import hashlib
+    content = image_file.read()
+    content_hash = hashlib.sha256(content).hexdigest()[:16]
+    ext = os.path.splitext(image_file.filename)[1] or '.jpg'
+    safe_filename = f"{content_hash}{ext}"
+    filepath = os.path.join(upload_dir, safe_filename)
+
+    if not os.path.exists(filepath):
+        with open(filepath, 'wb') as f:
+            f.write(content)
+
+    # Store image reference in Redis for assembly
+    image_ref = f"images/{safe_filename}"
+    images_key = f"capture:session:{session_id}:image_refs"
+    image_meta = json.dumps({
+        'ref': image_ref,
+        'filename': image_file.filename,
+        'alt': sanitize_string(alt, max_length=500),
+        'is_screenshot': is_screenshot,
+    })
+    _app_mod.redis_client.hset(images_key, image_ref, image_meta)
+    _app_mod.redis_client.expire(images_key, _app_mod.app_settings.capture_session_ttl)
+
+    return jsonify({'image_ref': image_ref, 'status': 'uploaded'}), 200
+
+
 @capture_bp.route('/api/v1/capture/sessions/<session_id>/finish', methods=['POST'])
 @_app_mod.csrf.exempt
 @_app_mod.limiter.limit("200 per hour")
