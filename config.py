@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     celery_broker_url: str = Field("redis://redis:6379/0", validation_alias="CELERY_BROKER_URL")
     celery_result_backend: str = Field("redis://redis:6379/0", validation_alias="CELERY_RESULT_BACKEND")
 
+    # --- Redis Sentinel (Epic 7.2) ---
+    redis_sentinel_hosts: Optional[str] = Field(None, validation_alias="REDIS_SENTINEL_HOSTS")
+    redis_sentinel_service: str = Field("mymaster", validation_alias="REDIS_SENTINEL_SERVICE")
+    redis_sentinel_password: Optional[SecretStr] = Field(None, validation_alias="REDIS_SENTINEL_PASSWORD")
+    redis_sentinel_db_metadata: int = Field(1, validation_alias="REDIS_SENTINEL_DB_METADATA")
+    redis_sentinel_db_broker: int = Field(0, validation_alias="REDIS_SENTINEL_DB_BROKER")
+
     # --- Flask/Session Settings ---
     flask_debug: bool = Field(False, validation_alias="FLASK_DEBUG")
     max_content_length: int = Field(200 * 1024 * 1024, validation_alias="MAX_CONTENT_LENGTH")  # 200MB default

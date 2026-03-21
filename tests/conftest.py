@@ -93,6 +93,18 @@ def app(test_settings):
     if hasattr(web_app, 'limiter'):
         web_app.limiter.enabled = False
 
+    # Register test-only routes for error handler testing (must be before first request)
+    if '/_test_raise_500' not in [r.rule for r in web_app.app.url_map.iter_rules()]:
+        from werkzeug.exceptions import TooManyRequests
+
+        @web_app.app.route('/_test_raise_500')
+        def _test_raise_500():
+            raise RuntimeError('boom')
+
+        @web_app.app.route('/_test_raise_429')
+        def _test_raise_429():
+            raise TooManyRequests('slow down')
+
     yield web_app.app
 
 @pytest.fixture

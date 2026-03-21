@@ -9,7 +9,7 @@ from flask_socketio import SocketIO
 
 from config import settings
 from settings_loader import load_settings
-from redis_client import create_redis_client
+from redis_client import create_redis_client, create_sentinel_client, parse_sentinel_hosts
 from job_metadata import update_job_metadata as _shared_update, get_job_metadata as _shared_get, fire_webhook as _shared_fire_webhook
 from uuid_validation import validate_uuid
 from pandoc_options import PANDOC_OPTIONS_SCHEMA, PDF_DEFAULTS, build_pandoc_cmd
@@ -35,11 +35,25 @@ MCP_SERVER_URL = app_settings.mcp_server_url
 
 storage = create_storage_backend(app_settings)
 
-celery = Celery(
-    'tasks',
-    broker=app_settings.celery_broker_url,
-    backend=app_settings.celery_result_backend
-)
+# Celery configuration — Sentinel-aware when REDIS_SENTINEL_HOSTS is set
+if app_settings.redis_sentinel_hosts:
+    _sentinels = parse_sentinel_hosts(app_settings.redis_sentinel_hosts)
+    _broker_urls = ';'.join(f'sentinel://{h}:{p}' for h, p in _sentinels)
+    _broker_url = f'{_broker_urls}/{app_settings.redis_sentinel_db_broker}'
+    _sentinel_pw = app_settings.redis_sentinel_password
+    _sentinel_pw_val = (_sentinel_pw.get_secret_value() if hasattr(_sentinel_pw, 'get_secret_value') else _sentinel_pw) if _sentinel_pw else None
+    celery = Celery('tasks', broker=_broker_url, backend=_broker_url)
+    _transport_opts = {'master_name': app_settings.redis_sentinel_service}
+    if _sentinel_pw_val:
+        _transport_opts['sentinel_kwargs'] = {'password': _sentinel_pw_val}
+    celery.conf.broker_transport_options = _transport_opts
+    celery.conf.result_backend_transport_options = _transport_opts
+else:
+    celery = Celery(
+        'tasks',
+        broker=app_settings.celery_broker_url,
+        backend=app_settings.celery_result_backend
+    )
 celery.conf.update(
     task_serializer='json',
     result_serializer='json',
@@ -55,14 +69,50 @@ celery.conf.task_routes = {
     'tasks.convert_with_hybrid': {'queue': 'gpu'},
 }
 
-# Redis metadata client (DB 1) — supports TLS via rediss:// URL + cert env vars
-redis_client = create_redis_client(
-    url=app_settings.redis_metadata_url,
-    app_settings=app_settings,
-    max_connections=20,
-    socket_connect_timeout=5,
-    socket_timeout=10,
-)
+# Epic 7.3: Dead letter queue — capture permanently failed tasks
+from celery.signals import task_failure as _task_failure_signal
+import json as _json
+
+@_task_failure_signal.connect
+def _handle_task_failure(sender=None, task_id=None, exception=None,
+                         args=None, kwargs=None, traceback=None,
+                         einfo=None, **kw):
+    """Capture failed tasks to a dead letter queue in Redis."""
+    try:
+        entry = {
+            'task_id': task_id,
+            'task_name': sender.name if sender else 'unknown',
+            'args': _json.dumps(args) if args else '[]',
+            'kwargs': _json.dumps(kwargs) if kwargs else '{}',
+            'exception': str(exception)[:1000],
+            'failed_at': str(time.time()),
+        }
+        redis_client.lpush('dlq:tasks', _json.dumps(entry))
+        redis_client.ltrim('dlq:tasks', 0, 999)
+        from metrics import dlq_total
+        dlq_total.inc()
+        logging.info("Task %s (%s) added to DLQ", task_id, entry['task_name'])
+    except Exception as e:
+        logging.error("Failed to write to DLQ: %s", e)
+
+# Redis metadata client (DB 1) — Sentinel-aware when REDIS_SENTINEL_HOSTS is set
+if app_settings.redis_sentinel_hosts:
+    redis_client = create_sentinel_client(
+        sentinel_hosts_str=app_settings.redis_sentinel_hosts,
+        service_name=app_settings.redis_sentinel_service,
+        db=app_settings.redis_sentinel_db_metadata,
+        password=_sentinel_pw_val if app_settings.redis_sentinel_hosts else None,
+        socket_connect_timeout=5,
+        socket_timeout=10,
+    )
+else:
+    redis_client = create_redis_client(
+        url=app_settings.redis_metadata_url,
+        app_settings=app_settings,
+        max_connections=20,
+        socket_connect_timeout=5,
+        socket_timeout=10,
+    )
 
 # WebSocket emitter (standalone, no Flask app)
 socketio = SocketIO(message_queue=app_settings.socketio_message_queue)
