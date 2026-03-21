@@ -1073,6 +1073,7 @@ class TestFireWebhook:
         job_id = str(__import__('uuid').uuid4())
 
         with patch.object(tasks.redis_client, 'hget', return_value=b'https://hook.example.com/cb'), \
+             patch('web.validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))]), \
              patch('tasks.requests.post') as mock_post:
             tasks.fire_webhook(job_id, 'SUCCESS', {'download_url': '/api/v1/download/' + job_id})
 
@@ -1103,6 +1104,7 @@ class TestFireWebhook:
         job_id = str(__import__('uuid').uuid4())
 
         with patch.object(tasks.redis_client, 'hget', return_value=b'https://hook.example.com/cb'), \
+             patch('web.validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))]), \
              patch('tasks.requests.post', side_effect=ConnectionError('timeout')):
             # Should not raise
             tasks.fire_webhook(job_id, 'FAILURE', {'error': 'oops'})
