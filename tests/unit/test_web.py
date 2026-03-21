@@ -587,8 +587,12 @@ class TestApiV1Status:
 class TestWebhookApi:
     """Tests for POST /api/v1/webhooks and GET /api/v1/webhooks/<job_id>."""
 
+    API_KEY_HEADERS = {'X-API-Key': 'dk_testkey'}
+
+    @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
+    @patch('web.validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))])
     @patch('app.redis_client')
-    def test_register_webhook_success(self, mock_redis, client, valid_job_id):
+    def test_register_webhook_success(self, mock_redis, _mock_dns, _mock_key, client, valid_job_id):
         """Register a valid webhook URL for an existing job returns 201."""
         mock_redis.hgetall.return_value = {
             'status': 'PENDING', 'filename': 'doc.pdf',
@@ -598,6 +602,7 @@ class TestWebhookApi:
         response = client.post(
             '/api/v1/webhooks',
             json={'job_id': valid_job_id, 'webhook_url': 'https://example.com/hook'},
+            headers=self.API_KEY_HEADERS,
         )
         assert response.status_code == 201
         data = response.get_json()
@@ -605,37 +610,45 @@ class TestWebhookApi:
         assert data['webhook_url'] == 'https://example.com/hook'
         mock_redis.hset.assert_called()
 
+    @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
     @patch('app.redis_client')
-    def test_register_webhook_invalid_uuid(self, mock_redis, client):
+    def test_register_webhook_invalid_uuid(self, mock_redis, _mock_key, client):
         """Register returns 400 for invalid job_id."""
         response = client.post(
             '/api/v1/webhooks',
             json={'job_id': 'not-a-uuid', 'webhook_url': 'https://example.com/hook'},
+            headers=self.API_KEY_HEADERS,
         )
         assert response.status_code == 400
 
+    @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
     @patch('app.redis_client')
-    def test_register_webhook_invalid_url(self, mock_redis, client, valid_job_id):
+    def test_register_webhook_invalid_url(self, mock_redis, _mock_key, client, valid_job_id):
         """Register returns 400 for non-http webhook_url."""
         mock_redis.hgetall.return_value = {'status': 'PENDING', 'created_at': '1700000000.0'}
         response = client.post(
             '/api/v1/webhooks',
             json={'job_id': valid_job_id, 'webhook_url': 'ftp://bad.example.com/hook'},
+            headers=self.API_KEY_HEADERS,
         )
         assert response.status_code == 400
 
+    @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
+    @patch('web.validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))])
     @patch('app.redis_client')
-    def test_register_webhook_job_not_found(self, mock_redis, client, valid_job_id):
+    def test_register_webhook_job_not_found(self, mock_redis, _mock_dns, _mock_key, client, valid_job_id):
         """Register returns 404 when job does not exist."""
         mock_redis.hgetall.return_value = {}
         response = client.post(
             '/api/v1/webhooks',
             json={'job_id': valid_job_id, 'webhook_url': 'https://example.com/hook'},
+            headers=self.API_KEY_HEADERS,
         )
         assert response.status_code == 404
 
+    @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
     @patch('app.redis_client')
-    def test_get_webhook_success(self, mock_redis, client, valid_job_id):
+    def test_get_webhook_success(self, mock_redis, _mock_key, client, valid_job_id):
         """GET webhook returns the registered URL for a job."""
         mock_redis.hgetall.return_value = {
             'status': 'SUCCESS', 'filename': 'doc.pdf',
@@ -643,24 +656,26 @@ class TestWebhookApi:
             'created_at': '1700000000.0', 'progress': '100',
             'webhook_url': 'https://example.com/hook',
         }
-        response = client.get(f'/api/v1/webhooks/{valid_job_id}')
+        response = client.get(f'/api/v1/webhooks/{valid_job_id}', headers=self.API_KEY_HEADERS)
         assert response.status_code == 200
         data = response.get_json()
         assert data['webhook_url'] == 'https://example.com/hook'
 
+    @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
     @patch('app.redis_client')
-    def test_get_webhook_not_registered(self, mock_redis, client, valid_job_id):
+    def test_get_webhook_not_registered(self, mock_redis, _mock_key, client, valid_job_id):
         """GET webhook returns 404 when no webhook has been registered."""
         mock_redis.hgetall.return_value = {
             'status': 'PENDING', 'filename': 'doc.pdf',
             'created_at': '1700000000.0', 'progress': '0',
         }
-        response = client.get(f'/api/v1/webhooks/{valid_job_id}')
+        response = client.get(f'/api/v1/webhooks/{valid_job_id}', headers=self.API_KEY_HEADERS)
         assert response.status_code == 404
 
-    def test_get_webhook_invalid_uuid(self, client):
+    @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
+    def test_get_webhook_invalid_uuid(self, _mock_key, client):
         """GET webhook returns 400 for invalid job_id."""
-        response = client.get('/api/v1/webhooks/bad-id')
+        response = client.get('/api/v1/webhooks/bad-id', headers=self.API_KEY_HEADERS)
         assert response.status_code == 400
 
 # ─── API Key Auth Tests ───────────────────────────────────────────────────────
@@ -668,41 +683,76 @@ class TestWebhookApi:
 class TestApiKeyAuth:
     """Tests for API key generation, validation, and enforcement."""
 
+    ADMIN_SECRET = 'test-admin-secret'
+    ADMIN_HEADERS = {'Authorization': f'Bearer {ADMIN_SECRET}'}
+
+    def _with_admin_secret(self):
+        """Context manager to set admin_api_secret on app_settings."""
+        from pydantic import SecretStr
+        import web.app as app_mod
+        original = app_mod.app_settings.admin_api_secret
+        app_mod.app_settings.admin_api_secret = SecretStr(self.ADMIN_SECRET)
+        return original
+
+    def _restore_admin_secret(self, original):
+        import web.app as app_mod
+        app_mod.app_settings.admin_api_secret = original
+
     @patch('app.redis_client')
     def test_create_api_key_returns_201(self, mock_redis, client):
         """POST /api/v1/auth/keys returns 201 with a dk_ prefixed key."""
-        mock_redis.hset.return_value = True
-        response = client.post('/api/v1/auth/keys', json={'label': 'CI pipeline'})
-        assert response.status_code == 201
-        data = response.get_json()
-        assert data['api_key'].startswith('dk_')
-        assert data['label'] == 'CI pipeline'
-        assert 'created_at' in data
+        original = self._with_admin_secret()
+        try:
+            mock_redis.hset.return_value = True
+            response = client.post('/api/v1/auth/keys', json={'label': 'CI pipeline'},
+                                   headers=self.ADMIN_HEADERS)
+            assert response.status_code == 201
+            data = response.get_json()
+            assert data['api_key'].startswith('dk_')
+            assert data['label'] == 'CI pipeline'
+            assert 'created_at' in data
+        finally:
+            self._restore_admin_secret(original)
 
     @patch('app.redis_client')
     def test_create_api_key_no_body(self, mock_redis, client):
         """POST /api/v1/auth/keys with no body uses empty label."""
-        mock_redis.hset.return_value = True
-        response = client.post('/api/v1/auth/keys', json={})
-        assert response.status_code == 201
-        data = response.get_json()
-        assert data['api_key'].startswith('dk_')
-        assert data['label'] == ''
+        original = self._with_admin_secret()
+        try:
+            mock_redis.hset.return_value = True
+            response = client.post('/api/v1/auth/keys', json={},
+                                   headers=self.ADMIN_HEADERS)
+            assert response.status_code == 201
+            data = response.get_json()
+            assert data['api_key'].startswith('dk_')
+            assert data['label'] == ''
+        finally:
+            self._restore_admin_secret(original)
 
     @patch('app.redis_client')
     def test_revoke_api_key_success(self, mock_redis, client):
         """DELETE /api/v1/auth/keys/<key> returns 200 on success."""
-        mock_redis.delete.return_value = 1  # Redis returns count of deleted keys
-        response = client.delete('/api/v1/auth/keys/dk_somekey123')
-        assert response.status_code == 200
-        assert response.get_json()['revoked'] is True
+        original = self._with_admin_secret()
+        try:
+            mock_redis.delete.return_value = 1  # Redis returns count of deleted keys
+            response = client.delete('/api/v1/auth/keys/dk_somekey123',
+                                     headers=self.ADMIN_HEADERS)
+            assert response.status_code == 200
+            assert response.get_json()['revoked'] is True
+        finally:
+            self._restore_admin_secret(original)
 
     @patch('app.redis_client')
     def test_revoke_nonexistent_key_returns_404(self, mock_redis, client):
         """DELETE /api/v1/auth/keys/<key> returns 404 for unknown key."""
-        mock_redis.delete.return_value = 0
-        response = client.delete('/api/v1/auth/keys/dk_doesnotexist')
-        assert response.status_code == 404
+        original = self._with_admin_secret()
+        try:
+            mock_redis.delete.return_value = 0
+            response = client.delete('/api/v1/auth/keys/dk_doesnotexist',
+                                     headers=self.ADMIN_HEADERS)
+            assert response.status_code == 404
+        finally:
+            self._restore_admin_secret(original)
 
     def test_convert_without_api_key_returns_401(self, client):
         """POST /api/v1/convert without X-API-Key returns 401."""

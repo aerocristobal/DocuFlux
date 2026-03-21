@@ -132,6 +132,7 @@ def test_secrets_manager_integration(clear_env_and_reset_settings):
     especially for generated keys like MASTER_ENCRYPTION_KEY in testing environment.
     """
     os.environ['FLASK_ENV'] = 'testing'
+    os.environ['SECRET_KEY'] = 'test-secret-for-integration'
 
     import importlib
     # Remove any mocked versions from sys.modules (test_worker.py mocks secrets_manager)
@@ -147,8 +148,8 @@ def test_secrets_manager_integration(clear_env_and_reset_settings):
     s = config.Settings(_env_file=None, **settings_override_data)
     
     assert s.flask_debug is False
-    if s.secret_key:
-        assert s.secret_key.get_secret_value() == 'change-me-in-production'
+    assert s.secret_key is not None
+    assert s.secret_key.get_secret_value() == 'test-secret-for-integration'
     assert s.master_encryption_key is not None
     assert len(s.master_encryption_key.get_secret_value()) > 0
     # Generated key is base64 URL-safe encoded (may have 0, 1, or 2 '=' padding chars)

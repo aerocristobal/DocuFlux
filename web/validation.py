@@ -7,14 +7,73 @@ data integrity throughout the application.
 Epic 21.9: Input Validation and Sanitization
 """
 
+import ipaddress
 import os
 import re
+import socket
 from functools import wraps
+from urllib.parse import urlparse
+
 from flask import request, jsonify
 import logging
 
 
 from uuid_validation import validate_uuid  # noqa: F811 — canonical impl in shared/
+
+
+def validate_webhook_url(url, settings=None):
+    """
+    Validate a webhook URL against SSRF attacks.
+
+    Checks: scheme, private/reserved IPs, cloud metadata endpoints,
+    HTTPS requirement, and allowlist/blocklist.
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if settings is None:
+        from config import settings as _settings
+        settings = _settings
+
+    if not url or not isinstance(url, str):
+        return False, "webhook_url is required"
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        return False, "webhook_url must be a valid http/https URL"
+
+    # HTTPS enforcement
+    if settings.webhook_require_https and parsed.scheme != 'https':
+        return False, "webhook_url must use HTTPS"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "webhook_url must contain a valid hostname"
+
+    # Allowlist check (if configured, only listed hosts are permitted)
+    if settings.webhook_url_allowlist:
+        allowed = {h.strip().lower() for h in settings.webhook_url_allowlist.split(',') if h.strip()}
+        if hostname.lower() not in allowed:
+            return False, f"hostname '{hostname}' is not in the webhook allowlist"
+
+    # Blocklist check
+    if settings.webhook_url_blocklist:
+        blocked = {h.strip().lower() for h in settings.webhook_url_blocklist.split(',') if h.strip()}
+        if hostname.lower() in blocked:
+            return False, f"hostname '{hostname}' is blocked"
+
+    # Resolve hostname and check for private/reserved IPs
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False, f"cannot resolve hostname '{hostname}'"
+
+    for family, _type, _proto, _canonname, sockaddr in addrinfos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
+            return False, f"webhook_url resolves to a private/reserved IP ({ip})"
+
+    return True, None
 
 
 def sanitize_filename(filename, max_length=255):

@@ -381,7 +381,14 @@ def test_api_v1_status_invalid_uuid(client):
 # GET /api/v1/download/{job_id} Tests
 # ============================================================================
 
-def test_api_v1_download_success_single_file(client, mock_redis):
+def test_api_v1_download_requires_api_key(client):
+    """Test download returns 401 without API key"""
+    job_id = '550e8400-e29b-41d4-a716-446655440000'
+    response = client.get(f'/api/v1/download/{job_id}')
+    assert response.status_code == 401
+
+
+def test_api_v1_download_success_single_file(client, mock_redis, api_headers):
     """Test downloading a single converted file"""
     job_id = '550e8400-e29b-41d4-a716-446655440000'
 
@@ -405,27 +412,27 @@ def test_api_v1_download_success_single_file(client, mock_redis):
                 with patch('web.app.send_from_directory') as mock_send:
                     mock_send.return_value = 'file_content'
 
-                    client.get(f'/api/v1/download/{job_id}')
+                    client.get(f'/api/v1/download/{job_id}', headers=api_headers)
 
                     # Verify send_from_directory was called
                     mock_send.assert_called_once()
 
 
-def test_api_v1_download_not_found(client, mock_redis):
+def test_api_v1_download_not_found(client, mock_redis, api_headers):
     """Test download for non-existent job"""
     job_id = '550e8400-e29b-41d4-a716-446655440000'
 
     # Mock Redis returning None
     mock_redis.hgetall = Mock(return_value=None)
 
-    response = client.get(f'/api/v1/download/{job_id}')
+    response = client.get(f'/api/v1/download/{job_id}', headers=api_headers)
 
     assert response.status_code == 404
     json_data = response.get_json()
     assert 'error' in json_data
 
 
-def test_api_v1_download_not_completed(client, mock_redis):
+def test_api_v1_download_not_completed(client, mock_redis, api_headers):
     """Test download for job that's not completed yet"""
     job_id = '550e8400-e29b-41d4-a716-446655440000'
 
@@ -435,14 +442,14 @@ def test_api_v1_download_not_completed(client, mock_redis):
         'filename': 'test.pdf'
     })
 
-    response = client.get(f'/api/v1/download/{job_id}')
+    response = client.get(f'/api/v1/download/{job_id}', headers=api_headers)
 
     assert response.status_code == 404
     json_data = response.get_json()
     assert 'not completed' in json_data['error'].lower()
 
 
-def test_api_v1_download_files_expired(client, mock_redis):
+def test_api_v1_download_files_expired(client, mock_redis, api_headers):
     """Test download when files have been deleted"""
     job_id = '550e8400-e29b-41d4-a716-446655440000'
 
@@ -454,16 +461,16 @@ def test_api_v1_download_files_expired(client, mock_redis):
 
     # Mock directory doesn't exist
     with patch('os.path.exists', return_value=False):
-        response = client.get(f'/api/v1/download/{job_id}')
+        response = client.get(f'/api/v1/download/{job_id}', headers=api_headers)
 
         assert response.status_code == 410
         json_data = response.get_json()
         assert 'expired' in json_data['error'].lower()
 
 
-def test_api_v1_download_invalid_uuid(client):
+def test_api_v1_download_invalid_uuid(client, api_headers):
     """Test download with invalid UUID"""
-    response = client.get('/api/v1/download/invalid-id')
+    response = client.get('/api/v1/download/invalid-id', headers=api_headers)
 
     assert response.status_code == 400
     json_data = response.get_json()
@@ -776,3 +783,143 @@ class TestApiV1PandocOptions:
         # kwargs should be empty (no pandoc_options key)
         call_kwargs = mock_celery.send_task.call_args[1].get('kwargs', {})
         assert 'pandoc_options' not in call_kwargs
+
+
+# ============================================================================
+# Webhook Authentication Tests (Story 3.2)
+# ============================================================================
+
+class TestWebhookAuth:
+    """Tests for webhook endpoint authentication."""
+
+    def test_register_webhook_requires_api_key(self, client, mock_redis):
+        """POST /api/v1/webhooks returns 401 without API key."""
+        response = client.post('/api/v1/webhooks',
+                               json={'job_id': '550e8400-e29b-41d4-a716-446655440000',
+                                     'webhook_url': 'https://example.com/hook'})
+        assert response.status_code == 401
+
+    def test_get_webhook_requires_api_key(self, client, mock_redis):
+        """GET /api/v1/webhooks/<id> returns 401 without API key."""
+        response = client.get('/api/v1/webhooks/550e8400-e29b-41d4-a716-446655440000')
+        assert response.status_code == 401
+
+    def test_register_webhook_with_api_key(self, client, mock_redis, api_headers):
+        """POST /api/v1/webhooks succeeds with valid API key."""
+        job_id = '550e8400-e29b-41d4-a716-446655440000'
+        mock_redis.hgetall = Mock(return_value={'status': 'PENDING'})
+        mock_redis.hset = Mock()
+
+        with patch('web.validation.socket.getaddrinfo',
+                   return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('93.184.216.34', 0))]):
+            response = client.post('/api/v1/webhooks',
+                                   json={'job_id': job_id,
+                                         'webhook_url': 'https://example.com/hook'},
+                                   headers=api_headers)
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data['registered'] is True
+
+    def test_get_webhook_with_api_key(self, client, mock_redis, api_headers):
+        """GET /api/v1/webhooks/<id> succeeds with valid API key."""
+        job_id = '550e8400-e29b-41d4-a716-446655440000'
+        mock_redis.hgetall = Mock(return_value={
+            'status': 'PENDING',
+            'webhook_url': 'https://example.com/hook'
+        })
+
+        response = client.get(f'/api/v1/webhooks/{job_id}', headers=api_headers)
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['webhook_url'] == 'https://example.com/hook'
+
+
+# ============================================================================
+# Webhook SSRF Validation Tests (Story 3.3)
+# ============================================================================
+
+import socket
+
+class TestWebhookSSRF:
+    """Tests for webhook URL SSRF validation."""
+
+    def _register(self, client, api_headers, webhook_url, mock_redis, dns_ip='93.184.216.34'):
+        """Helper to register a webhook with controlled DNS resolution."""
+        job_id = '550e8400-e29b-41d4-a716-446655440000'
+        mock_redis.hgetall = Mock(return_value={'status': 'PENDING'})
+        mock_redis.hset = Mock()
+
+        with patch('web.validation.socket.getaddrinfo',
+                   return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, '', (dns_ip, 0))]):
+            return client.post('/api/v1/webhooks',
+                               json={'job_id': job_id, 'webhook_url': webhook_url},
+                               headers=api_headers)
+
+    def test_rejects_localhost(self, client, mock_redis, api_headers):
+        """Webhook URL resolving to 127.0.0.1 is rejected."""
+        r = self._register(client, api_headers, 'https://localhost/hook',
+                           mock_redis, dns_ip='127.0.0.1')
+        assert r.status_code == 400
+        assert 'private' in r.get_json()['error'].lower()
+
+    def test_rejects_private_10x(self, client, mock_redis, api_headers):
+        """Webhook URL resolving to 10.x.x.x is rejected."""
+        r = self._register(client, api_headers, 'https://internal.corp/hook',
+                           mock_redis, dns_ip='10.0.0.1')
+        assert r.status_code == 400
+        assert 'private' in r.get_json()['error'].lower()
+
+    def test_rejects_private_192_168(self, client, mock_redis, api_headers):
+        """Webhook URL resolving to 192.168.x.x is rejected."""
+        r = self._register(client, api_headers, 'https://router.local/hook',
+                           mock_redis, dns_ip='192.168.1.1')
+        assert r.status_code == 400
+        assert 'private' in r.get_json()['error'].lower()
+
+    def test_rejects_metadata_endpoint(self, client, mock_redis, api_headers):
+        """Webhook URL resolving to cloud metadata IP is rejected."""
+        r = self._register(client, api_headers, 'https://metadata.google/hook',
+                           mock_redis, dns_ip='169.254.169.254')
+        assert r.status_code == 400
+        assert 'private' in r.get_json()['error'].lower() or 'reserved' in r.get_json()['error'].lower()
+
+    def test_rejects_http_when_https_required(self, client, mock_redis, api_headers):
+        """HTTP webhook URL rejected when WEBHOOK_REQUIRE_HTTPS is set."""
+        from config import settings
+        original = settings.webhook_require_https
+        settings.webhook_require_https = True
+        try:
+            r = self._register(client, api_headers, 'http://example.com/hook', mock_redis)
+            assert r.status_code == 400
+            assert 'HTTPS' in r.get_json()['error']
+        finally:
+            settings.webhook_require_https = original
+
+    def test_allowlist_blocks_unlisted_host(self, client, mock_redis, api_headers):
+        """Webhook URL not on allowlist is rejected."""
+        from config import settings
+        original = settings.webhook_url_allowlist
+        settings.webhook_url_allowlist = 'trusted.example.com,other.example.com'
+        try:
+            r = self._register(client, api_headers, 'https://evil.com/hook', mock_redis)
+            assert r.status_code == 400
+            assert 'allowlist' in r.get_json()['error']
+        finally:
+            settings.webhook_url_allowlist = original
+
+    def test_blocklist_blocks_listed_host(self, client, mock_redis, api_headers):
+        """Webhook URL on blocklist is rejected."""
+        from config import settings
+        original = settings.webhook_url_blocklist
+        settings.webhook_url_blocklist = 'evil.com,bad-actor.io'
+        try:
+            r = self._register(client, api_headers, 'https://evil.com/hook', mock_redis)
+            assert r.status_code == 400
+            assert 'blocked' in r.get_json()['error']
+        finally:
+            settings.webhook_url_blocklist = original
+
+    def test_accepts_valid_public_url(self, client, mock_redis, api_headers):
+        """Valid public HTTPS URL is accepted."""
+        r = self._register(client, api_headers, 'https://hooks.example.com/callback', mock_redis)
+        assert r.status_code == 201

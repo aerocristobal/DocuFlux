@@ -86,7 +86,8 @@ def fire_webhook(job_id, status, extra=None):
 def call_mcp_server(action, args):
     """Helper function to send commands to the MCP server."""
     payload = {'action': action, 'args': args}
-    headers = {'Content-Type': 'application/json'}
+    mcp_secret = os.environ.get('MCP_SECRET', '')
+    headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {mcp_secret}'}
     try:
         response = requests.post(MCP_SERVER_URL, json=payload, headers=headers, timeout=60)
         response.raise_for_status()

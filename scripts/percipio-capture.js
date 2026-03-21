@@ -80,23 +80,26 @@ async function findPercipioPage(browser) {
 async function requestCapture(page, timeout = 15000) {
   const ts = Date.now().toString();
 
-  // Set the request attribute — the extension's MutationObserver picks this up
-  await page.evaluate((t) => {
-    document.body.dataset.docufluxCaptureRequest = t;
+  // Dispatch a CustomEvent that the content script's event bridge picks up,
+  // then wait for the response event with a matching timestamp.
+  const result = await page.evaluate((expectedTs) => {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Capture timeout')), 12000);
+      window.addEventListener('docuflux-capture-response', function handler(e) {
+        if (e.detail?.ts === expectedTs) {
+          clearTimeout(timer);
+          window.removeEventListener('docuflux-capture-response', handler);
+          if (e.detail.error) return reject(new Error(e.detail.error));
+          resolve(e.detail);
+        }
+      });
+      window.dispatchEvent(new CustomEvent('docuflux-capture-request', {
+        detail: { ts: expectedTs }
+      }));
+    });
   }, ts);
 
-  // Wait for the extension to write the result with a matching timestamp
-  const resultJson = await page.waitForFunction((expectedTs) => {
-    const raw = document.body.dataset.docufluxCaptureResult;
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed.ts === expectedTs) return raw;
-    } catch { /* ignore parse errors */ }
-    return null;
-  }, ts, { timeout });
-
-  return JSON.parse(await resultJson.jsonValue());
+  return result;
 }
 
 async function advancePage(page, method) {

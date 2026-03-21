@@ -117,7 +117,7 @@ def load_all_secrets() -> Dict[str, Any]:
     # Flask secret key
     secrets['SECRET_KEY'] = load_secret(
         'secret_key',
-        default=os.environ.get('SECRET_KEY', 'change-me-in-production'),
+        default=os.environ.get('SECRET_KEY'),
         required=True,
         reject_default_in_prod=True
     )
