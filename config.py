@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     master_encryption_key: Optional[SecretStr] = Field(None, validation_alias="MASTER_ENCRYPTION_KEY")
     cloudflare_tunnel_token: Optional[SecretStr] = Field(None, validation_alias="CLOUDFLARE_TUNNEL_TOKEN")
     celery_signing_key: Optional[SecretStr] = Field(None, validation_alias="CELERY_SIGNING_KEY")
+    admin_api_secret: Optional[SecretStr] = Field(None, validation_alias="ADMIN_API_SECRET")
 
 settings = Settings()
 

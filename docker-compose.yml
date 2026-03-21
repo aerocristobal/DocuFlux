@@ -43,7 +43,8 @@ services:
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - SECRET_KEY=${SECRET_KEY}
+      - ADMIN_API_SECRET=${ADMIN_API_SECRET:-}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
       - BEHIND_PROXY=${BEHIND_PROXY:-false}
     depends_on:
@@ -89,7 +90,8 @@ services:
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - SECRET_KEY=${SECRET_KEY}
+      - MCP_SECRET=${MCP_SECRET}
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-1}
     command: >
       celery -A tasks worker
@@ -150,7 +152,7 @@ services:
       # - REDIS_TLS_CERTFILE=/certs/redis/redis.crt
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - SECRET_KEY=${SECRET_KEY}
     depends_on:
       redis:
         condition: service_healthy
@@ -162,10 +164,13 @@ services:
 
   mcp-server:
     build: ./mcp_server
-    ports:
-      - "8080:8080" # Expose for potential debugging, otherwise internal only
+    # Port not exposed to host — only accessible from Docker internal network
+    expose:
+      - "8080"
     environment:
       - PORT=8080
+      - MCP_SECRET=${MCP_SECRET}
+      - MCP_ALLOWED_DOMAINS=${MCP_ALLOWED_DOMAINS:-read.amazon.com,percipio.com}
     deploy:
       resources:
         limits:

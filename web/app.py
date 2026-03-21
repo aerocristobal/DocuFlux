@@ -64,7 +64,10 @@ except ValueError as e:
     sys.exit(1)
 
 app = Flask(__name__)
-app.secret_key = app_settings.secret_key if app_settings.secret_key else 'default-insecure-key'
+if not app_settings.secret_key:
+    logging.error("FATAL: SECRET_KEY is not set. Refusing to start.")
+    sys.exit(1)
+app.secret_key = app_settings.secret_key.get_secret_value() if hasattr(app_settings.secret_key, 'get_secret_value') else app_settings.secret_key
 
 if app_settings.behind_proxy:
     app.wsgi_app = ProxyFix(
