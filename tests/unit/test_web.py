@@ -683,41 +683,76 @@ class TestWebhookApi:
 class TestApiKeyAuth:
     """Tests for API key generation, validation, and enforcement."""
 
+    ADMIN_SECRET = 'test-admin-secret'
+    ADMIN_HEADERS = {'Authorization': f'Bearer {ADMIN_SECRET}'}
+
+    def _with_admin_secret(self):
+        """Context manager to set admin_api_secret on app_settings."""
+        from pydantic import SecretStr
+        import web.app as app_mod
+        original = app_mod.app_settings.admin_api_secret
+        app_mod.app_settings.admin_api_secret = SecretStr(self.ADMIN_SECRET)
+        return original
+
+    def _restore_admin_secret(self, original):
+        import web.app as app_mod
+        app_mod.app_settings.admin_api_secret = original
+
     @patch('app.redis_client')
     def test_create_api_key_returns_201(self, mock_redis, client):
         """POST /api/v1/auth/keys returns 201 with a dk_ prefixed key."""
-        mock_redis.hset.return_value = True
-        response = client.post('/api/v1/auth/keys', json={'label': 'CI pipeline'})
-        assert response.status_code == 201
-        data = response.get_json()
-        assert data['api_key'].startswith('dk_')
-        assert data['label'] == 'CI pipeline'
-        assert 'created_at' in data
+        original = self._with_admin_secret()
+        try:
+            mock_redis.hset.return_value = True
+            response = client.post('/api/v1/auth/keys', json={'label': 'CI pipeline'},
+                                   headers=self.ADMIN_HEADERS)
+            assert response.status_code == 201
+            data = response.get_json()
+            assert data['api_key'].startswith('dk_')
+            assert data['label'] == 'CI pipeline'
+            assert 'created_at' in data
+        finally:
+            self._restore_admin_secret(original)
 
     @patch('app.redis_client')
     def test_create_api_key_no_body(self, mock_redis, client):
         """POST /api/v1/auth/keys with no body uses empty label."""
-        mock_redis.hset.return_value = True
-        response = client.post('/api/v1/auth/keys', json={})
-        assert response.status_code == 201
-        data = response.get_json()
-        assert data['api_key'].startswith('dk_')
-        assert data['label'] == ''
+        original = self._with_admin_secret()
+        try:
+            mock_redis.hset.return_value = True
+            response = client.post('/api/v1/auth/keys', json={},
+                                   headers=self.ADMIN_HEADERS)
+            assert response.status_code == 201
+            data = response.get_json()
+            assert data['api_key'].startswith('dk_')
+            assert data['label'] == ''
+        finally:
+            self._restore_admin_secret(original)
 
     @patch('app.redis_client')
     def test_revoke_api_key_success(self, mock_redis, client):
         """DELETE /api/v1/auth/keys/<key> returns 200 on success."""
-        mock_redis.delete.return_value = 1  # Redis returns count of deleted keys
-        response = client.delete('/api/v1/auth/keys/dk_somekey123')
-        assert response.status_code == 200
-        assert response.get_json()['revoked'] is True
+        original = self._with_admin_secret()
+        try:
+            mock_redis.delete.return_value = 1  # Redis returns count of deleted keys
+            response = client.delete('/api/v1/auth/keys/dk_somekey123',
+                                     headers=self.ADMIN_HEADERS)
+            assert response.status_code == 200
+            assert response.get_json()['revoked'] is True
+        finally:
+            self._restore_admin_secret(original)
 
     @patch('app.redis_client')
     def test_revoke_nonexistent_key_returns_404(self, mock_redis, client):
         """DELETE /api/v1/auth/keys/<key> returns 404 for unknown key."""
-        mock_redis.delete.return_value = 0
-        response = client.delete('/api/v1/auth/keys/dk_doesnotexist')
-        assert response.status_code == 404
+        original = self._with_admin_secret()
+        try:
+            mock_redis.delete.return_value = 0
+            response = client.delete('/api/v1/auth/keys/dk_doesnotexist',
+                                     headers=self.ADMIN_HEADERS)
+            assert response.status_code == 404
+        finally:
+            self._restore_admin_secret(original)
 
     def test_convert_without_api_key_returns_401(self, client):
         """POST /api/v1/convert without X-API-Key returns 401."""
