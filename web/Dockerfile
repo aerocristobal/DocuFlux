@@ -12,10 +12,10 @@ COPY web/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
-# Copy shared root-level modules first, then web app
+# Copy shared root-level modules first, then web app as a package
 COPY config.py .
 COPY shared/ .
-COPY web/ .
+COPY web/ web/
 
 # Epic 21.8: Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser && \
@@ -25,4 +25,4 @@ USER appuser
 EXPOSE 5000
 
 # Use gunicorn with eventlet for WebSocket support (no monkey-patching conflicts with PyTorch)
-CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "app:app"]
+CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "web.app:app"]
