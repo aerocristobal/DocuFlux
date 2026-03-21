@@ -1,0 +1,202 @@
+{
+  "component-definition": {
+    "uuid": "ac4bf039-2da6-458a-972c-bf8f999ec25a",
+    "metadata": {
+      "title": "DocuFlux Component Definition",
+      "last-modified": "2026-03-21T00:00:00Z",
+      "version": "1.0.0",
+      "oscal-version": "1.1.2",
+      "roles": [
+        {
+          "id": "provider",
+          "title": "Provider"
+        }
+      ],
+      "parties": [
+        {
+          "uuid": "72a08160-e279-4cc9-b49a-893847e22ff6",
+          "type": "organization",
+          "name": "DocuFlux Project"
+        }
+      ]
+    },
+    "components": [
+      {
+        "uuid": "7c1e21d4-0192-44a5-8011-0f926996177f",
+        "type": "software",
+        "title": "DocuFlux Web Service",
+        "description": "Flask-based web application providing the REST API, Material Design UI, and WebSocket real-time updates for document conversion. Runs behind Cloudflare Tunnel for HTTPS termination.",
+        "purpose": "Serves the HTTP API and web UI for document conversion requests",
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+          }
+        ],
+        "protocols": [
+          {
+            "uuid": "76352140-2166-4fe0-be9e-c67af6737bbd",
+            "name": "https",
+            "title": "HTTPS via Cloudflare Tunnel",
+            "port-ranges": [
+              {
+                "start": 5000,
+                "end": 5000,
+                "transport": "TCP"
+              }
+            ]
+          }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "c32aaa06-4ecc-430b-9d67-2a06dc97264a",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json",
+            "description": "NIST SP 800-53 Rev 5 Moderate baseline control implementations for the DocuFlux Web Service.",
+            "implemented-requirements": [
+              {
+                "uuid": "d5cfd621-4b99-47a7-84b6-bd5a01b8dd93",
+                "control-id": "ac-2",
+                "description": "The web service implements API key account management via /api/v1/auth/keys endpoints (web/routes/auth.py). Key creation requires ADMIN_API_SECRET bearer authentication with rate limiting at 10 requests per hour. Keys are generated using cryptographic randomness (secrets.token_urlsafe) with a 'dk_' prefix. Keys can be revoked via DELETE /api/v1/auth/keys/<key>. Key metadata (created_at, label) is stored in Redis hashes under the 'apikey:' prefix."
+              },
+              {
+                "uuid": "8388ea12-f597-40ff-8727-05fbeb06bfa6",
+                "control-id": "ac-3",
+                "description": "Access enforcement is implemented through multiple layers: (1) API key authentication via the require_api_key decorator applied to all conversion and job endpoints (web/app.py). (2) CSRF protection via Flask-WTF on all form submissions. (3) Rate limiting via flask-limiter with configurable per-endpoint limits. (4) Admin operations require separate ADMIN_API_SECRET bearer token authentication."
+              },
+              {
+                "uuid": "8349ce48-99bd-4a10-a092-30f95f907e14",
+                "control-id": "au-2",
+                "description": "The web service produces structured JSON audit logs with fields: time, level, module, request_id, and message. A custom _RequestIdFilter injects a unique X-Request-ID into every log record for end-to-end request tracing (web/app.py). All API requests, authentication attempts, file uploads, and conversion operations are logged. Prometheus metrics are exported via /metrics endpoint for monitoring integration."
+              },
+              {
+                "uuid": "11bb255a-af63-4f09-85c5-a352667fbb27",
+                "control-id": "sc-8",
+                "description": "Transmission confidentiality is provided via Cloudflare Tunnel HTTPS termination for all external traffic (deploy/cloudflare/). The SESSION_COOKIE_SECURE flag enforces secure-only session cookies. Internal container-to-container communication occurs over Docker bridge networking within the same compose project or Kubernetes namespace, isolated by network policies."
+              },
+              {
+                "uuid": "920b36c7-5acc-4f4c-beac-b8ea0a9632f4",
+                "control-id": "sc-28",
+                "description": "The web service delegates file encryption to the shared EncryptionService (shared/encryption.py) which provides AES-256-GCM authenticated encryption. All uploaded files are encrypted at rest using per-job data encryption keys (DEKs) wrapped by a master encryption key (MEK). Automatic file cleanup removes decrypted data within configured retention windows (10 minutes post-download, 1 hour post-completion)."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "uuid": "16cca0a5-b27b-493a-b3df-94751355d07a",
+        "type": "software",
+        "title": "DocuFlux Worker Service",
+        "description": "Celery-based task worker providing document conversion (Pandoc, Marker AI), metadata extraction (SLM), and file encryption. Supports GPU acceleration for deep learning PDF conversion.",
+        "purpose": "Executes document conversion tasks, metadata extraction, and file encryption operations",
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+          }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "d7f5ad62-4a53-4a64-b51e-ef9113572610",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json",
+            "description": "NIST SP 800-53 Rev 5 Moderate baseline control implementations for the DocuFlux Worker Service.",
+            "implemented-requirements": [
+              {
+                "uuid": "d94c2f81-69b4-495c-8c60-f49d12f25a97",
+                "control-id": "au-2",
+                "description": "The worker service records audit events through Prometheus metrics (worker/metrics.py) including: conversion_total (successful conversions by format), conversion_failures_total (failed conversions by error type), dlq_total (dead letter queue entries), and task duration histograms. Failed tasks are captured in a dead letter queue (dlq:tasks) with full error context for post-incident analysis."
+              },
+              {
+                "uuid": "920b36c7-5acc-4f4c-beac-b8ea0a9632f4",
+                "control-id": "sc-28",
+                "description": "The worker service implements AES-256-GCM file encryption via the shared EncryptionService (shared/encryption.py). Each conversion job generates a unique 256-bit data encryption key (DEK) wrapped by the master encryption key (MEK). Files are encrypted at rest using encrypt_file/decrypt_file operations with 96-bit random nonces. Streaming encryption (encrypt_file_streaming) supports large files without full memory loading. The cryptography library provides the underlying AEAD primitives."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "uuid": "b54f7959-079c-4d1f-8cf6-d8c2cee6b8d4",
+        "type": "software",
+        "title": "DocuFlux Redis Service",
+        "description": "Redis 7 Alpine instance serving as the Celery message broker, result backend, job metadata store, and API key store. Configured with password authentication, append-only persistence, and optional TLS.",
+        "purpose": "Provides message brokering, caching, API key storage, and job metadata persistence",
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+          }
+        ],
+        "protocols": [
+          {
+            "uuid": "4d30757b-e1c9-476a-97f8-9731fb4dcce0",
+            "name": "redis",
+            "title": "Redis Protocol",
+            "port-ranges": [
+              {
+                "start": 6379,
+                "end": 6379,
+                "transport": "TCP"
+              }
+            ]
+          }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "ad4838ac-3a2d-4c65-a2fc-d8537959538f",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json",
+            "description": "NIST SP 800-53 Rev 5 Moderate baseline control implementations for the DocuFlux Redis Service.",
+            "implemented-requirements": [
+              {
+                "uuid": "21876fd8-3af9-4057-ac14-77d1e8b21c35",
+                "control-id": "ac-2",
+                "description": "Redis stores API key account data under the 'apikey:' key prefix as hash structures containing creation timestamp and label metadata. Key revocation deletes the corresponding Redis hash entry, immediately invalidating the key across all services."
+              },
+              {
+                "uuid": "6d1bb212-ec1c-455f-8c16-8d6ff10d7250",
+                "control-id": "sc-8",
+                "description": "Redis supports optional TLS in-transit encryption configured via REDIS_TLS_CERT, REDIS_TLS_KEY, and REDIS_TLS_CA environment variables (config.py). TLS is enabled through docker-compose.tls.yml overlay. Internal communication occurs within the Docker bridge network or Kubernetes namespace, isolated by NetworkPolicy default-deny rules (deploy/k8s/network-policies.yaml)."
+              },
+              {
+                "uuid": "6c2f399f-2d7b-4fd8-80b6-724bf42135e5",
+                "control-id": "sc-28",
+                "description": "Redis is configured with 'requirepass' for authentication and 'appendonly yes' for persistent storage of all write operations. Memory limits (maxmemory) prevent resource exhaustion. Data at rest in Redis includes job metadata and API key hashes; file content is encrypted by the worker service before any Redis interaction."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "uuid": "067f4240-64e5-42e0-bcad-d3a1972c741c",
+        "type": "software",
+        "title": "DocuFlux MCP Server",
+        "description": "Node.js Playwright-based vision server providing browser automation for authenticated web page capture. Communicates only with internal services via shared secret authentication.",
+        "purpose": "Provides browser automation for vision-based document capture",
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+          }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "cb63e6e0-9c37-482f-a53e-5b9bf1e242e6",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json",
+            "description": "NIST SP 800-53 Rev 5 Moderate baseline control implementations for the DocuFlux MCP Server.",
+            "implemented-requirements": [
+              {
+                "uuid": "b42f4c23-50d8-45ac-b27e-f6d7dca2bef7",
+                "control-id": "ac-3",
+                "description": "The MCP server enforces access control via MCP_SECRET shared secret authentication. All requests must include the correct secret to be processed. The server port (8080) is not exposed to the host network in Docker Compose configuration, restricting access to internal container communication only."
+              },
+              {
+                "uuid": "14489921-66de-48d2-8d08-e20bb439ceff",
+                "control-id": "sc-8",
+                "description": "The MCP server operates exclusively on the internal Docker bridge network with no host port binding, ensuring all communication remains within the container network boundary. In Kubernetes deployments, NetworkPolicy rules restrict ingress to only the web and worker services within the docuflux namespace."
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
