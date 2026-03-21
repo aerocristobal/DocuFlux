@@ -1,0 +1,307 @@
+{
+  "system-security-plan": {
+    "uuid": "8a73dab8-65ae-4b6f-8cb4-0ae8b22d2e58",
+    "metadata": {
+      "title": "DocuFlux System Security Plan",
+      "last-modified": "2026-03-21T00:00:00Z",
+      "version": "1.0.0",
+      "oscal-version": "1.1.2",
+      "roles": [
+        {
+          "id": "system-owner",
+          "title": "System Owner"
+        },
+        {
+          "id": "developer",
+          "title": "Developer"
+        },
+        {
+          "id": "api-user",
+          "title": "API Consumer"
+        }
+      ],
+      "parties": [
+        {
+          "uuid": "72a08160-e279-4cc9-b49a-893847e22ff6",
+          "type": "organization",
+          "name": "DocuFlux Project"
+        }
+      ],
+      "responsible-parties": [
+        {
+          "role-id": "system-owner",
+          "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+        }
+      ]
+    },
+    "import-profile": {
+      "href": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json"
+    },
+    "system-characteristics": {
+      "system-ids": [
+        {
+          "id": "docuflux-system"
+        }
+      ],
+      "system-name": "DocuFlux Document Conversion Service",
+      "description": "DocuFlux is a containerized document conversion platform combining Pandoc, Marker AI (deep learning PDF extraction), and a local SLM with a Material Design UI and full REST API. It supports 45+ document formats, GPU-accelerated conversion, browser extension capture, and webhook notifications. The system is deployed as a multi-container application via Docker Compose or Kubernetes.",
+      "security-sensitivity-level": "moderate",
+      "system-information": {
+        "information-types": [
+          {
+            "uuid": "96b9eb30-8086-436a-88b1-d9ad317db78a",
+            "title": "Document Conversion Data",
+            "description": "User-uploaded documents submitted for format conversion, including the source files, converted output files, and associated metadata such as job identifiers, format selections, and conversion parameters.",
+            "categorizations": [
+              {
+                "system": "https://doi.org/10.6028/NIST.SP.800-60v2r1"
+              }
+            ],
+            "confidentiality-impact": {
+              "base": "fips-199-moderate"
+            },
+            "integrity-impact": {
+              "base": "fips-199-moderate"
+            },
+            "availability-impact": {
+              "base": "fips-199-low"
+            }
+          }
+        ]
+      },
+      "security-impact-level": {
+        "security-objective-confidentiality": "fips-199-moderate",
+        "security-objective-integrity": "fips-199-moderate",
+        "security-objective-availability": "fips-199-low"
+      },
+      "status": {
+        "state": "operational"
+      },
+      "authorization-boundary": {
+        "description": "The DocuFlux system boundary encompasses five containerized services (web, worker, beat, redis, mcp-server) deployed within a single Docker Compose project or Kubernetes namespace (docuflux). External traffic enters through a Cloudflare Tunnel providing HTTPS termination. The boundary includes all persistent storage volumes, the Redis data store, and the internal container network."
+      }
+    },
+    "system-implementation": {
+      "users": [
+        {
+          "uuid": "7b518ac4-4fb3-4ffb-9e65-58c60ff15fa1",
+          "title": "API Consumer",
+          "role-ids": ["api-user"],
+          "description": "External users and automated systems that interact with DocuFlux via API keys to submit document conversion jobs, query job status, and download converted files."
+        }
+      ],
+      "components": [
+        {
+          "uuid": "84a42ae4-18ae-49d9-a781-2f74aafb3379",
+          "type": "software",
+          "title": "DocuFlux Web Service",
+          "description": "Flask-based web application providing the REST API, Material Design UI, and WebSocket real-time updates for document conversion.",
+          "status": {
+            "state": "operational"
+          }
+        },
+        {
+          "uuid": "cfd5b8bb-a5b1-49ff-a8e0-62bd8561d9bc",
+          "type": "software",
+          "title": "DocuFlux Worker Service",
+          "description": "Celery-based task worker providing document conversion, metadata extraction, and file encryption with optional GPU acceleration.",
+          "status": {
+            "state": "operational"
+          }
+        },
+        {
+          "uuid": "bc2350a3-944d-4e7a-9b3a-0b0de0b3b42f",
+          "type": "software",
+          "title": "DocuFlux Redis Service",
+          "description": "Redis 7 instance serving as message broker, result backend, job metadata store, and API key store.",
+          "status": {
+            "state": "operational"
+          }
+        },
+        {
+          "uuid": "c154e651-7221-4c9a-9bde-75fb41fccffe",
+          "type": "software",
+          "title": "DocuFlux MCP Server",
+          "description": "Node.js Playwright-based vision server for browser automation and authenticated web page capture.",
+          "status": {
+            "state": "operational"
+          }
+        },
+        {
+          "uuid": "be775c7a-44bd-44ca-81d0-cf469ac4aaae",
+          "type": "software",
+          "title": "DocuFlux Beat Scheduler",
+          "description": "Celery Beat scheduler triggering periodic maintenance tasks including file cleanup and retention enforcement.",
+          "status": {
+            "state": "operational"
+          }
+        }
+      ]
+    },
+    "control-implementation": {
+      "description": "NIST SP 800-53 Rev 5 Moderate baseline control implementations for the DocuFlux system, documented with by-component narratives.",
+      "implemented-requirements": [
+        {
+          "uuid": "73d5006e-5716-4a0f-bae8-f7e718e397d1",
+          "control-id": "ac-2",
+          "by-components": [
+            {
+              "component-uuid": "84a42ae4-18ae-49d9-a781-2f74aafb3379",
+              "uuid": "1f6b2250-1a3b-4ee8-a028-52fd1050659b",
+              "description": "The web service manages API key accounts via POST /api/v1/auth/keys and DELETE /api/v1/auth/keys/<key> endpoints (web/routes/auth.py). Key creation requires ADMIN_API_SECRET bearer authentication and is rate-limited to 10 requests per hour. Keys are generated using secrets.token_urlsafe with a 'dk_' prefix for identification. Key metadata (created_at, label) is stored as Redis hashes. Keys can be immediately revoked via the DELETE endpoint, which removes the Redis hash entry.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "bc2350a3-944d-4e7a-9b3a-0b0de0b3b42f",
+              "uuid": "f48e0a33-ddc7-4d6d-9794-9c79488ba8bc",
+              "description": "Redis stores API key data under the 'apikey:' key prefix as hash structures containing creation timestamp and label metadata. Key revocation deletes the corresponding Redis hash entry, immediately invalidating the key across all services that check authentication.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "a8bb618a-b255-4d75-a332-66cc92d62466",
+          "control-id": "ac-3",
+          "by-components": [
+            {
+              "component-uuid": "84a42ae4-18ae-49d9-a781-2f74aafb3379",
+              "uuid": "43f80ea3-0721-4f5b-96db-a98f46703414",
+              "description": "Access enforcement is implemented through multiple layers in the web service: (1) The require_api_key decorator validates API keys on all conversion and job management endpoints by checking the X-API-Key header against Redis-stored keys (web/app.py). (2) CSRF protection via Flask-WTF prevents cross-site request forgery on all form submissions. (3) Rate limiting via flask-limiter enforces configurable per-endpoint request limits. (4) Administrative operations (key management, DLQ access) require separate ADMIN_API_SECRET bearer token authentication.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "c154e651-7221-4c9a-9bde-75fb41fccffe",
+              "uuid": "b16d4efd-818a-475b-a36f-60f4f25128ed",
+              "description": "The MCP server enforces access control via MCP_SECRET shared secret authentication on all incoming requests. The server port (8080) is not exposed to the host network in Docker Compose, restricting access to internal container communication only. In Kubernetes, NetworkPolicy rules further restrict ingress to authorized services.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "1c26b968-b90b-4e4a-abea-e21db79ff7d9",
+          "control-id": "au-2",
+          "by-components": [
+            {
+              "component-uuid": "84a42ae4-18ae-49d9-a781-2f74aafb3379",
+              "uuid": "ad587778-f7ab-4fda-9a3a-63172a25facd",
+              "description": "The web service produces structured JSON audit logs for all significant events including API requests, authentication attempts, file uploads, conversion operations, and errors. A custom _RequestIdFilter (web/app.py) injects a unique X-Request-ID into every log record for end-to-end request correlation. Prometheus metrics are exported via the /metrics endpoint using prometheus-flask-exporter for external monitoring integration.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "cfd5b8bb-a5b1-49ff-a8e0-62bd8561d9bc",
+              "uuid": "bd26f02d-b02e-4551-b327-dba4e89aa1eb",
+              "description": "The worker service records audit events through Prometheus metrics (worker/metrics.py) including: conversion_total (successful conversions by format), conversion_failures_total (failed conversions by error type), dlq_total (dead letter queue entries), and task duration histograms. Failed tasks are captured in a dead letter queue (dlq:tasks in Redis) with full error context including task name, arguments, exception details, and timestamp for post-incident analysis.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "12330c64-006c-440c-9095-b9d9b0c75eb0",
+          "control-id": "au-3",
+          "by-components": [
+            {
+              "component-uuid": "84a42ae4-18ae-49d9-a781-2f74aafb3379",
+              "uuid": "6866c877-4403-414a-9635-a665fac68020",
+              "description": "Audit records produced by the web service contain the following fields: time (ISO 8601 timestamp), level (severity), module (source component), request_id (unique correlation identifier), and message (event description). The X-Request-ID is generated per request and propagated via the _RequestIdFilter to all log records within the request lifecycle, enabling end-to-end tracing across log aggregation systems.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "2496308b-1d27-4e09-9cc4-ef269ce80ec0",
+          "control-id": "sc-8",
+          "by-components": [
+            {
+              "component-uuid": "84a42ae4-18ae-49d9-a781-2f74aafb3379",
+              "uuid": "de388549-d822-44f3-8250-d66b9c231195",
+              "description": "All external traffic to the web service is encrypted via Cloudflare Tunnel providing HTTPS termination (deploy/cloudflare/). The SESSION_COOKIE_SECURE configuration flag ensures session cookies are only transmitted over HTTPS connections. Internal container communication occurs over the Docker bridge network within the same compose project, isolated from external networks.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "bc2350a3-944d-4e7a-9b3a-0b0de0b3b42f",
+              "uuid": "e2c53248-9fdd-4837-823b-62ee18e07fdd",
+              "description": "Redis supports optional TLS in-transit encryption configured via REDIS_TLS_CERT, REDIS_TLS_KEY, and REDIS_TLS_CA environment variables (config.py). TLS is enabled through the docker-compose.tls.yml overlay configuration. In Kubernetes, NetworkPolicy default-deny rules (deploy/k8s/network-policies.yaml) restrict Redis access to only the web and worker services within the docuflux namespace.",
+              "implementation-status": {
+                "state": "partially-implemented"
+              }
+            },
+            {
+              "component-uuid": "c154e651-7221-4c9a-9bde-75fb41fccffe",
+              "uuid": "267e09f7-42f3-4340-827b-9bb2aebd768d",
+              "description": "The MCP server operates exclusively on the internal Docker bridge network with no host port binding in the Docker Compose configuration, ensuring all communication remains within the container network boundary. In Kubernetes, NetworkPolicy rules restrict ingress to only authorized services within the docuflux namespace.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "df39986f-f793-4d2c-ba9a-5baf72e7c4eb",
+          "control-id": "sc-13",
+          "by-components": [
+            {
+              "component-uuid": "cfd5b8bb-a5b1-49ff-a8e0-62bd8561d9bc",
+              "uuid": "833118d5-603d-4839-b9c3-1d62aaaa4844",
+              "description": "Cryptographic protection is provided by the shared EncryptionService (shared/encryption.py) using AES-256-GCM authenticated encryption via the Python cryptography library. The service uses 256-bit encryption keys with 96-bit random nonces generated by os.urandom. A key hierarchy is implemented with per-job data encryption keys (DEKs) wrapped by a master encryption key (MEK) using the wrap_key/unwrap_key operations. The AESGCM primitive provides both confidentiality and integrity through authenticated encryption with associated data (AEAD).",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "8b1a34ef-0a5e-4baf-954b-abd2a0e6652f",
+          "control-id": "sc-28",
+          "by-components": [
+            {
+              "component-uuid": "cfd5b8bb-a5b1-49ff-a8e0-62bd8561d9bc",
+              "uuid": "ba19de6a-2dd2-482c-8265-39ddeb969050",
+              "description": "The worker service encrypts all document files at rest using AES-256-GCM via the EncryptionService (shared/encryption.py). Each conversion job generates a unique 256-bit DEK that is wrapped by the MEK before storage. The encrypt_file and decrypt_file operations handle standard files, while encrypt_file_streaming provides memory-efficient encryption for large files using chunked processing with incremented nonces. Automatic file cleanup enforces retention windows: 10 minutes post-download, 1 hour post-completion, and 5 minutes post-failure.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "bc2350a3-944d-4e7a-9b3a-0b0de0b3b42f",
+              "uuid": "7e07c132-7516-4f18-8271-70737957cfc5",
+              "description": "Redis is configured with 'requirepass' for password-based authentication preventing unauthorized data access. Append-only file persistence ('appendonly yes') ensures durability of all write operations. Memory limits (maxmemory) prevent resource exhaustion attacks. File content stored in Redis-managed job metadata is encrypted by the worker service before storage.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "315772cc-ed98-4039-a716-650352736f9f",
+          "control-id": "si-10",
+          "by-components": [
+            {
+              "component-uuid": "84a42ae4-18ae-49d9-a781-2f74aafb3379",
+              "uuid": "54c55ba2-251e-4084-a099-ce243f233ee4",
+              "description": "The web service implements comprehensive input validation through the validation module (web/validation.py): (1) sanitize_filename prevents path traversal attacks by removing ../ sequences, replacing dangerous characters, and limiting filename length. (2) validate_file_content_type verifies file content matches declared format using magic byte detection (PDF %PDF header, ZIP-based PK header for DOCX/ODT/EPUB, UTF-8/Latin-1 encoding for text formats). (3) require_valid_uuid decorator validates UUID format on all job ID parameters. (4) validate_webhook_url prevents SSRF by resolving hostnames and blocking private/reserved/loopback/link-local IP addresses, enforcing HTTPS, and supporting allowlist/blocklist filtering. (5) sanitize_string removes null bytes and enforces length limits on all text inputs. (6) Pandoc conversion options are validated against an allowed schema before execution.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

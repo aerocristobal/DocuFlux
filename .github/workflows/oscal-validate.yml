@@ -1,0 +1,42 @@
+name: OSCAL Validation
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'oscal/**'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'oscal/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install check-jsonschema
+        run: pip install check-jsonschema
+
+      - name: Download OSCAL schemas
+        run: |
+          mkdir -p /tmp/oscal-schemas
+          curl -sL -o /tmp/oscal-schemas/component.json \
+            "https://github.com/usnistgov/OSCAL/releases/download/v1.1.2/oscal_component_schema.json"
+          curl -sL -o /tmp/oscal-schemas/ssp.json \
+            "https://github.com/usnistgov/OSCAL/releases/download/v1.1.2/oscal_ssp_schema.json"
+
+      - name: Validate Component Definition
+        run: check-jsonschema --schemafile /tmp/oscal-schemas/component.json oscal/component-definition.json
+
+      - name: Validate System Security Plan
+        run: check-jsonschema --schemafile /tmp/oscal-schemas/ssp.json oscal/ssp.json

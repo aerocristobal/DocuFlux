@@ -1,6 +1,7 @@
 """Browser extension capture session route handlers."""
 
 import os
+import re
 import uuid
 import time
 import json
@@ -172,8 +173,11 @@ def capture_upload_image(session_id):
     alt = request.form.get('alt', '')
     is_screenshot = request.form.get('is_screenshot', 'false').lower() == 'true'
 
-    # Store image to session's image directory
-    upload_dir = os.path.join(_app_mod.app_settings.upload_folder, session_id, 'images')
+    # Store image to session's image directory (realpath boundary check)
+    base_upload = os.path.realpath(_app_mod.app_settings.upload_folder)
+    upload_dir = os.path.realpath(os.path.join(_app_mod.app_settings.upload_folder, session_id, 'images'))
+    if not upload_dir.startswith(base_upload + os.sep):
+        return jsonify({'error': 'Invalid upload path'}), 400
     os.makedirs(upload_dir, exist_ok=True)
 
     # Use a deterministic filename based on content hash
@@ -181,8 +185,14 @@ def capture_upload_image(session_id):
     content = image_file.read()
     content_hash = hashlib.sha256(content).hexdigest()[:16]
     ext = os.path.splitext(image_file.filename)[1] or '.jpg'
+    # Sanitize extension to prevent path traversal
+    ext = '.' + re.sub(r'[^a-zA-Z0-9]', '', ext.lstrip('.'))
+    if not ext or ext == '.':
+        ext = '.jpg'
     safe_filename = f"{content_hash}{ext}"
-    filepath = os.path.join(upload_dir, safe_filename)
+    filepath = os.path.realpath(os.path.join(upload_dir, safe_filename))
+    if not filepath.startswith(upload_dir + os.sep):
+        return jsonify({'error': 'Invalid file path'}), 400
 
     if not os.path.exists(filepath):
         with open(filepath, 'wb') as f:
