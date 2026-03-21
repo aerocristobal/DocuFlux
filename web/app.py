@@ -34,6 +34,7 @@ from encryption import EncryptionService
 from key_manager import create_key_manager
 from formats import FORMATS, detect_format_from_extension
 from pandoc_options import PANDOC_OPTIONS_SCHEMA, validate_pandoc_options
+from storage import create_storage_backend
 import tempfile
 
 # Configure Structured Logging with request-ID correlation
@@ -115,8 +116,8 @@ UPLOAD_FOLDER = app_settings.upload_folder
 OUTPUT_FOLDER = app_settings.output_folder
 MIN_FREE_SPACE = app_settings.min_free_space
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+storage = create_storage_backend(app_settings)
+storage.ensure_directories()
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
@@ -274,14 +275,17 @@ def decrypt_file_to_temp(encrypted_path, job_id):
 
 def check_disk_space():
     """
-    Checks if there is sufficient free disk space in the UPLOAD_FOLDER.
+    Checks if there is sufficient free disk space.
 
     Returns:
         bool: True if free disk space is greater than or equal to MIN_FREE_SPACE,
-              False otherwise. Returns True if an error occurs during disk usage check.
+              False otherwise. Returns True for non-local backends or on error.
     """
+    usage = storage.disk_usage()
+    if usage is None:
+        return True  # S3 or other backends without disk limits
     try:
-        total, used, free = shutil.disk_usage(UPLOAD_FOLDER)
+        total, used, free = usage
         return free >= MIN_FREE_SPACE
     except Exception:
         return True

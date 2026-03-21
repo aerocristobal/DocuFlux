@@ -989,8 +989,11 @@ class TestAssembleCaptureSession:
         mock_redis.hget.return_value = 'done'  # batch status
 
         # Use real temp directory so file I/O works
+        from storage import LocalStorageBackend
         with tempfile.TemporaryDirectory() as tmpdir:
             tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
             job_dir = os.path.join(tmpdir, job_id)
             os.makedirs(os.path.join(job_dir, 'batches', 'batch_0', 'images'))
             os.makedirs(os.path.join(job_dir, 'batches', 'batch_1', 'images'))
@@ -1018,8 +1021,9 @@ class TestAssembleCaptureSession:
             # Staging directory should be cleaned up
             assert not os.path.exists(os.path.join(job_dir, 'batches'))
 
-        # Restore to a non-breaking value
+        # Restore
         tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+        tasks.storage = old_storage
 
     @patch('tasks.redis_client')
     @patch('tasks.update_job_metadata')
@@ -1039,8 +1043,11 @@ class TestAssembleCaptureSession:
         ]
         mock_redis.hget.return_value = 'failed'  # batch 0 failed
 
+        from storage import LocalStorageBackend
         with tempfile.TemporaryDirectory() as tmpdir:
             tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
             job_dir = os.path.join(tmpdir, job_id)
             os.makedirs(os.path.join(job_dir, 'batches', 'batch_0'))
 
@@ -1060,6 +1067,7 @@ class TestAssembleCaptureSession:
             assert 'batch_warnings' in success_calls[0].args[1]
 
         tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+        tasks.storage = old_storage
 
 # ─── fire_webhook Tests ───────────────────────────────────────────────────────
 

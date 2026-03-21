@@ -145,13 +145,9 @@ def test_delete_job(mock_redis, mock_rmtree, client, valid_job_id):
     assert response.json['status'] == 'deleted'
     mock_redis.delete.assert_called_with(f'job:{valid_job_id}')
 
-@patch('os.path.exists')
-@patch('shutil.copy2')
 @patch('app.redis_client')
 @patch('app.celery')
-def test_retry_job(mock_celery, mock_redis, mock_copy, mock_exists, client, valid_job_id):
-    mock_exists.return_value = True
-
+def test_retry_job(mock_celery, mock_redis, client, valid_job_id):
     # decode_responses=True means all values are strings
     mock_redis.hgetall.return_value = {
         'filename': 'test.md',
@@ -164,8 +160,12 @@ def test_retry_job(mock_celery, mock_redis, mock_copy, mock_exists, client, vali
     mock_redis.pipeline.return_value = mock_pipe
     mock_pipe.execute.return_value = [1, {'status': 'PENDING'}]
 
-    with patch('os.makedirs'):
-        response = client.post(f'/api/retry/{valid_job_id}')
+    # Create the source file in storage so retry can read it
+    import web.app as _app
+    _app.storage.makedirs(valid_job_id, folder='upload')
+    _app.storage.save_file(valid_job_id, 'test.md', b'# Hello', folder='upload')
+
+    response = client.post(f'/api/retry/{valid_job_id}')
 
     assert response.status_code == 200
     assert response.json['status'] == 'retried'

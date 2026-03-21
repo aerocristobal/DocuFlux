@@ -6,7 +6,6 @@ import time
 import io
 import json
 import zipfile
-import shutil
 import logging
 
 from flask import Blueprint, render_template, request, jsonify, session, Response
@@ -74,14 +73,12 @@ def convert():
                  return jsonify({'error': f"Extension {file_ext} mismatch."}), 400
 
         job_id = str(uuid.uuid4())
-        job_dir = os.path.join(_app_mod.app.config['UPLOAD_FOLDER'], job_id)
-        os.makedirs(job_dir, exist_ok=True)
+        _app_mod.storage.makedirs(job_id, folder='upload')
         input_filename = secure_filename(file.filename) or f"file_{job_id}"
-        input_path = os.path.join(job_dir, input_filename)
+        input_path = _app_mod.storage.get_local_path(job_id, input_filename, folder='upload')
         file.save(input_path)
 
-        output_job_dir = os.path.join(_app_mod.app.config['OUTPUT_FOLDER'], job_id)
-        os.makedirs(output_job_dir, exist_ok=True)
+        _app_mod.storage.makedirs(job_id, folder='output')
         base_name = os.path.splitext(input_filename)[0]
         output_filename = f"{base_name}.{to_info['extension'].lstrip('.')}"
 
@@ -93,7 +90,7 @@ def convert():
         })
         _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
 
-        file_size = os.path.getsize(input_path)
+        file_size = _app_mod.storage.get_file_size(job_id, input_filename, folder='upload')
 
         if from_format == 'pdf_marker':
             task_name = 'tasks.convert_with_marker'
@@ -158,10 +155,7 @@ def list_jobs():
             if cached is not None:
                 file_count = int(cached)
             else:
-                job_dir = os.path.join(_app_mod.OUTPUT_FOLDER, jid)
-                if os.path.exists(job_dir):
-                    for root, dirs, files in os.walk(job_dir):
-                        file_count += len(files)
+                file_count = len(_app_mod.storage.list_files(jid, folder='output'))
 
         is_zip = file_count > 1
         download_url = None
@@ -247,13 +241,10 @@ def cancel_job(job_id):
 def delete_job(job_id):
     """Delete a job's files from disk and remove its metadata from Redis."""
     if not _app_mod.is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
-    safe_job_id = secure_filename(job_id)
     session_id = session.get('session_id')
     if session_id: _app_mod.redis_client.lrem(f"history:{session_id}", 0, job_id)
 
-    for base in [_app_mod.UPLOAD_FOLDER, _app_mod.OUTPUT_FOLDER]:
-        p = os.path.join(base, safe_job_id)
-        if os.path.exists(p): shutil.rmtree(p)
+    _app_mod.storage.delete_job(job_id)
     _app_mod.redis_client.delete(f"job:{job_id}")
     return jsonify({'status': 'deleted'})
 
@@ -262,18 +253,17 @@ def delete_job(job_id):
 def retry_job(job_id):
     """Clone a failed/revoked job and re-queue it with the same parameters."""
     if not _app_mod.is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
-    safe_job_id = secure_filename(job_id)
     job_data = _app_mod.redis_client.hgetall(f"job:{job_id}")
     if not job_data: return jsonify({'error': 'Not found'}), 404
     input_filename = job_data.get('filename')
-    old_input_path = os.path.join(_app_mod.UPLOAD_FOLDER, safe_job_id, input_filename)
-    if not os.path.exists(old_input_path): return jsonify({'error': 'Cleaned up'}), 400
+    if not _app_mod.storage.file_exists(job_id, input_filename, folder='upload'):
+        return jsonify({'error': 'Cleaned up'}), 400
 
     new_job_id = str(uuid.uuid4())
-    new_job_dir = os.path.join(_app_mod.UPLOAD_FOLDER, new_job_id)
-    os.makedirs(new_job_dir, exist_ok=True)
-    os.makedirs(os.path.join(_app_mod.OUTPUT_FOLDER, new_job_id), exist_ok=True)
-    shutil.copy2(old_input_path, os.path.join(new_job_dir, input_filename))
+    _app_mod.storage.makedirs(new_job_id, folder='upload')
+    _app_mod.storage.makedirs(new_job_id, folder='output')
+    file_data = _app_mod.storage.read_file(job_id, input_filename, folder='upload')
+    _app_mod.storage.save_file(new_job_id, input_filename, file_data, folder='upload')
 
     to_info = next((f for f in FORMATS if f['key'] == job_data.get('to')), None)
     output_filename = f"{os.path.splitext(input_filename)[0]}.{to_info['extension'].lstrip('.')}"
@@ -320,24 +310,28 @@ def retry_job(job_id):
 def download_file(job_id):
     """Serve the converted output file for download, decrypting if necessary."""
     if not _app_mod.is_valid_uuid(job_id): return "Invalid", 400
-    safe_job_id = secure_filename(job_id)
-    job_dir = os.path.join(_app_mod.OUTPUT_FOLDER, safe_job_id)
-    if not os.path.exists(job_dir): return "Not found", 404
-    entries = [e for e in os.listdir(job_dir) if not e.startswith('.')]
-    if any(os.path.isdir(os.path.join(job_dir, e)) for e in entries):
+    if not _app_mod.storage.job_dir_exists(job_id, folder='output'):
+        return "Not found", 404
+    all_files = _app_mod.storage.list_files(job_id, folder='output')
+    if not all_files: return "Not found", 404
+
+    # Check for subdirectories (e.g., images/)
+    has_subdirs = any('/' in f for f in all_files)
+    if has_subdirs:
         return download_zip(job_id)
-    files = [e for e in entries if os.path.isfile(os.path.join(job_dir, e))]
-    if not files: return "Not found", 404
-    target_file = files[0]
-    if len(files) > 1:
-        others = [f for f in files if f != 'metadata.json']
+
+    top_files = [f for f in all_files if not f.startswith('.')]
+    if not top_files: return "Not found", 404
+    target_file = top_files[0]
+    if len(top_files) > 1:
+        others = [f for f in top_files if f != 'metadata.json']
         if others: target_file = others[0]
 
-    encrypted_path = os.path.join(job_dir, target_file)
     job_meta = _app_mod.redis_client.hgetall(f"job:{job_id}")
     is_encrypted = job_meta.get('encrypted') == 'true'
 
     if is_encrypted:
+        encrypted_path = _app_mod.storage.get_local_path(job_id, target_file, folder='output')
         decrypted_path = _app_mod.decrypt_file_to_temp(encrypted_path, job_id)
         if decrypted_path is None:
             return "Decryption failed", 500
@@ -363,16 +357,15 @@ def download_file(job_id):
             'downloaded_at': str(time.time()),
             'last_viewed': current_time
         })
-        return _app_mod.send_from_directory(job_dir, target_file, as_attachment=True)
+        return _app_mod.storage.serve_download(job_id, target_file, folder='output')
 
 
 @conversion_bp.route('/download_zip/<job_id>')
 def download_zip(job_id):
     """Bundle all output files into an in-memory ZIP and serve for download."""
     if not _app_mod.is_valid_uuid(job_id): return "Invalid", 400
-    safe_job_id = secure_filename(job_id)
-    job_dir = os.path.join(_app_mod.OUTPUT_FOLDER, safe_job_id)
-    if not os.path.exists(job_dir): return "Not found", 404
+    if not _app_mod.storage.job_dir_exists(job_id, folder='output'):
+        return "Not found", 404
 
     job_meta = _app_mod.redis_client.hgetall(f"job:{job_id}")
     is_encrypted = job_meta.get('encrypted') == 'true'
@@ -382,19 +375,18 @@ def download_zip(job_id):
         temp_files = []
         try:
             with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for root, dirs, files in os.walk(job_dir):
-                    for file in files:
-                        abs_path = os.path.join(root, file)
-                        rel_path = os.path.relpath(abs_path, job_dir)
-                        if is_encrypted:
-                            decrypted_path = _app_mod.decrypt_file_to_temp(abs_path, job_id)
-                            if decrypted_path is None:
-                                logging.error(f"Failed to decrypt {abs_path} for zip download")
-                                continue
-                            zf.write(decrypted_path, rel_path)
-                            temp_files.append(decrypted_path)
-                        else:
-                            zf.write(abs_path, rel_path)
+                for rel_path in _app_mod.storage.list_files(job_id, folder='output'):
+                    if is_encrypted:
+                        abs_path = _app_mod.storage.get_local_path(job_id, rel_path, folder='output')
+                        decrypted_path = _app_mod.decrypt_file_to_temp(abs_path, job_id)
+                        if decrypted_path is None:
+                            logging.error(f"Failed to decrypt {rel_path} for zip download")
+                            continue
+                        zf.write(decrypted_path, rel_path)
+                        temp_files.append(decrypted_path)
+                    else:
+                        file_data = _app_mod.storage.read_file(job_id, rel_path, folder='output')
+                        zf.writestr(rel_path, file_data)
             buf.seek(0)
             yield buf.read()
         finally:
@@ -491,13 +483,11 @@ def api_v1_convert():
     job_id = str(uuid.uuid4())
     timestamp = str(time.time())
 
-    upload_dir = os.path.join(_app_mod.app.config['UPLOAD_FOLDER'], job_id)
-    output_dir = os.path.join(_app_mod.app.config['OUTPUT_FOLDER'], job_id)
-    os.makedirs(upload_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
+    _app_mod.storage.makedirs(job_id, folder='upload')
+    _app_mod.storage.makedirs(job_id, folder='output')
 
     safe_filename = secure_filename(file.filename)
-    input_path = os.path.join(upload_dir, safe_filename)
+    input_path = _app_mod.storage.get_local_path(job_id, safe_filename, folder='upload')
     file.save(input_path)
 
     output_filename = os.path.splitext(safe_filename)[0]
@@ -523,7 +513,7 @@ def api_v1_convert():
     _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
 
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
-    file_size = os.path.getsize(input_path)
+    file_size = _app_mod.storage.get_file_size(job_id, safe_filename, folder='upload')
 
     if internal_from_format == 'pdf_marker':
         options = {'force_ocr': force_ocr, 'use_llm': use_llm}
@@ -595,28 +585,25 @@ def api_v1_status(job_id):
         if 'completed_at' in metadata:
             response['completed_at'] = datetime.fromtimestamp(float(metadata['completed_at'])).isoformat() + 'Z'
 
-        _base = os.path.realpath(_app_mod.app.config['OUTPUT_FOLDER'])
-        output_dir = os.path.realpath(os.path.join(_app_mod.app.config['OUTPUT_FOLDER'], job_id))
-        if not output_dir.startswith(_base + os.sep):
-            return jsonify({'error': 'Invalid job path'}), 400
-        if os.path.exists(output_dir):
-            files = [f for f in os.listdir(output_dir) if f != 'metadata.json']
-            is_multifile = len(files) > 1 or os.path.exists(os.path.join(output_dir, 'images'))
+        if _app_mod.storage.job_dir_exists(job_id, folder='output'):
+            all_files = _app_mod.storage.list_files(job_id, folder='output')
+            files = [f for f in all_files if os.path.basename(f) != 'metadata.json']
+            has_images_dir = any(f.startswith('images/') for f in all_files)
+            is_multifile = len(files) > 1 or has_images_dir
 
             response['download_url'] = f'/api/v1/download/{job_id}'
             response['is_multifile'] = is_multifile
             response['file_count'] = len(files)
 
-            metadata_file = os.path.join(output_dir, 'metadata.json')
-            if os.path.exists(metadata_file):
+            if _app_mod.storage.file_exists(job_id, 'metadata.json', folder='output'):
                 try:
-                    with open(metadata_file, 'r') as f:
-                        marker_meta = json.load(f)
-                        response['metadata'] = {
-                            'pages': marker_meta.get('pages', 0),
-                            'images_extracted': len(marker_meta.get('images', [])),
-                            'tables_detected': marker_meta.get('table_count', 0)
-                        }
+                    meta_bytes = _app_mod.storage.read_file(job_id, 'metadata.json', folder='output')
+                    marker_meta = json.loads(meta_bytes)
+                    response['metadata'] = {
+                        'pages': marker_meta.get('pages', 0),
+                        'images_extracted': len(marker_meta.get('images', [])),
+                        'tables_detected': marker_meta.get('table_count', 0)
+                    }
                 except Exception as e:
                     logging.error(f"Error reading Marker metadata for job {job_id}: {e}")
 
@@ -658,20 +645,18 @@ def api_v1_download(job_id):
     if metadata.get('status') != 'SUCCESS':
         return jsonify({'error': 'Job not completed yet'}), 404
 
-    _base = os.path.realpath(_app_mod.app.config['OUTPUT_FOLDER'])
-    output_dir = os.path.realpath(os.path.join(_app_mod.app.config['OUTPUT_FOLDER'], job_id))
-    if not output_dir.startswith(_base + os.sep):
-        return jsonify({'error': 'Invalid job path'}), 400
-    if not os.path.exists(output_dir):
+    if not _app_mod.storage.job_dir_exists(job_id, folder='output'):
         return jsonify({'error': 'Output files not found or expired'}), 410
 
-    files = [f for f in os.listdir(output_dir) if f != 'metadata.json']
+    all_files = _app_mod.storage.list_files(job_id, folder='output')
+    files = [f for f in all_files if os.path.basename(f) != 'metadata.json']
     if not files:
         return jsonify({'error': 'No output files found'}), 404
 
     _app_mod.update_job_metadata(job_id, {'last_viewed': str(time.time())})
 
-    is_multifile = len(files) > 1 or os.path.exists(os.path.join(output_dir, 'images'))
+    has_images_dir = any(f.startswith('images/') for f in all_files)
+    is_multifile = len(files) > 1 or has_images_dir
 
     if is_multifile:
         return download_zip(job_id)
@@ -732,16 +717,11 @@ def api_v1_extract_metadata(job_id):
     if metadata.get('status') != 'SUCCESS':
         return jsonify({'error': 'Job must be in SUCCESS state'}), 409
 
-    output_dir = os.path.realpath(os.path.join(_app_mod.app.config['OUTPUT_FOLDER'], job_id))
-    _base = os.path.realpath(_app_mod.app.config['OUTPUT_FOLDER'])
-    if not output_dir.startswith(_base + os.sep):
-        return jsonify({'error': 'Invalid job path'}), 400
-
     md_file = None
-    if os.path.exists(output_dir):
-        for f in os.listdir(output_dir):
+    if _app_mod.storage.job_dir_exists(job_id, folder='output'):
+        for f in _app_mod.storage.list_files(job_id, folder='output'):
             if f.endswith('.md'):
-                md_file = os.path.join(output_dir, f)
+                md_file = _app_mod.storage.get_local_path(job_id, f, folder='output')
                 break
 
     if not md_file:

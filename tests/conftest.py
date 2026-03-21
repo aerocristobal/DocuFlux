@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import pytest
 from unittest.mock import MagicMock
 
@@ -74,7 +75,20 @@ def app(test_settings):
     # Mock redis_client and celery to avoid real connections in web.app
     web_app.redis_client = MagicMock()
     web_app.celery = MagicMock()
-    
+
+    # Epic 5: Provide a real LocalStorageBackend with temp dirs for tests
+    from storage import LocalStorageBackend
+    _tmpdir = tempfile.mkdtemp(prefix='docuflux_test_')
+    _upload = os.path.join(_tmpdir, 'uploads')
+    _output = os.path.join(_tmpdir, 'outputs')
+    os.makedirs(_upload, exist_ok=True)
+    os.makedirs(_output, exist_ok=True)
+    web_app.storage = LocalStorageBackend(upload_folder=_upload, output_folder=_output)
+    web_app.UPLOAD_FOLDER = _upload
+    web_app.OUTPUT_FOLDER = _output
+    web_app.app.config['UPLOAD_FOLDER'] = _upload
+    web_app.app.config['OUTPUT_FOLDER'] = _output
+
     # Disable rate limiting to prevent 429 errors from accumulated test requests
     if hasattr(web_app, 'limiter'):
         web_app.limiter.enabled = False

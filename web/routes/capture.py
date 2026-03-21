@@ -32,8 +32,7 @@ def capture_create_session():
     job_id = str(uuid.uuid4())
     now = str(time.time())
 
-    output_dir = os.path.join(_app_mod.app.config['OUTPUT_FOLDER'], job_id)
-    os.makedirs(os.path.join(output_dir, 'batches'), exist_ok=True)
+    _app_mod.storage.makedirs(job_id, 'batches', folder='output')
 
     _app_mod.update_job_metadata(job_id, {
         'status': 'CAPTURING',

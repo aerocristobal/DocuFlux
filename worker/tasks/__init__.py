@@ -13,6 +13,7 @@ from redis_client import create_redis_client
 from job_metadata import update_job_metadata as _shared_update, get_job_metadata as _shared_get, fire_webhook as _shared_fire_webhook
 from uuid_validation import validate_uuid
 from pandoc_options import PANDOC_OPTIONS_SCHEMA, PDF_DEFAULTS, build_pandoc_cmd
+from storage import create_storage_backend
 
 # Configure Structured Logging
 handler = logging.StreamHandler(sys.stdout)
@@ -31,6 +32,8 @@ except ValueError as e:
 UPLOAD_FOLDER = app_settings.upload_folder
 OUTPUT_FOLDER = app_settings.output_folder
 MCP_SERVER_URL = app_settings.mcp_server_url
+
+storage = create_storage_backend(app_settings)
 
 celery = Celery(
     'tasks',

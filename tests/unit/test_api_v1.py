@@ -13,9 +13,23 @@ import time
 @pytest.fixture
 def client():
     """Create test client for Flask app."""
+    import os, tempfile
+    import web.app as web_app_mod
+    from storage import LocalStorageBackend
     from web.app import app, limiter
     app.config['TESTING'] = True
     app.config['WTF_CSRF_ENABLED'] = False  # Disable CSRF for testing
+    # Epic 5: Provide real storage with temp dirs
+    _tmpdir = tempfile.mkdtemp(prefix='docuflux_api_test_')
+    _upload = os.path.join(_tmpdir, 'uploads')
+    _output = os.path.join(_tmpdir, 'outputs')
+    os.makedirs(_upload, exist_ok=True)
+    os.makedirs(_output, exist_ok=True)
+    web_app_mod.storage = LocalStorageBackend(upload_folder=_upload, output_folder=_output)
+    web_app_mod.UPLOAD_FOLDER = _upload
+    web_app_mod.OUTPUT_FOLDER = _output
+    app.config['UPLOAD_FOLDER'] = _upload
+    app.config['OUTPUT_FOLDER'] = _output
     # Disable rate limiting to prevent 429 errors from accumulated test requests
     original_enabled = limiter.enabled
     limiter.enabled = False
@@ -306,13 +320,11 @@ def test_api_v1_status_success(client, mock_redis):
         'progress': '100'
     })
 
-    # Mock output directory - exists=True for output dir, False for images subdir
-    def exists_side_effect(path):
-        return 'images' not in path
+    # Create actual output file in storage
+    import web.app as _app
+    _app.storage.save_file(job_id, 'test.md', b'# Converted', folder='output')
 
-    with patch('os.path.exists', side_effect=exists_side_effect):
-        with patch('os.listdir', return_value=['test.md']):
-            response = client.get(f'/api/v1/status/{job_id}')
+    response = client.get(f'/api/v1/status/{job_id}')
 
     assert response.status_code == 200
     json_data = response.get_json()
@@ -402,20 +414,14 @@ def test_api_v1_download_success_single_file(client, mock_redis, api_headers):
         'encrypted': 'false'
     })
 
-    # Mock file system - exists True for dirs but False for images subdir
-    def exists_side_effect(path):
-        return 'images' not in path
+    # Create actual output file in storage
+    import web.app as _app
+    _app.storage.save_file(job_id, 'test.md', b'# Converted', folder='output')
 
-    with patch('os.path.exists', side_effect=exists_side_effect):
-        with patch('os.path.isfile', return_value=True):
-            with patch('os.listdir', return_value=['test.md']):
-                with patch('web.app.send_from_directory') as mock_send:
-                    mock_send.return_value = 'file_content'
+    response = client.get(f'/api/v1/download/{job_id}', headers=api_headers)
 
-                    client.get(f'/api/v1/download/{job_id}', headers=api_headers)
-
-                    # Verify send_from_directory was called
-                    mock_send.assert_called_once()
+    # Should serve the file (200 for local storage)
+    assert response.status_code == 200
 
 
 def test_api_v1_download_not_found(client, mock_redis, api_headers):
@@ -609,28 +615,22 @@ class TestApiV1StatusSlm:
 class TestApiV1ExtractMetadata:
     def test_extract_metadata_queues_task(self, client, api_headers):
         """POST /extract-metadata dispatches SLM task and returns 202."""
-        import uuid, os, tempfile
+        import uuid
         job_id = str(uuid.uuid4())
         redis_data = {'status': 'SUCCESS', 'filename': 'doc.pdf', 'from': 'pdf_marker',
                       'to': 'markdown', 'created_at': '1700000000.0'}
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            md_path = os.path.join(tmpdir, 'doc.md')
-            open(md_path, 'w').close()
+        # Create actual markdown file in storage
+        import web.app as _app
+        _app.storage.save_file(job_id, 'doc.md', b'# Converted doc', folder='output')
 
-            from web.app import app as flask_app
-            flask_app.config['OUTPUT_FOLDER'] = tmpdir
-            job_dir = os.path.join(tmpdir, job_id)
-            os.makedirs(job_dir)
-            open(os.path.join(job_dir, 'doc.md'), 'w').close()
-
-            with patch('web.app.get_job_metadata', return_value=redis_data), \
-                 patch('web.app.update_job_metadata') as mock_update, \
-                 patch('web.app.celery') as mock_celery:
-                r = client.post(
-                    f'/api/v1/jobs/{job_id}/extract-metadata',
-                    headers=api_headers,
-                )
+        with patch('web.app.get_job_metadata', return_value=redis_data), \
+             patch('web.app.update_job_metadata') as mock_update, \
+             patch('web.app.celery') as mock_celery:
+            r = client.post(
+                f'/api/v1/jobs/{job_id}/extract-metadata',
+                headers=api_headers,
+            )
         assert r.status_code == 202
         data = r.get_json()
         assert data['status'] == 'queued'
