@@ -30,8 +30,8 @@ def analyze_screenshot_layout(job_id, url, storage_state_json=None):
 
     temp_screenshot_path = None
     try:
-        job_output_dir = os.path.join(_pkg.OUTPUT_FOLDER, job_id)
-        os.makedirs(job_output_dir, exist_ok=True)
+        _pkg.storage.makedirs(job_id, folder='output')
+        job_output_dir = _pkg.storage.get_local_path(job_id, folder='output')
         temp_screenshot_path = os.path.join(job_output_dir, f"screenshot_{job_id}.png")
 
         logging.info(f"Capturing screenshot for job {job_id} to {temp_screenshot_path}...")
@@ -184,9 +184,10 @@ def process_capture_batch(session_id, job_id, batch_index, page_start, page_end)
 
     batch_key = f"capture:batch:{session_id}:{batch_index}"
     session_key = f"capture:session:{session_id}"
-    batch_dir = os.path.join(_pkg.OUTPUT_FOLDER, job_id, 'batches', f'batch_{batch_index}')
+    batch_subpath = os.path.join('batches', f'batch_{batch_index}')
+    _pkg.storage.makedirs(job_id, os.path.join(batch_subpath, 'images'), folder='output')
+    batch_dir = _pkg.storage.get_local_path(job_id, batch_subpath, folder='output')
     batch_images_dir = os.path.join(batch_dir, 'images')
-    os.makedirs(batch_images_dir, exist_ok=True)
 
     logging.info(f"Processing capture batch {batch_index}: session={session_id}, pages={page_start}-{page_end}")
 
@@ -347,9 +348,9 @@ def assemble_capture_session(session_id, job_id):
 
         _pkg.update_job_metadata(job_id, {'progress': '20'})
 
-        output_dir = os.path.join(_pkg.OUTPUT_FOLDER, job_id)
+        _pkg.storage.makedirs(job_id, 'images', folder='output')
+        output_dir = _pkg.storage.get_local_path(job_id, folder='output')
         images_dir = os.path.join(output_dir, 'images')
-        os.makedirs(images_dir, exist_ok=True)
 
         safe_title = secure_filename(title) or f"capture_{job_id}"
         force_ocr = session_meta.get('force_ocr', 'false').lower() == 'true'
@@ -392,7 +393,7 @@ def assemble_capture_session(session_id, job_id):
             merged_content = front_matter + "\n\n---\n\n".join(all_markdown_parts)
             image_count = total_images
 
-            shutil.rmtree(os.path.join(output_dir, 'batches'), ignore_errors=True)
+            _pkg.storage.delete_subpath(job_id, 'batches', folder='output')
 
         elif force_ocr:
             # Fallback: force_ocr session with no pre-processed batches

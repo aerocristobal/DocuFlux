@@ -197,8 +197,8 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         safe_input_filename = secure_filename(input_filename)
         safe_output_filename = secure_filename(output_filename)
 
-        input_path = os.path.join(_pkg.UPLOAD_FOLDER, safe_job_id, safe_input_filename)
-        output_path = os.path.join(_pkg.OUTPUT_FOLDER, safe_job_id, safe_output_filename)
+        input_path = _pkg.storage.get_local_path(safe_job_id, safe_input_filename, folder='upload')
+        output_path = _pkg.storage.get_local_path(safe_job_id, safe_output_filename, folder='output')
 
         logging.info(f"Starting conversion for job {job_id}: {from_format} -> {to_format}")
         _pkg.update_job_metadata(job_id, {
@@ -211,11 +211,11 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         worker_tasks_active.dec()
         raise
 
-    if not os.path.exists(input_path):
+    if not _pkg.storage.file_exists(safe_job_id, safe_input_filename, folder='upload'):
         _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    _pkg.storage.makedirs(safe_job_id, folder='output')
     _pkg.update_job_metadata(job_id, {'progress': '20', 'stage': 'Converting document'})
 
     cmd = build_pandoc_cmd(from_format, to_format, input_path, output_path, pandoc_options)
@@ -315,14 +315,15 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         return {"status": "skipped", "reason": current_status}
 
     safe_job_id = secure_filename(job_id)
-    input_path = os.path.join(_pkg.UPLOAD_FOLDER, safe_job_id, secure_filename(input_filename))
-    output_dir = os.path.join(_pkg.OUTPUT_FOLDER, safe_job_id)
-    output_path = os.path.join(output_dir, secure_filename(output_filename))
+    safe_input = secure_filename(input_filename)
+    safe_output = secure_filename(output_filename)
+    input_path = _pkg.storage.get_local_path(safe_job_id, safe_input, folder='upload')
+    output_path = _pkg.storage.get_local_path(safe_job_id, safe_output, folder='output')
 
     logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1}) with options: {options}")
     _pkg.update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
-    if not os.path.exists(input_path):
+    if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
         _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
@@ -332,9 +333,9 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         worker_tasks_active.dec()
         raise
 
-    os.makedirs(output_dir, exist_ok=True)
-    images_dir = os.path.join(output_dir, 'images')
-    os.makedirs(images_dir, exist_ok=True)
+    _pkg.storage.makedirs(safe_job_id, folder='output')
+    images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
+    _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
 
     converter = rendered = text = images = None
     try:
@@ -408,14 +409,15 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
         return {"status": "skipped", "reason": current_status}
 
     safe_job_id = secure_filename(job_id)
-    input_path = os.path.join(_pkg.UPLOAD_FOLDER, safe_job_id, secure_filename(input_filename))
-    output_dir = os.path.join(_pkg.OUTPUT_FOLDER, safe_job_id)
-    output_path = os.path.join(output_dir, secure_filename(output_filename))
+    safe_input = secure_filename(input_filename)
+    safe_output = secure_filename(output_filename)
+    input_path = _pkg.storage.get_local_path(safe_job_id, safe_input, folder='upload')
+    output_path = _pkg.storage.get_local_path(safe_job_id, safe_output, folder='output')
 
     logging.info(f"Starting Marker+SLM conversion for job {job_id} with options: {options}")
     _pkg.update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
-    if not os.path.exists(input_path):
+    if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
         _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
@@ -425,9 +427,9 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
         worker_tasks_active.dec()
         raise
 
-    os.makedirs(output_dir, exist_ok=True)
-    images_dir = os.path.join(output_dir, 'images')
-    os.makedirs(images_dir, exist_ok=True)
+    _pkg.storage.makedirs(safe_job_id, folder='output')
+    images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
+    _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
 
     converter = rendered = text = images = None
     try:
@@ -508,19 +510,20 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         return {"status": "skipped", "reason": current_status}
 
     safe_job_id = secure_filename(job_id)
-    input_path = os.path.join(_pkg.UPLOAD_FOLDER, safe_job_id, secure_filename(input_filename))
-    output_dir = os.path.join(_pkg.OUTPUT_FOLDER, safe_job_id)
-    output_path = os.path.join(output_dir, secure_filename(output_filename))
+    safe_input = secure_filename(input_filename)
+    safe_output = secure_filename(output_filename)
+    input_path = _pkg.storage.get_local_path(safe_job_id, safe_input, folder='upload')
+    output_path = _pkg.storage.get_local_path(safe_job_id, safe_output, folder='output')
 
     logging.info(f"Starting hybrid conversion for job {job_id}")
     _pkg.update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
-    if not os.path.exists(input_path):
+    if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
         _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
         worker_tasks_active.dec()
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    os.makedirs(output_dir, exist_ok=True)
+    _pkg.storage.makedirs(safe_job_id, folder='output')
 
     # Get PDF page count
     page_count = 1
@@ -571,8 +574,8 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         worker_tasks_active.dec()
         raise
 
-    images_dir = os.path.join(output_dir, 'images')
-    os.makedirs(images_dir, exist_ok=True)
+    images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
+    _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
 
     _pkg.update_job_metadata(job_id, {'progress': '50', 'hybrid_engine_used': 'marker', 'stage': 'Converting PDF with AI'})
     converter = rendered = text = images = None

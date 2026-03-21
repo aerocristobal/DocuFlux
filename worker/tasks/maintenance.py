@@ -12,8 +12,11 @@ import tasks as _pkg
 
 def _get_disk_usage_percent(path='/app/data'):
     """Get disk usage percentage for the given path."""
+    usage = _pkg.storage.disk_usage()
+    if usage is None:
+        return 0.0  # S3 or other backends without disk limits
     try:
-        total, used, free = shutil.disk_usage(path)
+        total, used, free = usage
         return (used / total) * 100
     except Exception as e:
         logging.error(f"Error getting disk usage: {e}")
@@ -89,8 +92,8 @@ def cleanup_old_files():
     RETENTION_FAILURE = 300
     RETENTION_ORPHAN = 3600
 
-    upload_dir = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
-    output_dir = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
+    upload_dir = getattr(_pkg.storage, 'upload_folder', os.environ.get('UPLOAD_FOLDER', 'data/uploads'))
+    output_dir = getattr(_pkg.storage, 'output_folder', os.environ.get('OUTPUT_FOLDER', 'data/outputs'))
 
     # Primary source: Redis sorted set (Story 4.3 — no filesystem fallback)
     # Run tasks.migrate_filesystem_jobs once after upgrade to register pre-existing jobs.
@@ -143,14 +146,11 @@ def cleanup_old_files():
         size_mb = candidate['size_bytes'] / (1024 * 1024)
         logging.info(f"Deleting job {job_id} ({size_mb:.2f} MB). Reason: {candidate['reason']}")
 
-        for base in [upload_dir, output_dir]:
-            p = os.path.join(base, job_id)
-            if os.path.exists(p):
-                try:
-                    shutil.rmtree(p)
-                    total_freed += candidate['size_bytes']
-                except Exception as e:
-                    logging.error(f"Error deleting {p}: {e}")
+        try:
+            _pkg.storage.delete_job(job_id)
+            total_freed += candidate['size_bytes']
+        except Exception as e:
+            logging.error(f"Error deleting job {job_id}: {e}")
 
         _pkg.redis_client.delete(candidate['key'])
         _pkg.redis_client.zrem('jobs:active', job_id)
@@ -174,8 +174,13 @@ def migrate_filesystem_jobs():
     not already tracked. Safe to run multiple times (zadd with nx=True).
     Invoke once after upgrade: celery call tasks.migrate_filesystem_jobs
     """
-    upload_dir = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
-    output_dir = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
+    from storage import LocalStorageBackend
+    if not isinstance(_pkg.storage, LocalStorageBackend):
+        logging.info("Migration: skipped — not using local storage backend")
+        return 0
+
+    upload_dir = _pkg.storage.upload_folder
+    output_dir = _pkg.storage.output_folder
 
     fs_job_ids = set()
     for d in [upload_dir, output_dir]:

@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     upload_folder: str = Field("data/uploads", validation_alias="UPLOAD_FOLDER")
     output_folder: str = Field("data/outputs", validation_alias="OUTPUT_FOLDER")
 
+    # --- Storage Backend (Epic 5) ---
+    storage_backend: str = Field("local", validation_alias="STORAGE_BACKEND")
+    s3_bucket: Optional[str] = Field(None, validation_alias="S3_BUCKET")
+    s3_endpoint_url: Optional[str] = Field(None, validation_alias="S3_ENDPOINT_URL")
+    s3_access_key: Optional[SecretStr] = Field(None, validation_alias="S3_ACCESS_KEY")
+    s3_secret_key: Optional[SecretStr] = Field(None, validation_alias="S3_SECRET_KEY")
+    s3_region: str = Field("us-east-1", validation_alias="S3_REGION")
+    s3_sse_algorithm: Optional[str] = Field(None, validation_alias="S3_SSE_ALGORITHM")
+
     # --- Redis/Celery URLs ---
     redis_metadata_url: str = Field("redis://redis:6379/1", validation_alias="REDIS_METADATA_URL")
     celery_broker_url: str = Field("redis://redis:6379/0", validation_alias="CELERY_BROKER_URL")
