@@ -645,6 +645,7 @@ def api_v1_status(job_id):
 
 @conversion_bp.route('/api/v1/download/<job_id>', methods=['GET'])
 @_app_mod.csrf.exempt
+@_app_mod.require_api_key
 def api_v1_download(job_id):
     """REST API endpoint for downloading converted files."""
     if not _app_mod.is_valid_uuid(job_id):

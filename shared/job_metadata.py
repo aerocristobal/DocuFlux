@@ -34,6 +34,14 @@ def fire_webhook(redis_client, job_id, status, extra=None):
         if not meta:
             return
         webhook_url = meta.decode('utf-8') if isinstance(meta, bytes) else meta
+
+        # Defense-in-depth SSRF check (registration also validates)
+        from web.validation import validate_webhook_url
+        is_valid, error = validate_webhook_url(webhook_url)
+        if not is_valid:
+            logging.warning(f"Webhook SSRF blocked for job {job_id}: {error}")
+            return
+
         payload = {'job_id': job_id, 'status': status, 'timestamp': str(time.time())}
         if extra:
             payload.update(extra)

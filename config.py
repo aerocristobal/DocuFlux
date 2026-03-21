@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     celery_signing_key: Optional[SecretStr] = Field(None, validation_alias="CELERY_SIGNING_KEY")
     admin_api_secret: Optional[SecretStr] = Field(None, validation_alias="ADMIN_API_SECRET")
 
+    # --- Webhook SSRF Protection ---
+    webhook_require_https: bool = Field(False, validation_alias="WEBHOOK_REQUIRE_HTTPS")
+    webhook_url_allowlist: Optional[str] = Field(None, validation_alias="WEBHOOK_URL_ALLOWLIST")
+    webhook_url_blocklist: Optional[str] = Field(None, validation_alias="WEBHOOK_URL_BLOCKLIST")
+
 settings = Settings()
 
 # Post-initialization logic for defaults that depend on other settings

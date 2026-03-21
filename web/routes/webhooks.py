@@ -1,17 +1,18 @@
 """Webhook route handlers."""
 
 import time
-from urllib.parse import urlparse
 
 from flask import Blueprint, request, jsonify
 
 import web.app as _app_mod
+from web.validation import validate_webhook_url
 
 webhooks_bp = Blueprint('webhooks', __name__)
 
 
 @webhooks_bp.route('/api/v1/webhooks', methods=['POST'])
 @_app_mod.csrf.exempt
+@_app_mod.require_api_key
 @_app_mod.limiter.limit("60 per hour")
 def api_v1_register_webhook():
     """Register a webhook URL for job status notifications."""
@@ -22,9 +23,9 @@ def api_v1_register_webhook():
     if not _app_mod.is_valid_uuid(job_id):
         return jsonify({'error': 'Invalid job_id'}), 400
 
-    parsed = urlparse(webhook_url)
-    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
-        return jsonify({'error': 'webhook_url must be a valid http/https URL'}), 400
+    is_valid, error = validate_webhook_url(webhook_url)
+    if not is_valid:
+        return jsonify({'error': error}), 400
 
     metadata = _app_mod.get_job_metadata(job_id)
     if not metadata:
@@ -36,6 +37,7 @@ def api_v1_register_webhook():
 
 @webhooks_bp.route('/api/v1/webhooks/<job_id>', methods=['GET'])
 @_app_mod.csrf.exempt
+@_app_mod.require_api_key
 def api_v1_get_webhook(job_id):
     """Return the registered webhook URL for a job, or 404 if none."""
     if not _app_mod.is_valid_uuid(job_id):
