@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "Capture authenticated web content and send to DocuFlux for conversion",
   "permissions": ["activeTab", "storage", "scripting"],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": ["https://cdn2.percipio.com/*", "*://*.percipio.com/*"],
+  "optional_host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
@@ -12,12 +13,10 @@
     "default_popup": "popup.html",
     "default_title": "DocuFlux Capture"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
   "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["purify.min.js", "content.js"],
-      "run_at": "document_idle"
-    },
     {
       "matches": ["https://cdn2.percipio.com/*", "*://*.percipio.com/*"],
       "js": ["percipio-frame.js"],

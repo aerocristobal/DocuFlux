@@ -248,3 +248,16 @@ button.btn-secondary:not(:first-child) { margin-top: 6px; }
 .config-section details[open] > summary {
   margin-bottom: 6px;
 }
+
+/* Server status dot */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.status-dot.secure { background: #22c55e; }
+.status-dot.local  { background: #eab308; }

@@ -67,3 +67,56 @@ jobs:
       with:
         name: coverage-report
         path: coverage.xml
+
+  extension-deps:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: extension-src/package-lock.json
+
+    - name: Install extension dependencies
+      run: npm ci
+      working-directory: extension-src
+
+    - name: Check for outdated dependencies
+      run: |
+        npm outdated --json > /tmp/outdated.json 2>/dev/null || true
+        node -e "
+          const fs = require('fs');
+          const raw = fs.readFileSync('/tmp/outdated.json', 'utf8').trim();
+          if (!raw || raw === '{}') { console.log('All dependencies up to date'); process.exit(0); }
+          const d = JSON.parse(raw);
+          for (const [name, info] of Object.entries(d)) {
+            const [cMaj, cMin] = info.current.split('.');
+            const [lMaj, lMin] = info.latest.split('.');
+            if (Number(lMaj) > Number(cMaj) || Number(lMin) - Number(cMin) > 2)
+              console.log('::warning::' + name + ' is outdated: ' + info.current + ' -> ' + info.latest);
+          }
+        "
+      working-directory: extension-src
+
+  extension-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: extension-src/package-lock.json
+
+    - name: Install extension dependencies
+      run: npm ci
+      working-directory: extension-src
+
+    - name: Run extension tests with coverage
+      run: npx vitest run --coverage
+      working-directory: extension-src

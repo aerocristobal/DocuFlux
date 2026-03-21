@@ -46,7 +46,48 @@ const els = {
   newCaptureBtn: $('new-capture-btn'),
   cancelAssemblyBtn: $('cancel-assembly-btn'),
   statusMsg: $('status-msg'),
+  serverStatusDot: $('server-status-dot'),
 };
+
+// ─── Server URL Validation ────────────────────────────────────────────────────
+
+function isLocalhostUrl(url) {
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1';
+  } catch { return false; }
+}
+
+function validateServerUrl(raw) {
+  let url;
+  try { url = new URL(raw); } catch {
+    return { valid: false, error: 'Invalid URL format' };
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { valid: false, error: 'URL must use http or https' };
+  }
+  if (url.protocol === 'http:' && !isLocalhostUrl(raw)) {
+    return { valid: false, error: 'HTTPS required for remote servers (HTTP allowed only for localhost)' };
+  }
+  return { valid: true, url: url.origin };
+}
+
+function updateServerStatusDot(serverUrl) {
+  const dot = els.serverStatusDot;
+  if (!dot) return;
+  try {
+    const url = new URL(serverUrl);
+    if (url.protocol === 'https:') {
+      dot.className = 'status-dot secure';
+    } else if (isLocalhostUrl(serverUrl)) {
+      dot.className = 'status-dot local';
+    } else {
+      dot.className = 'status-dot';
+    }
+  } catch {
+    dot.className = 'status-dot';
+  }
+}
 
 // ─── UI Helpers ───────────────────────────────────────────────────────────────
 
@@ -116,6 +157,20 @@ function getActiveTab() {
 
 async function sendToContent(type, data = {}, _retried = false) {
   const tab = await getActiveTab();
+
+  // Always inject content scripts first — they are no longer statically declared
+  // for all URLs.  The re-injection guard in content.js prevents double-init.
+  if (!_retried) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['purify.min.js', 'content.js'],
+      });
+    } catch (e) {
+      console.warn('[DocuFlux] Content script injection failed:', e.message);
+    }
+  }
+
   try {
     return await new Promise((resolve, reject) => {
       chrome.tabs.sendMessage(tab.id, { type, ...data }, response => {
@@ -125,15 +180,9 @@ async function sendToContent(type, data = {}, _retried = false) {
       });
     });
   } catch (e) {
-    // Content script not injected (e.g. extension updated while tab was open).
-    // Inject on-demand via chrome.scripting, then retry once.
+    // Retry once if content script didn't initialize in time
     if (!_retried && e.message.includes('Receiving end does not exist')) {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['purify.min.js', 'content.js'],
-      });
-      // Brief delay for script initialization
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 300));
       return sendToContent(type, data, true);
     }
     throw e;
@@ -211,6 +260,7 @@ async function init() {
   const config = await bg('GET_CONFIG');
   els.serverUrl.value = config.serverUrl;
   els.serverUrlDisplay.textContent = config.serverUrl.replace(/^https?:\/\//, '');
+  updateServerStatusDot(config.serverUrl);
 
   const tab = await getActiveTab().catch(() => null);
   // Apply site-specific defaults first, then restore saved settings on top
@@ -282,9 +332,32 @@ function showPausedSection(session) {
 
 els.saveConfig.addEventListener('click', async () => {
   try {
-    await bg('SET_CONFIG', { serverUrl: els.serverUrl.value.trim() });
-    els.serverUrlDisplay.textContent = els.serverUrl.value.trim().replace(/^https?:\/\//, '');
+    const raw = els.serverUrl.value.trim();
+    const result = validateServerUrl(raw);
+    if (!result.valid) {
+      showStatus(result.error, 'error');
+      return;
+    }
+
+    // Confirm URL change
+    const current = els.serverUrlDisplay.textContent;
+    const newDisplay = raw.replace(/^https?:\/\//, '');
+    if (current && current !== newDisplay) {
+      if (!confirm(`Change server URL to ${raw}?`)) return;
+    }
+
+    await bg('SET_CONFIG', { serverUrl: raw });
+    els.serverUrlDisplay.textContent = newDisplay;
+    updateServerStatusDot(raw);
     showStatus('Server URL saved', 'success');
+
+    // Non-blocking health check
+    try {
+      const resp = await fetch(raw.replace(/\/$/, '') + '/healthz');
+      if (!resp.ok) showStatus('Server URL saved (health check returned non-OK)', 'info');
+    } catch {
+      showStatus('Server URL saved (could not reach server)', 'info');
+    }
   } catch (e) {
     showStatus(e.message, 'error');
   }

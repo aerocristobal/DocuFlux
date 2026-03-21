@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-XPI_PATH="$REPO_ROOT/extension-firefox/dist/docuflux_capture.xpi"
+XPI_PATH="$REPO_ROOT/dist/firefox/web-ext-artifacts/docuflux_capture.xpi"
 EXT_ID="docuflux-capture@docuflux"
 
 # Platform-specific policy directory
