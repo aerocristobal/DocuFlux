@@ -121,7 +121,13 @@ storage.ensure_directories()
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
-    return jsonify({'error': f'File too large. Maximum size is {app_settings.max_content_length / (1024 * 1024):.0f}MB.'}), 413
+    # 413 fires before @before_request, so g.request_id may not exist
+    rid = getattr(g, 'request_id', None) or request.headers.get('X-Request-ID', str(uuid.uuid4())[:8])
+    return jsonify({
+        'error': 'File too large',
+        'message': f'Maximum size is {app_settings.max_content_length / (1024 * 1024):.0f}MB.',
+        'request_id': rid,
+    }), 413
 
 @app.before_request
 def _assign_request_id():
@@ -162,26 +168,68 @@ def add_security_headers(response):
 
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    return jsonify({"error": "Rate limit exceeded", "message": str(e.description)}), 429
+    return jsonify({
+        'error': 'Rate limit exceeded',
+        'message': str(e.description),
+        'request_id': getattr(g, 'request_id', '-'),
+    }), 429
 
-from redis_client import create_redis_client
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    rid = getattr(g, 'request_id', '-')
+    logging.exception("Unhandled exception [request_id=%s]", rid)
+    return jsonify({'error': 'Internal server error', 'request_id': rid}), 500
+
+
+@app.errorhandler(Exception)
+def handle_unhandled_exception(error):
+    rid = getattr(g, 'request_id', '-')
+    logging.exception("Unhandled exception [request_id=%s]: %s", rid, error)
+    return jsonify({'error': 'Internal server error', 'request_id': rid}), 500
+
+from redis_client import create_redis_client, create_sentinel_client
 from job_metadata import update_job_metadata as _shared_update, get_job_metadata as _shared_get
 
-# Metadata Redis client (DB 1) with connection pooling optimization and TLS support
-redis_client = create_redis_client(
-    url=app_settings.redis_metadata_url,
-    app_settings=app_settings,
-    max_connections=50,
-    socket_connect_timeout=5,
-    socket_timeout=10,
-)
+# Metadata Redis client (DB 1) — Sentinel-aware when REDIS_SENTINEL_HOSTS is set
+if app_settings.redis_sentinel_hosts:
+    _sentinel_pw = app_settings.redis_sentinel_password
+    _sentinel_pw_val = (_sentinel_pw.get_secret_value() if hasattr(_sentinel_pw, 'get_secret_value') else _sentinel_pw) if _sentinel_pw else None
+    redis_client = create_sentinel_client(
+        sentinel_hosts_str=app_settings.redis_sentinel_hosts,
+        service_name=app_settings.redis_sentinel_service,
+        db=app_settings.redis_sentinel_db_metadata,
+        password=_sentinel_pw_val,
+        socket_connect_timeout=5,
+        socket_timeout=10,
+    )
+else:
+    redis_client = create_redis_client(
+        url=app_settings.redis_metadata_url,
+        app_settings=app_settings,
+        max_connections=50,
+        socket_connect_timeout=5,
+        socket_timeout=10,
+    )
 
-# Celery configuration
-celery = Celery(
-    'tasks',
-    broker=app_settings.celery_broker_url,
-    backend=app_settings.celery_result_backend
-)
+# Celery configuration — Sentinel-aware when REDIS_SENTINEL_HOSTS is set
+if app_settings.redis_sentinel_hosts:
+    from redis_client import parse_sentinel_hosts
+    _sentinels = parse_sentinel_hosts(app_settings.redis_sentinel_hosts)
+    _broker_urls = ';'.join(f'sentinel://{h}:{p}' for h, p in _sentinels)
+    _broker_url = f'{_broker_urls}/{app_settings.redis_sentinel_db_broker}'
+    celery = Celery('tasks', broker=_broker_url, backend=_broker_url)
+    _transport_opts = {'master_name': app_settings.redis_sentinel_service}
+    if _sentinel_pw_val:
+        _transport_opts['sentinel_kwargs'] = {'password': _sentinel_pw_val}
+    celery.conf.broker_transport_options = _transport_opts
+    celery.conf.result_backend_transport_options = _transport_opts
+else:
+    celery = Celery(
+        'tasks',
+        broker=app_settings.celery_broker_url,
+        backend=app_settings.celery_result_backend
+    )
 celery.conf.task_routes = {
     'tasks.convert_document': {'queue': 'default'},
     'tasks.convert_with_marker': {'queue': 'gpu'},

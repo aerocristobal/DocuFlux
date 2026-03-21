@@ -33,6 +33,11 @@ conversion_failures_total = Counter(
     ['format_from', 'format_to', 'error_type']
 )
 
+dlq_total = Counter(
+    'docuflux_dlq_total',
+    'Total tasks sent to the dead letter queue'
+)
+
 # Queue metrics
 queue_depth = Gauge(
     'docuflux_queue_depth',

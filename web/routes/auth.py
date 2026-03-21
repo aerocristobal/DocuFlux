@@ -1,5 +1,6 @@
-"""Auth key management route handlers."""
+"""Auth key management and admin route handlers."""
 
+import json
 import time
 
 from flask import Blueprint, request, jsonify
@@ -61,3 +62,27 @@ def api_v1_revoke_key(key):
     if not deleted:
         return jsonify({'error': 'Key not found'}), 404
     return jsonify({'revoked': True}), 200
+
+
+@auth_bp.route('/api/v1/admin/dlq', methods=['GET'])
+@_app_mod.csrf.exempt
+@_app_mod.limiter.limit("30 per hour")
+def api_v1_admin_dlq():
+    """Return contents of the dead letter queue."""
+    err = _check_admin_secret()
+    if err[0] is not None:
+        return err
+    limit = request.args.get('limit', 100, type=int)
+    limit = min(max(limit, 1), 1000)
+    raw = _app_mod.redis_client.lrange('dlq:tasks', 0, limit - 1)
+    entries = []
+    for item in raw:
+        try:
+            entries.append(json.loads(item))
+        except (json.JSONDecodeError, TypeError):
+            entries.append({'raw': str(item)})
+    return jsonify({
+        'count': len(entries),
+        'total': _app_mod.redis_client.llen('dlq:tasks'),
+        'entries': entries,
+    }), 200

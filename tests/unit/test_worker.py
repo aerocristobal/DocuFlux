@@ -64,6 +64,7 @@ m.update_redis_pool_metrics = MagicMock()
 m.redis_pool_active = MagicMock()
 m.redis_pool_available = MagicMock()
 m.start_metrics_server = MagicMock()
+m.dlq_total = MagicMock()
 
 # encryption/key_manager
 sys.modules['encryption'].EncryptionService = MagicMock()
@@ -1605,3 +1606,69 @@ class TestRedisTimeoutConsistency:
             call_kwargs = mock_from_url.call_args[1]
             assert call_kwargs['socket_connect_timeout'] == 5
             assert call_kwargs['socket_timeout'] == 10
+
+
+# --- Epic 7, Story 7.3: Dead letter queue signal handler ---
+
+class TestDLQSignalHandler:
+    """Tests for the task_failure signal that writes to dlq:tasks."""
+
+    def test_task_failure_signal_writes_to_dlq(self):
+        """task_failure signal pushes a JSON entry to dlq:tasks."""
+        import json
+        import tasks
+        mock_sender = MagicMock()
+        mock_sender.name = 'tasks.convert_document'
+        mock_redis = MagicMock()
+        tasks.redis_client = mock_redis
+
+        tasks._handle_task_failure(
+            sender=mock_sender,
+            task_id='test-task-id-123',
+            exception=RuntimeError('conversion failed'),
+            args=['arg1'],
+            kwargs={'key': 'val'},
+        )
+
+        mock_redis.lpush.assert_called_once()
+        call_args = mock_redis.lpush.call_args
+        assert call_args[0][0] == 'dlq:tasks'
+        entry = json.loads(call_args[0][1])
+        assert entry['task_id'] == 'test-task-id-123'
+        assert entry['task_name'] == 'tasks.convert_document'
+        assert 'conversion failed' in entry['exception']
+
+    def _make_sender(self, task_name='tasks.test'):
+        sender = MagicMock()
+        sender.name = task_name
+        return sender
+
+    def test_dlq_trimmed_to_1000(self):
+        """After lpush, ltrim(0, 999) is called to bound the DLQ."""
+        import tasks
+        mock_redis = MagicMock()
+        tasks.redis_client = mock_redis
+
+        tasks._handle_task_failure(
+            sender=self._make_sender(),
+            task_id='tid',
+            exception=RuntimeError('err'),
+        )
+
+        mock_redis.ltrim.assert_called_once_with('dlq:tasks', 0, 999)
+
+    def test_dlq_counter_incremented(self):
+        """dlq_total Prometheus counter is incremented on failure capture."""
+        import tasks
+        mock_redis = MagicMock()
+        tasks.redis_client = mock_redis
+        m = sys.modules['metrics']
+        m.dlq_total.reset_mock()
+
+        tasks._handle_task_failure(
+            sender=self._make_sender(),
+            task_id='tid',
+            exception=RuntimeError('err'),
+        )
+
+        m.dlq_total.inc.assert_called_once()

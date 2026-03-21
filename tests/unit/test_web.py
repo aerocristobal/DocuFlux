@@ -851,3 +851,116 @@ class TestListJobsSlm:
         jobs = r.get_json()
         assert len(jobs) == 1
         assert jobs[0]['slm'] is None
+
+
+# --- Epic 7, Story 7.1: Structured error responses with correlation IDs ---
+
+def test_413_includes_request_id(app):
+    """413 response includes request_id in JSON body."""
+    # Set a very small max content length to trigger 413
+    app.config['MAX_CONTENT_LENGTH'] = 10
+    c = app.test_client()
+    resp = c.post('/convert', data=b'x' * 100, content_type='application/octet-stream')
+    app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # restore
+    assert resp.status_code == 413
+    data = resp.get_json()
+    assert data is not None, "413 response should be JSON, not HTML"
+    assert 'request_id' in data
+    assert 'error' in data
+
+
+def test_413_echoes_caller_request_id(app):
+    """413 response uses X-Request-ID from the caller if provided."""
+    app.config['MAX_CONTENT_LENGTH'] = 10
+    c = app.test_client()
+    resp = c.post('/convert', data=b'x' * 100, content_type='application/octet-stream',
+                   headers={'X-Request-ID': 'caller-id-42'})
+    app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
+    assert resp.status_code == 413
+    data = resp.get_json()
+    assert data['request_id'] == 'caller-id-42'
+
+
+def test_429_includes_request_id(client):
+    """429 response includes request_id in JSON body."""
+    resp = client.get('/_test_raise_429')
+    assert resp.status_code == 429
+    data = resp.get_json()
+    assert data is not None, "429 response should be JSON"
+    assert 'request_id' in data
+    assert data['error'] == 'Rate limit exceeded'
+
+
+def test_500_returns_json_with_request_id(client):
+    """Unhandled exceptions return JSON (not HTML) with request_id."""
+    resp = client.get('/_test_raise_500')
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data is not None, "500 response should be JSON, not HTML"
+    assert 'request_id' in data
+    assert data['error'] == 'Internal server error'
+
+
+# --- Epic 7, Story 7.3: Dead letter queue admin endpoint ---
+
+class TestAdminDLQ:
+    """Tests for GET /api/v1/admin/dlq endpoint."""
+
+    ADMIN_SECRET = 'test-admin-secret'
+    ADMIN_HEADERS = {'Authorization': f'Bearer {ADMIN_SECRET}'}
+
+    def _with_admin_secret(self):
+        from pydantic import SecretStr
+        import web.app as app_mod
+        original = app_mod.app_settings.admin_api_secret
+        app_mod.app_settings.admin_api_secret = SecretStr(self.ADMIN_SECRET)
+        return original
+
+    def _restore_admin_secret(self, original):
+        import web.app as app_mod
+        app_mod.app_settings.admin_api_secret = original
+
+    def test_admin_dlq_requires_auth(self, client):
+        """GET /api/v1/admin/dlq without auth returns 401."""
+        original = self._with_admin_secret()
+        try:
+            resp = client.get('/api/v1/admin/dlq')
+            assert resp.status_code == 401
+        finally:
+            self._restore_admin_secret(original)
+
+    @patch('app.redis_client')
+    def test_admin_dlq_returns_entries(self, mock_redis, client):
+        """GET /api/v1/admin/dlq returns DLQ entries."""
+        import json
+        original = self._with_admin_secret()
+        try:
+            dlq_entry = json.dumps({
+                'task_id': 'abc-123',
+                'task_name': 'tasks.convert_document',
+                'exception': 'RuntimeError: boom',
+                'failed_at': '1700000000.0',
+            })
+            mock_redis.lrange.return_value = [dlq_entry]
+            mock_redis.llen.return_value = 1
+            resp = client.get('/api/v1/admin/dlq', headers=self.ADMIN_HEADERS)
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data['count'] == 1
+            assert data['total'] == 1
+            assert data['entries'][0]['task_id'] == 'abc-123'
+        finally:
+            self._restore_admin_secret(original)
+
+    @patch('app.redis_client')
+    def test_admin_dlq_respects_limit(self, mock_redis, client):
+        """GET /api/v1/admin/dlq?limit=5 passes limit to lrange."""
+        original = self._with_admin_secret()
+        try:
+            mock_redis.lrange.return_value = []
+            mock_redis.llen.return_value = 0
+            resp = client.get('/api/v1/admin/dlq?limit=5', headers=self.ADMIN_HEADERS)
+            assert resp.status_code == 200
+            mock_redis.lrange.assert_called_once_with('dlq:tasks', 0, 4)
+        finally:
+            self._restore_admin_secret(original)
