@@ -9,6 +9,7 @@ from flask import Blueprint, request, jsonify
 
 import web.app as _app_mod
 from formats import FORMATS
+from web.validation import require_valid_uuid, sanitize_string
 
 capture_bp = Blueprint('capture', __name__)
 
@@ -19,9 +20,9 @@ capture_bp = Blueprint('capture', __name__)
 def capture_create_session():
     """Create a new capture session for the browser extension."""
     data = request.get_json(silent=True) or {}
-    title = data.get('title', 'Captured Document')
+    title = sanitize_string(data.get('title', 'Captured Document'), max_length=200)
     to_format = data.get('to_format', 'markdown')
-    source_url = data.get('source_url', '')
+    source_url = sanitize_string(data.get('source_url', ''), max_length=500)
     force_ocr = data.get('force_ocr', False)
     client_id = request.headers.get('X-Client-ID', 'unknown')
 
@@ -37,7 +38,7 @@ def capture_create_session():
     _app_mod.update_job_metadata(job_id, {
         'status': 'CAPTURING',
         'created_at': now,
-        'filename': title[:200],
+        'filename': title,
         'from': 'capture',
         'to': to_format,
         'session_id': session_id,
@@ -53,9 +54,9 @@ def capture_create_session():
     _app_mod.redis_client.hset(session_key, mapping={
         'status': 'active',
         'created_at': now,
-        'title': title[:200],
+        'title': title,
         'to_format': to_format,
-        'source_url': source_url[:500],
+        'source_url': source_url,
         'force_ocr': str(force_ocr),
         'page_count': '0',
         'client_id': client_id,
@@ -82,10 +83,9 @@ def capture_create_session():
 @capture_bp.route('/api/v1/capture/sessions/<session_id>/pages', methods=['POST'])
 @_app_mod.csrf.exempt
 @_app_mod.limiter.limit("1000 per hour")
+@require_valid_uuid('session_id')
 def capture_add_page(session_id):
     """Submit a captured page to an existing session."""
-    if not _app_mod.is_valid_uuid(session_id):
-        return jsonify({'error': 'Invalid session ID'}), 400
 
     session_key = f"capture:session:{session_id}"
     session_meta = _app_mod.redis_client.hgetall(session_key)
@@ -109,9 +109,9 @@ def capture_add_page(session_id):
         _app_mod.redis_client.expire(seen_key, _app_mod.app_settings.capture_session_ttl)
 
     page_data = {
-        'url': data.get('url', '')[:500],
-        'title': data.get('title', '')[:200],
-        'text': data.get('text', ''),
+        'url': sanitize_string(data.get('url', ''), max_length=500),
+        'title': sanitize_string(data.get('title', ''), max_length=200),
+        'text': sanitize_string(data.get('text', ''), max_length=500000, allow_newlines=True),
         'images': data.get('images', []),
         'extraction_method': data.get('extraction_method', 'generic'),
         'page_hint': data.get('page_hint', page_count),
@@ -154,10 +154,9 @@ def capture_add_page(session_id):
 @capture_bp.route('/api/v1/capture/sessions/<session_id>/finish', methods=['POST'])
 @_app_mod.csrf.exempt
 @_app_mod.limiter.limit("200 per hour")
+@require_valid_uuid('session_id')
 def capture_finish_session(session_id):
     """Finalize a session and queue assembly into a document."""
-    if not _app_mod.is_valid_uuid(session_id):
-        return jsonify({'error': 'Invalid session ID'}), 400
 
     session_key = f"capture:session:{session_id}"
     session_meta = _app_mod.redis_client.hgetall(session_key)
@@ -212,10 +211,9 @@ def capture_finish_session(session_id):
 
 @capture_bp.route('/api/v1/capture/sessions/<session_id>/status', methods=['GET'])
 @_app_mod.csrf.exempt
+@require_valid_uuid('session_id')
 def capture_session_status(session_id):
     """Poll the status of a capture session."""
-    if not _app_mod.is_valid_uuid(session_id):
-        return jsonify({'error': 'Invalid session ID'}), 400
 
     session_key = f"capture:session:{session_id}"
     session_meta = _app_mod.redis_client.hgetall(session_key)

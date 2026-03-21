@@ -234,6 +234,64 @@ def validate_file_upload(file, allowed_extensions=None, max_size_mb=100):
     return True, None, safe_filename
 
 
+# Extensions considered text formats for content type validation
+TEXT_EXTENSIONS = {
+    '.md', '.markdown', '.txt', '.rst', '.html', '.htm',
+    '.tex', '.latex', '.xml', '.json', '.org', '.textile',
+    '.mediawiki', '.twiki', '.opml', '.asciidoc',
+}
+
+
+def validate_file_content_type(file, declared_extension):
+    """
+    Validate that file content matches its declared format using magic bytes.
+
+    Lightweight check: reads only the first 8 bytes.
+
+    Args:
+        file: Werkzeug FileStorage object (stream position is preserved)
+        declared_extension: Extension string including dot (e.g., '.pdf')
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    ext = declared_extension.lower()
+
+    # Read first 8 bytes, then reset
+    pos = file.tell()
+    header = file.read(8)
+    file.seek(pos)
+
+    if not header:
+        return False, "File is empty"
+
+    # Check PDF magic bytes
+    if ext == '.pdf':
+        if not header.startswith(b'%PDF'):
+            return False, "File does not appear to be a valid PDF (missing %PDF header)"
+        return True, None
+
+    # Check ZIP-based formats (DOCX, ODT, EPUB)
+    if ext in ('.docx', '.odt', '.epub'):
+        if not header.startswith(b'PK'):
+            return False, f"File does not appear to be a valid {ext} file (missing ZIP/PK header)"
+        return True, None
+
+    # Text format: basic encoding validation
+    if ext in TEXT_EXTENSIONS:
+        try:
+            header.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                header.decode('latin-1')
+            except UnicodeDecodeError:
+                return False, "File does not appear to be a valid text file (unrecognized encoding)"
+        return True, None
+
+    # Unknown extension: skip validation (permissive)
+    return True, None
+
+
 def sanitize_string(value, max_length=1000, allow_newlines=False):
     """
     Sanitize a string input.

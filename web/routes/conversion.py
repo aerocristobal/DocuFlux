@@ -15,6 +15,7 @@ from datetime import datetime
 import web.app as _app_mod
 from formats import FORMATS, detect_format_from_extension
 from pandoc_options import validate_pandoc_options
+from web.validation import require_valid_uuid, validate_file_content_type
 
 conversion_bp = Blueprint('conversion', __name__)
 
@@ -71,6 +72,10 @@ def convert():
         if file_ext != from_info['extension']:
             if not (from_info['key'] == 'markdown' and file_ext in ['.md', '.markdown']):
                  return jsonify({'error': f"Extension {file_ext} mismatch."}), 400
+
+        is_valid_content, content_error = validate_file_content_type(file, file_ext)
+        if not is_valid_content:
+            return jsonify({'error': content_error}), 400
 
         job_id = str(uuid.uuid4())
         _app_mod.storage.makedirs(job_id, folder='upload')
@@ -228,9 +233,9 @@ def list_captures():
 
 
 @conversion_bp.route('/api/cancel/<job_id>', methods=['POST'])
+@require_valid_uuid('job_id')
 def cancel_job(job_id):
     """Revoke a queued or running Celery task and mark the job REVOKED."""
-    if not _app_mod.is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
     _app_mod.celery.control.revoke(job_id, terminate=True)
     _app_mod.update_job_metadata(job_id, {'status': 'REVOKED', 'progress': '0'})
     _app_mod.redis_client.expire(f"job:{job_id}", 600)
@@ -238,9 +243,9 @@ def cancel_job(job_id):
 
 
 @conversion_bp.route('/api/delete/<job_id>', methods=['POST'])
+@require_valid_uuid('job_id')
 def delete_job(job_id):
     """Delete a job's files from disk and remove its metadata from Redis."""
-    if not _app_mod.is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
     session_id = session.get('session_id')
     if session_id: _app_mod.redis_client.lrem(f"history:{session_id}", 0, job_id)
 
@@ -250,9 +255,9 @@ def delete_job(job_id):
 
 
 @conversion_bp.route('/api/retry/<job_id>', methods=['POST'])
+@require_valid_uuid('job_id')
 def retry_job(job_id):
     """Clone a failed/revoked job and re-queue it with the same parameters."""
-    if not _app_mod.is_valid_uuid(job_id): return jsonify({'error': 'Invalid ID'}), 400
     job_data = _app_mod.redis_client.hgetall(f"job:{job_id}")
     if not job_data: return jsonify({'error': 'Not found'}), 404
     input_filename = job_data.get('filename')
@@ -307,9 +312,9 @@ def retry_job(job_id):
 
 
 @conversion_bp.route('/download/<job_id>')
+@require_valid_uuid('job_id')
 def download_file(job_id):
     """Serve the converted output file for download, decrypting if necessary."""
-    if not _app_mod.is_valid_uuid(job_id): return "Invalid", 400
     if not _app_mod.storage.job_dir_exists(job_id, folder='output'):
         return "Not found", 404
     all_files = _app_mod.storage.list_files(job_id, folder='output')
@@ -361,9 +366,9 @@ def download_file(job_id):
 
 
 @conversion_bp.route('/download_zip/<job_id>')
+@require_valid_uuid('job_id')
 def download_zip(job_id):
     """Bundle all output files into an in-memory ZIP and serve for download."""
-    if not _app_mod.is_valid_uuid(job_id): return "Invalid", 400
     if not _app_mod.storage.job_dir_exists(job_id, folder='output'):
         return "Not found", 404
 
@@ -487,6 +492,11 @@ def api_v1_convert():
     _app_mod.storage.makedirs(job_id, folder='output')
 
     safe_filename = secure_filename(file.filename)
+    file_ext = os.path.splitext(safe_filename)[1].lower()
+    is_valid_content, content_error = validate_file_content_type(file, file_ext)
+    if not is_valid_content:
+        return jsonify({'error': content_error}), 422
+
     input_path = _app_mod.storage.get_local_path(job_id, safe_filename, folder='upload')
     file.save(input_path)
 
@@ -558,11 +568,9 @@ def api_v1_convert():
 
 @conversion_bp.route('/api/v1/status/<job_id>', methods=['GET'])
 @_app_mod.csrf.exempt
+@require_valid_uuid('job_id')
 def api_v1_status(job_id):
     """REST API endpoint for job status retrieval."""
-    if not _app_mod.is_valid_uuid(job_id):
-        return jsonify({'error': 'Invalid job ID format'}), 400
-
     metadata = _app_mod.get_job_metadata(job_id)
     if not metadata:
         return jsonify({'error': 'Job not found'}), 404
@@ -633,11 +641,9 @@ def api_v1_status(job_id):
 @conversion_bp.route('/api/v1/download/<job_id>', methods=['GET'])
 @_app_mod.csrf.exempt
 @_app_mod.require_api_key
+@require_valid_uuid('job_id')
 def api_v1_download(job_id):
     """REST API endpoint for downloading converted files."""
-    if not _app_mod.is_valid_uuid(job_id):
-        return jsonify({'error': 'Invalid job ID format'}), 400
-
     metadata = _app_mod.get_job_metadata(job_id)
     if not metadata:
         return jsonify({'error': 'Job not found'}), 404
@@ -705,11 +711,9 @@ def api_v1_formats():
 @conversion_bp.route('/api/v1/jobs/<job_id>/extract-metadata', methods=['POST'])
 @_app_mod.csrf.exempt
 @_app_mod.require_api_key
+@require_valid_uuid('job_id')
 def api_v1_extract_metadata(job_id):
     """Manually trigger SLM metadata extraction for a completed job."""
-    if not _app_mod.is_valid_uuid(job_id):
-        return jsonify({'error': 'Invalid job ID format'}), 400
-
     metadata = _app_mod.get_job_metadata(job_id)
     if not metadata:
         return jsonify({'error': 'Job not found'}), 404
