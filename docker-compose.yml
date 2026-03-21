@@ -87,8 +87,9 @@ services:
       - ./data:/app/data
       - ./deploy/certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
 
-    ports:
-      - "9090:9090"  # Epic 21.5: Prometheus metrics endpoint
+    # To expose metrics on localhost for debugging: ports: ["9090:9090"]
+    expose:
+      - "9090"  # Prometheus metrics — internal network only
     environment:
       # Epic 24.1: Redis URLs (TLS disabled - using redis:// instead of rediss://)
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0

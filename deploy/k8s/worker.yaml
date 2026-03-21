@@ -110,6 +110,9 @@ spec:
     spec:
       nodeSelector:
         nvidia.com/gpu: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: worker-gpu
           image: docuflux/worker:gpu
@@ -168,10 +171,26 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /app/.cache
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: data-pvc
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: cache
+          emptyDir:
+            sizeLimit: 10Gi
 
 ---
 # Horizontal Pod Autoscaler for CPU workers
