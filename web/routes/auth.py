@@ -6,6 +6,7 @@ import time
 from flask import Blueprint, request, jsonify
 
 import web.app as _app_mod
+from web.validation import sanitize_string
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -43,7 +44,7 @@ def api_v1_create_key():
     if err[0] is not None:
         return err
     data = request.get_json(silent=True) or {}
-    label = str(data.get('label', ''))[:100]
+    label = sanitize_string(data.get('label', ''), max_length=100)
     key = _app_mod._generate_api_key()
     now = str(time.time())
     _app_mod.redis_client.hset(f"{_app_mod.APIKEY_PREFIX}{key}", mapping={'created_at': now, 'label': label})

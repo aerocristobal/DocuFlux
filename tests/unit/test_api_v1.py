@@ -114,7 +114,7 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
 
     # Create test PDF file
     data = {
-        'file': (io.BytesIO(b"PDF content"), 'test.pdf'),
+        'file': (io.BytesIO(b"%PDF-1.4 test content"), 'test.pdf'),
         'to_format': 'markdown',
         'engine': 'marker',
         'force_ocr': 'true',
@@ -744,7 +744,7 @@ class TestApiV1PandocOptions:
         mock_redis.hgetall = Mock(return_value={})
 
         data = {
-            'file': (io.BytesIO(b"PDF content"), 'test.pdf'),
+            'file': (io.BytesIO(b"%PDF-1.4 test content"), 'test.pdf'),
             'to_format': 'markdown',
             'engine': 'marker',
             'pandoc_options': json.dumps({'toc': True}),

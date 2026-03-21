@@ -5,7 +5,7 @@ import time
 from flask import Blueprint, request, jsonify
 
 import web.app as _app_mod
-from web.validation import validate_webhook_url
+from web.validation import validate_webhook_url, require_valid_uuid, validate_job_id
 
 webhooks_bp = Blueprint('webhooks', __name__)
 
@@ -20,8 +20,9 @@ def api_v1_register_webhook():
     job_id = data.get('job_id', '').strip()
     webhook_url = data.get('webhook_url', '').strip()
 
-    if not _app_mod.is_valid_uuid(job_id):
-        return jsonify({'error': 'Invalid job_id'}), 400
+    is_valid_id, id_error = validate_job_id(job_id)
+    if not is_valid_id:
+        return jsonify({'error': id_error}), 400
 
     is_valid, error = validate_webhook_url(webhook_url)
     if not is_valid:
@@ -38,10 +39,9 @@ def api_v1_register_webhook():
 @webhooks_bp.route('/api/v1/webhooks/<job_id>', methods=['GET'])
 @_app_mod.csrf.exempt
 @_app_mod.require_api_key
+@require_valid_uuid('job_id')
 def api_v1_get_webhook(job_id):
     """Return the registered webhook URL for a job, or 404 if none."""
-    if not _app_mod.is_valid_uuid(job_id):
-        return jsonify({'error': 'Invalid job_id'}), 400
 
     metadata = _app_mod.get_job_metadata(job_id)
     if not metadata:
