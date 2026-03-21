@@ -92,12 +92,9 @@ def cleanup_old_files():
     upload_dir = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
     output_dir = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
 
-    # Primary: Redis sorted set for tracked jobs; fallback: filesystem for pre-migration jobs
+    # Primary source: Redis sorted set (Story 4.3 — no filesystem fallback)
+    # Run tasks.migrate_filesystem_jobs once after upgrade to register pre-existing jobs.
     job_ids = set(_pkg.redis_client.zrangebyscore('jobs:active', '-inf', '+inf'))
-    if os.path.exists(upload_dir):
-        job_ids.update(os.listdir(upload_dir))
-    if os.path.exists(output_dir):
-        job_ids.update(os.listdir(output_dir))
 
     disk_usage_percent = _pkg._get_disk_usage_percent(upload_dir)
     emergency_cleanup = disk_usage_percent > 95
@@ -167,6 +164,44 @@ def cleanup_old_files():
                 logging.info(f"Deleted orphaned capture session key: {key}")
     except Exception as e:
         logging.warning(f"Error cleaning up capture session keys: {e}")
+
+
+@_pkg.celery.task(name='tasks.migrate_filesystem_jobs')
+def migrate_filesystem_jobs():
+    """One-time migration: register filesystem jobs into Redis sorted set.
+
+    Story 4.3 criterion 3: Scans upload/output dirs, zadd's any job IDs
+    not already tracked. Safe to run multiple times (zadd with nx=True).
+    Invoke once after upgrade: celery call tasks.migrate_filesystem_jobs
+    """
+    upload_dir = os.environ.get('UPLOAD_FOLDER', 'data/uploads')
+    output_dir = os.environ.get('OUTPUT_FOLDER', 'data/outputs')
+
+    fs_job_ids = set()
+    for d in [upload_dir, output_dir]:
+        if os.path.exists(d):
+            fs_job_ids.update(
+                entry for entry in os.listdir(d)
+                if _pkg.is_valid_uuid(entry)
+            )
+
+    already_tracked = set(
+        _pkg.redis_client.zrangebyscore('jobs:active', '-inf', '+inf')
+    )
+    untracked = fs_job_ids - already_tracked
+
+    if untracked:
+        now = time.time()
+        mapping = {job_id: now for job_id in untracked}
+        _pkg.redis_client.zadd('jobs:active', mapping, nx=True)
+        logging.warning(
+            f"Migration: registered {len(untracked)} untracked filesystem "
+            f"jobs into jobs:active"
+        )
+    else:
+        logging.info("Migration: no untracked filesystem jobs found")
+
+    return len(untracked)
 
 
 @_pkg.celery.task(name='tasks.update_metrics')

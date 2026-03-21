@@ -106,7 +106,7 @@ from tasks import metadata    # noqa: E402, F401
 # Re-export task functions for backward compatibility
 from tasks.conversion import convert_document, convert_with_marker, convert_with_marker_slm, convert_with_hybrid
 from tasks.capture import analyze_screenshot_layout, agentic_page_turner, process_capture_batch, assemble_capture_session
-from tasks.maintenance import cleanup_old_files, update_metrics
+from tasks.maintenance import cleanup_old_files, migrate_filesystem_jobs, update_metrics
 from tasks.metadata import extract_slm_metadata, test_amazon_session
 
 # Re-export helpers so @patch('tasks.xxx') in tests still works
