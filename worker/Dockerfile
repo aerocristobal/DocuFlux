@@ -42,6 +42,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
+# Ensure /app is always importable (Celery solo pool may not inherit cwd in sys.path)
+ENV PYTHONPATH=/app
+
 # Pass BUILD_GPU to runtime
 ARG BUILD_GPU
 ENV BUILD_GPU=${BUILD_GPU}

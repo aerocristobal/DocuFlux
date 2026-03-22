@@ -50,12 +50,16 @@ def _job_retention_decision(
     if meta:
         status = meta.get('status')
         completed_at = float(meta['completed_at']) if meta.get('completed_at') else None
+        created_at = float(meta['created_at']) if meta.get('created_at') else None
         downloaded_at = float(meta['downloaded_at']) if meta.get('downloaded_at') else None
         last_viewed = float(meta['last_viewed']) if meta.get('last_viewed') else None
         started_at = float(meta['started_at']) if meta.get('started_at') else None
 
         if status == 'FAILURE':
-            if completed_at and now > completed_at + retention_failure:
+            # Use completed_at if available, fall back to created_at for
+            # jobs that failed before the worker could set completed_at
+            ref = completed_at or created_at
+            if ref and now > ref + retention_failure:
                 should_delete, reason, priority = True, "Failed job expired (5m)", 10
         elif status == 'SUCCESS':
             reference_time = last_viewed or downloaded_at or completed_at
@@ -67,6 +71,8 @@ def _job_retention_decision(
 
         if not completed_at and started_at and now > started_at + 7200:
             should_delete, reason, priority = True, "Stale processing job (2h)", 8
+        elif status == 'PENDING' and created_at and now > created_at + 7200:
+            should_delete, reason, priority = True, "Stale PENDING job (2h)", 8
     else:
         check_path = os.path.join(upload_dir, job_id)
         if not os.path.exists(check_path):

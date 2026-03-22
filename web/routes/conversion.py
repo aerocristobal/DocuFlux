@@ -131,6 +131,7 @@ def convert():
 
 
 @conversion_bp.route('/api/jobs')
+@_app_mod.limiter.exempt
 def list_jobs():
     """Return the current session's job list with status and download URLs."""
     session_id = session.get('session_id')
@@ -197,6 +198,7 @@ def list_jobs():
 
 
 @conversion_bp.route('/api/captures')
+@_app_mod.limiter.exempt
 def list_captures():
     """Return recent browser-extension capture jobs with status and download URLs."""
     job_ids = _app_mod.redis_client.lrange('capture:all_jobs', 0, 49)
