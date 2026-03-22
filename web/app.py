@@ -238,26 +238,15 @@ celery.conf.task_routes = {
     'tasks.assemble_capture_session': {'queue': 'default'},
 }
 
-# Epic 24.2: Celery Task Message Encryption
-# Enable message signing for task integrity and authentication
-_cskey = app_settings.celery_signing_key
-celery_signing_key = (_cskey.get_secret_value() if hasattr(_cskey, 'get_secret_value') else _cskey) if _cskey else None
-if celery_signing_key:
-    celery.conf.task_serializer = 'auth'
-    celery.conf.result_serializer = 'json'
-    celery.conf.accept_content = ['auth', 'application/json']
-    celery.conf.security_key = celery_signing_key
-    celery.conf.security_certificate = None  # Using symmetric key, not certificates
-    celery.conf.security_digest = 'sha256'
-    logging.info("Celery message signing enabled (task_serializer=auth)")
-else:
-    # No signing key: use JSON serializer (matches worker default, prevents pickle mismatch)
-    celery.conf.update(
-        task_serializer='json',
-        result_serializer='json',
-        accept_content=['json'],
-    )
-    logging.warning("Celery signing key not set - messages not authenticated")
+# Use JSON serializer — matches worker config and avoids the need for X.509 PKI.
+# The Celery 'auth' serializer requires certificates (not symmetric keys) and
+# setup_security() to register the codec; using it without that causes
+# SerializerNotInstalled at runtime.
+celery.conf.update(
+    task_serializer='json',
+    result_serializer='json',
+    accept_content=['json'],
+)
 
 # Epic 23.3: Initialize encryption components (lazily)
 _encryption_service = None
