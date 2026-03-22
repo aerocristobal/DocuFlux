@@ -358,6 +358,7 @@ python3 -m py_compile web/app.py worker/tasks/conversion.py worker/warmup.py
 |----------|-------------|
 | [Build Guide](BUILD.md) | GPU/CPU build profiles and deployment |
 | [API Reference](docs/API.md) | Full REST API documentation |
+| [UI Specification](docs/UI_SPECIFICATION.md) | UI elements, workflows, and state machine |
 | [OpenAPI Spec](docs/openapi.yaml) | Machine-readable API spec |
 | [Configuration](docs/CONFIGURATION.md) | All environment variables |
 | [Supported Formats](docs/FORMATS.md) | Format matrix and conversion rules |

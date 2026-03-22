@@ -626,7 +626,7 @@
                 else if (j.status === 'REVOKED') { icon = 'cancel'; color = 'outline'; label = 'Cancelled'; actions = `<md-icon-button slot="end" onclick="window.retryJob('${j.id}')"><md-icon>replay</md-icon></md-icon-button>`; }
                 else actions = `<md-icon-button slot="end" onclick="window.cancelJob('${j.id}')"><md-icon>close</md-icon></md-icon-button>`;
 
-                const prog = active && j.progress
+                const prog = active && parseInt(j.progress) > 0
                     ? `<md-linear-progress value="${j.progress/100}" style="width:100px;margin-top:8px;"></md-linear-progress>`
                     : active ? `<md-linear-progress indeterminate style="width:100px;margin-top:8px;"></md-linear-progress>` : '';
 

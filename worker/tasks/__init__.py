@@ -177,9 +177,11 @@ celery.conf.beat_schedule = {
     'cleanup-every-5-minutes': {
         'task': 'tasks.cleanup_old_files',
         'schedule': 120.0,
+        'options': {'queue': 'default'},
     },
     'update-queue-metrics': {
         'task': 'tasks.update_metrics',
         'schedule': 120.0,
+        'options': {'queue': 'default'},
     },
 }
