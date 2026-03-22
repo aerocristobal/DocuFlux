@@ -11,11 +11,12 @@ Browser → Flask (5000) → Redis → Celery Worker → Pandoc / Marker AI / SL
 | Service | Description |
 |---------|-------------|
 | **web** | Flask frontend: uploads, UI, REST API, WebSocket |
-| **worker** | Celery worker: Pandoc, Marker AI, SLM (11 task types) |
+| **worker** | Celery worker: Pandoc, Marker AI, SLM, capture assembly |
+| **mcp-server** | Playwright server for vision-based and agentic extraction |
 | **redis** | Celery broker + job metadata store |
 | **beat** | Celery Beat scheduler for cleanup and metrics |
 
-Shared modules live in `shared/` (encryption, key management, secrets).
+Shared modules live in `shared/` (encryption, storage, key management, formats, secrets).
 
 ## Development Setup
 
@@ -56,7 +57,7 @@ pytest tests/unit/test_web.py -v
 pytest tests/integration/ -v
 
 # Syntax check
-python3 -m py_compile web/app.py worker/tasks.py worker/warmup.py
+python3 -m py_compile web/app.py worker/tasks/conversion.py worker/warmup.py
 ```
 
 Coverage threshold is 70%. The test suite uses `pytest.ini` for configuration.
@@ -65,13 +66,19 @@ Coverage threshold is 70%. The test suite uses `pytest.ini` for configuration.
 
 ```
 docuflux/
-├── web/app.py              # Flask routes + REST API
-├── web/templates/          # Material Design 3 UI
-├── worker/tasks.py         # Celery tasks
-├── worker/warmup.py        # GPU detection + SLM eager load
-├── worker/metrics.py       # Prometheus metrics
-├── shared/                 # Shared modules (encryption, secrets, key management)
-├── config.py               # Pydantic Settings
+├── web/
+│   ├── app.py              # Flask app, middleware, auth
+│   ├── routes/             # 5 route blueprints (auth, capture, conversion, health, webhooks)
+│   ├── validation.py       # Input validation (MIME, UUID, SSRF, filename)
+│   └── templates/          # Material Design 3 UI
+├── worker/
+│   ├── tasks/              # Celery tasks (capture, conversion, maintenance, metadata)
+│   ├── warmup.py           # GPU detection + SLM eager load
+│   └── metrics.py          # Prometheus metrics
+├── shared/                 # Shared modules (encryption, storage, formats, config, keys, secrets)
+├── extension-src/          # Chrome/Firefox browser extension source
+├── mcp_server/             # Playwright MCP server for vision extraction
+├── oscal/                  # NIST SP 800-53 compliance artifacts
 ├── deploy/                 # Infrastructure configs
 │   ├── cloudflare/         # Cloudflare Tunnel config + setup
 │   ├── certs/              # TLS certificates
@@ -79,10 +86,10 @@ docuflux/
 │   └── k8s/                # Kubernetes manifests
 ├── tests/
 │   ├── unit/               # Pytest unit tests
-│   ├── integration/        # WebSocket + pipeline E2E tests
+│   ├── integration/        # E2E + encryption pipeline tests
 │   └── load/locustfile.py  # Locust load tests
 ├── scripts/build.sh        # Build wrapper (auto/gpu/cpu)
-└── docker-compose*.yml     # Compose variants (base/gpu/cpu/tls/cloudflare)
+└── docker-compose*.yml     # 5 Compose variants (base/gpu/cpu/tls/cloudflare)
 ```
 
 ## Code Style

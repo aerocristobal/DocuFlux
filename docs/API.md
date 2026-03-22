@@ -1,6 +1,6 @@
 # DocuFlux REST API v1 Documentation
 
-This document provides comprehensive documentation for the DocuFlux REST API v1, which enables programmatic document conversion and integration with external tools and workflows.
+Comprehensive documentation for the DocuFlux REST API v1.
 
 ## Table of Contents
 
@@ -8,10 +8,11 @@ This document provides comprehensive documentation for the DocuFlux REST API v1,
 - [Authentication](#authentication)
 - [Rate Limiting](#rate-limiting)
 - [Endpoints](#endpoints)
-  - [POST /api/v1/convert](#post-apiv1convert)
-  - [GET /api/v1/status/{job_id}](#get-apiv1statusjob_id)
-  - [GET /api/v1/download/{job_id}](#get-apiv1downloadjob_id)
-  - [GET /api/v1/formats](#get-apiv1formats)
+  - [Document Conversion](#document-conversion)
+  - [API Key Management](#api-key-management)
+  - [Webhooks](#webhooks)
+  - [Browser Capture Sessions](#browser-capture-sessions)
+  - [Health Checks](#health-checks)
   - [Pandoc Options](#pandoc-options)
 - [Error Handling](#error-handling)
 - [Examples](#examples)
@@ -22,78 +23,95 @@ The DocuFlux REST API v1 provides:
 
 - **Asynchronous document conversion** with job tracking
 - **Multiple conversion engines**: Pandoc (universal) and Marker (AI-powered PDF)
-- **Format auto-detection** for simplified integration
-- **Multi-file output support** with automatic ZIP bundling
-- **Real-time progress tracking** via polling
+- **API key authentication** for secure access
+- **Webhook callbacks** for job completion notifications
+- **Browser capture sessions** for multi-page content extraction
+- **SLM metadata extraction** (titles, summaries, tags)
+- **Format auto-detection** from file extensions
+- **Multi-file output** with automatic ZIP bundling
 
 **Base URL**: `http://localhost:5000` (or your deployment URL)
 
 **API Version**: v1
 
 **Content Types**:
-- Request: `multipart/form-data` or `application/json`
+- Request: `multipart/form-data` (file uploads) or `application/json`
 - Response: `application/json`
 
 ## Authentication
 
-The API currently uses **IP-based rate limiting** without requiring authentication tokens. This provides a simple integration path while preventing abuse.
+The API uses two authentication mechanisms:
 
-**Future versions** may support API key authentication for:
-- Higher rate limits
-- User-specific quotas
-- Webhook callbacks
-- Advanced features
+### API Key Authentication
+
+Most endpoints require an API key passed via the `X-API-Key` header. Keys use the `dk_` prefix and are managed via the admin endpoints below.
+
+```bash
+curl -H "X-API-Key: dk_abc123..." http://localhost:5000/api/v1/convert ...
+```
+
+### Admin Authentication
+
+Key management and admin endpoints require the `ADMIN_API_SECRET` via a Bearer token:
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_API_SECRET" http://localhost:5000/api/v1/auth/keys ...
+```
+
+### Public Endpoints
+
+These endpoints require no authentication:
+- `GET /api/v1/status/{job_id}` — job status polling
+- `GET /api/v1/formats` — list supported formats
+- `POST /api/v1/capture/sessions` — create capture session
+- `POST /api/v1/capture/sessions/{id}/pages` — upload pages
+- `POST /api/v1/capture/sessions/{id}/images` — upload images
+- `POST /api/v1/capture/sessions/{id}/finish` — finalize session
+- `GET /api/v1/capture/sessions/{id}/status` — session status
+- `GET /healthz`, `GET /readyz`, `GET /api/health`, `GET /api/status/services`
 
 ## Rate Limiting
 
-All API endpoints share the same rate limits as the web UI:
+Endpoints have per-route rate limits enforced via Redis-backed Flask-Limiter:
 
-- **1000 requests per day** per IP address
-- **200 requests per hour** per IP address
+| Endpoint | Limit |
+|----------|-------|
+| `POST /api/v1/convert` | 200/hour |
+| `POST /api/v1/capture/sessions` | 200/hour |
+| `POST /api/v1/capture/sessions/{id}/pages` | 1000/hour |
+| `POST /api/v1/capture/sessions/{id}/images` | 2000/hour |
+| `POST /api/v1/capture/sessions/{id}/finish` | 200/hour |
+| `POST /api/v1/webhooks` | 60/hour |
+| `POST /api/v1/auth/keys` | 10/hour |
+| `DELETE /api/v1/auth/keys/{key}` | 30/hour |
+| `GET /api/v1/admin/dlq` | 30/hour |
 
-Rate limit headers are included in responses:
-
-```
-X-RateLimit-Limit: 200
-X-RateLimit-Remaining: 195
-X-RateLimit-Reset: 1612345678
-```
-
-When rate limit is exceeded, the API returns:
+When the rate limit is exceeded:
 
 ```json
 HTTP/1.1 429 Too Many Requests
-{
-  "error": "Rate limit exceeded",
-  "message": "200 per 1 hour"
-}
+{"error": "429 Too Many Requests: Rate limit exceeded"}
 ```
 
 ## Endpoints
 
-### POST /api/v1/convert
+### Document Conversion
 
-Submit a document conversion job.
+#### POST /api/v1/convert
 
-**URL**: `/api/v1/convert`
+Submit a document conversion job. Requires API key.
 
-**Method**: `POST`
-
-**Content-Type**: `multipart/form-data`
-
-**CSRF**: Exempt (REST API)
-
-**Request Parameters**:
+**Request**: `multipart/form-data`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `file` | File | Yes | Document file to convert |
-| `to_format` | String | Yes | Target format key (e.g., "markdown", "pdf", "docx") |
-| `from_format` | String | No | Source format key, auto-detected from extension if omitted |
-| `engine` | String | No | Conversion engine: "pandoc" or "marker" (default: "pandoc") |
+| `to_format` | String | Yes | Target format key (e.g., `markdown`, `pdf`, `docx`) |
+| `from_format` | String | No | Source format key (auto-detected from extension if omitted) |
+| `engine` | String | No | `pandoc` (default) or `marker` |
 | `force_ocr` | Boolean | No | Force OCR for Marker engine (default: false) |
 | `use_llm` | Boolean | No | Use LLM for Marker engine (default: false) |
-| `pandoc_options` | JSON | No | JSON object of advanced Pandoc options (only valid with engine=pandoc). See [Pandoc Options](#pandoc-options) |
+| `pandoc_options` | JSON | No | Pandoc options object (engine=pandoc only). See [Pandoc Options](#pandoc-options) |
 
 **Success Response (202 Accepted)**:
 
@@ -106,71 +124,29 @@ Submit a document conversion job.
 }
 ```
 
-**Error Responses**:
-
-| Code | Description | Example |
-|------|-------------|---------|
-| 400 | Missing required field | `{"error": "Missing required field: file"}` |
-| 400 | No file selected | `{"error": "No file selected"}` |
-| 400 | Missing to_format | `{"error": "Missing required field: to_format"}` |
-| 422 | Unsupported format | `{"error": "Unsupported output format: xyz"}` |
-| 422 | Invalid engine | `{"error": "Invalid engine: foo. Must be \"pandoc\" or \"marker\""}` |
-| 422 | Cannot auto-detect format | `{"error": "Cannot auto-detect format from extension: .xyz"}` |
-| 507 | Server storage full | `{"error": "Server storage full"}` |
-| 400 | Invalid pandoc_options JSON | `{"error": "pandoc_options must be valid JSON"}` |
-| 422 | Invalid pandoc_options | `{"error": "Invalid pandoc_options", "details": [...]}` |
-| 422 | pandoc_options with wrong engine | `{"error": "pandoc_options only valid with engine=pandoc"}` |
+**Error Responses**: 400 (missing field), 422 (invalid format/engine), 507 (disk full)
 
 **Example**:
 
 ```bash
-# Basic conversion with auto-detection
 curl -X POST http://localhost:5000/api/v1/convert \
-  -F "file=@document.pdf" \
-  -F "to_format=markdown"
-
-# Conversion with Marker AI engine
-curl -X POST http://localhost:5000/api/v1/convert \
+  -H "X-API-Key: dk_abc123..." \
   -F "file=@document.pdf" \
   -F "to_format=markdown" \
-  -F "engine=marker" \
-  -F "force_ocr=true"
-
-# Explicit format specification
-curl -X POST http://localhost:5000/api/v1/convert \
-  -F "file=@document.md" \
-  -F "from_format=markdown" \
-  -F "to_format=docx" \
-  -F "engine=pandoc"
-
-# Conversion with advanced Pandoc options
-curl -X POST http://localhost:5000/api/v1/convert \
-  -F "file=@report.md" \
-  -F "to_format=pdf" \
-  -F 'pandoc_options={"toc": true, "number_sections": true, "variables": {"fontsize": "11pt", "geometry": "margin=0.75in"}}'
+  -F "engine=marker"
 ```
 
 ---
 
-### GET /api/v1/status/{job_id}
+#### GET /api/v1/status/{job_id}
 
-Check the status of a conversion job.
+Check job status. No authentication required.
 
-**URL**: `/api/v1/status/{job_id}`
-
-**Method**: `GET`
-
-**URL Parameters**:
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `job_id` | UUID | Yes | Job identifier from `/api/v1/convert` response |
-
-**Success Response (200 OK) - Pending**:
+**Success Response (200 OK)**:
 
 ```json
 {
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "job_id": "550e8400-...",
   "status": "pending",
   "progress": 0,
   "filename": "document.pdf",
@@ -181,223 +157,282 @@ Check the status of a conversion job.
 }
 ```
 
-**Success Response (200 OK) - Processing**:
+Additional fields appear based on status:
+- **processing**: `started_at`
+- **success**: `completed_at`, `download_url`, `is_multifile`, `file_count`, `metadata` (pages, images_extracted, tables_detected)
+- **failure**: `completed_at`, `error`
 
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "processing",
-  "progress": 45,
-  "filename": "document.pdf",
-  "from_format": "pdf_marker",
-  "to_format": "markdown",
-  "engine": "marker",
-  "created_at": "2026-02-01T19:42:10Z",
-  "started_at": "2026-02-01T19:42:15Z"
-}
-```
+**Status Values**: `pending`, `processing`, `success`, `failure`
 
-**Success Response (200 OK) - Completed**:
-
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "success",
-  "progress": 100,
-  "filename": "document.pdf",
-  "from_format": "pdf_marker",
-  "to_format": "markdown",
-  "engine": "marker",
-  "created_at": "2026-02-01T19:42:10Z",
-  "started_at": "2026-02-01T19:42:15Z",
-  "completed_at": "2026-02-01T19:44:30Z",
-  "download_url": "/api/v1/download/550e8400-e29b-41d4-a716-446655440000",
-  "is_multifile": true,
-  "file_count": 12,
-  "metadata": {
-    "pages": 10,
-    "images_extracted": 5,
-    "tables_detected": 2
-  }
-}
-```
-
-**Success Response (200 OK) - Failed**:
-
-```json
-{
-  "job_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "failure",
-  "progress": 0,
-  "filename": "document.pdf",
-  "from_format": "pdf",
-  "to_format": "markdown",
-  "engine": "pandoc",
-  "created_at": "2026-02-01T19:42:10Z",
-  "started_at": "2026-02-01T19:42:15Z",
-  "completed_at": "2026-02-01T19:42:45Z",
-  "error": "Conversion failed: Invalid PDF structure"
-}
-```
-
-**Error Responses**:
-
-| Code | Description | Example |
-|------|-------------|---------|
-| 400 | Invalid UUID format | `{"error": "Invalid job ID format"}` |
-| 404 | Job not found | `{"error": "Job not found"}` |
-
-**Status Values**:
-
-- `pending`: Job queued, waiting for worker
-- `processing`: Conversion in progress
-- `success`: Conversion completed successfully
-- `failure`: Conversion failed
-
-**Example**:
-
-```bash
-# Check job status
-curl http://localhost:5000/api/v1/status/550e8400-e29b-41d4-a716-446655440000
-
-# Poll for completion
-while true; do
-  STATUS=$(curl -s http://localhost:5000/api/v1/status/550e8400-... | jq -r '.status')
-  if [ "$STATUS" == "success" ] || [ "$STATUS" == "failure" ]; then
-    break
-  fi
-  sleep 2
-done
-```
+**Error Responses**: 400 (invalid UUID), 404 (not found)
 
 ---
 
-### GET /api/v1/download/{job_id}
+#### GET /api/v1/download/{job_id}
 
-Download the converted file(s).
-
-**URL**: `/api/v1/download/{job_id}`
-
-**Method**: `GET`
-
-**URL Parameters**:
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `job_id` | UUID | Yes | Job identifier from completed job |
-
-**Success Response (200 OK)**:
+Download converted file(s). Requires API key.
 
 - **Single file**: Returns file with `Content-Disposition: attachment`
-- **Multi-file**: Returns ZIP archive with all files
+- **Multi-file**: Returns ZIP archive
 
-**Headers**:
-
-```
-Content-Type: application/octet-stream (single file)
-Content-Type: application/zip (multi-file)
-Content-Disposition: attachment; filename="document.md"
-```
-
-**Error Responses**:
-
-| Code | Description | Example |
-|------|-------------|---------|
-| 400 | Invalid UUID | `{"error": "Invalid job ID format"}` |
-| 404 | Job not found | `{"error": "Job not found"}` |
-| 404 | Job not completed | `{"error": "Job not completed yet"}` |
-| 410 | Files expired | `{"error": "Output files not found or expired"}` |
-
-**Example**:
-
-```bash
-# Download single file
-curl -O -J http://localhost:5000/api/v1/download/550e8400-e29b-41d4-a716-446655440000
-
-# Download with custom filename
-curl -o converted_document.md http://localhost:5000/api/v1/download/550e8400-...
-
-# Download ZIP (multi-file)
-curl -o conversion_result.zip http://localhost:5000/api/v1/download/550e8400-...
-```
+**Error Responses**: 404 (not found / not completed), 410 (files expired)
 
 ---
 
-### GET /api/v1/formats
+#### GET /api/v1/formats
 
-List all supported input/output formats and conversions.
-
-**URL**: `/api/v1/formats`
-
-**Method**: `GET`
+List supported formats and conversions. No authentication required.
 
 **Success Response (200 OK)**:
 
 ```json
 {
   "input_formats": [
-    {
-      "name": "PDF Document",
-      "key": "pdf",
-      "extension": ".pdf",
-      "mime_types": ["application/pdf"],
-      "supports_marker": true,
-      "supports_pandoc": true
-    },
-    {
-      "name": "Pandoc Markdown",
-      "key": "markdown",
-      "extension": ".md",
-      "mime_types": ["text/markdown", "text/plain"],
-      "supports_marker": false,
-      "supports_pandoc": true
-    }
+    {"name": "PDF Document", "key": "pdf", "extension": ".pdf", "mime_types": [...], "supports_marker": true, "supports_pandoc": true}
   ],
   "output_formats": [
-    {
-      "name": "Pandoc Markdown",
-      "key": "markdown",
-      "extension": ".md"
-    },
-    {
-      "name": "PDF via LaTeX",
-      "key": "pdf",
-      "extension": ".pdf"
-    }
+    {"name": "Pandoc Markdown", "key": "markdown", "extension": ".md"}
   ],
   "conversions": [
-    {
-      "from": "pdf",
-      "to": "markdown",
-      "engines": ["pandoc", "marker"],
-      "recommended_engine": "marker"
-    },
-    {
-      "from": "docx",
-      "to": "markdown",
-      "engines": ["pandoc"],
-      "recommended_engine": "pandoc"
-    }
+    {"from": "pdf", "to": "markdown", "engines": ["pandoc", "marker"], "recommended_engine": "marker"}
   ]
 }
 ```
 
-**Example**:
+---
 
-```bash
-# List all formats
-curl http://localhost:5000/api/v1/formats | jq '.'
+#### POST /api/v1/jobs/{job_id}/extract-metadata
 
-# List input formats only
-curl http://localhost:5000/api/v1/formats | jq '.input_formats'
+Trigger SLM metadata extraction on a completed job. Requires API key.
 
-# Find formats supporting Marker
-curl http://localhost:5000/api/v1/formats | jq '.input_formats[] | select(.supports_marker == true)'
+**Success Response (202 Accepted)**:
+
+```json
+{"job_id": "550e8400-...", "status": "queued", "message": "SLM extraction queued"}
 ```
+
+**Error Responses**: 404 (not found / no markdown output), 409 (job not in SUCCESS state)
+
+---
+
+### API Key Management
+
+All key management endpoints require admin authentication (`Authorization: Bearer <ADMIN_API_SECRET>`).
+
+#### POST /api/v1/auth/keys
+
+Create a new API key.
+
+**Request**: `application/json`
+
+```json
+{"label": "my-integration"}
+```
+
+**Success Response (201 Created)**:
+
+```json
+{"api_key": "dk_abc123...", "created_at": "1711036800.0", "label": "my-integration"}
+```
+
+**Error Responses**: 401 (missing auth), 403 (invalid secret), 503 (admin secret not configured)
+
+---
+
+#### DELETE /api/v1/auth/keys/{key}
+
+Revoke an API key.
+
+**Success Response (200 OK)**:
+
+```json
+{"revoked": true}
+```
+
+**Error Responses**: 401, 403, 404 (key not found)
+
+---
+
+#### GET /api/v1/admin/dlq
+
+Retrieve dead letter queue contents.
+
+**Query Parameters**: `limit` (int, default 100, max 1000)
+
+**Success Response (200 OK)**:
+
+```json
+{"count": 2, "total": 5, "entries": [{...}, {...}]}
+```
+
+---
+
+### Webhooks
+
+Webhook endpoints require API key authentication (`X-API-Key`).
+
+#### POST /api/v1/webhooks
+
+Register a webhook URL for job completion notifications.
+
+**Request**: `application/json`
+
+```json
+{"job_id": "550e8400-...", "webhook_url": "https://yourapp.com/callback"}
+```
+
+**Success Response (201 Created)**:
+
+```json
+{"job_id": "550e8400-...", "webhook_url": "https://yourapp.com/callback", "registered": true}
+```
+
+**Validation**: HTTPS required, private IPs blocked (SSRF protection).
+
+**Error Responses**: 400 (invalid job_id or URL), 404 (job not found)
+
+---
+
+#### GET /api/v1/webhooks/{job_id}
+
+Get the registered webhook for a job. Requires API key.
+
+**Success Response (200 OK)**:
+
+```json
+{"job_id": "550e8400-...", "webhook_url": "https://yourapp.com/callback"}
+```
+
+**Error Responses**: 404 (not found / no webhook registered)
+
+---
+
+### Browser Capture Sessions
+
+The capture API accepts page content from browser extensions. CORS allows `chrome-extension://*` and `moz-extension://*` origins. No authentication required.
+
+#### POST /api/v1/capture/sessions
+
+Create a new capture session.
+
+**Request**: `application/json`
+
+```json
+{"title": "My Document", "to_format": "markdown", "source_url": "https://...", "force_ocr": false}
+```
+
+**Success Response (201 Created)**:
+
+```json
+{"session_id": "uuid", "job_id": "uuid", "status": "active", "max_pages": 500}
+```
+
+---
+
+#### POST /api/v1/capture/sessions/{session_id}/pages
+
+Submit a captured page to a session.
+
+**Request**: `application/json`
+
+```json
+{
+  "url": "https://example.com/page/1",
+  "title": "Page Title",
+  "text": "Page content...",
+  "images": [],
+  "extraction_method": "generic",
+  "page_hint": 1,
+  "page_sequence": 42
+}
+```
+
+**Success Response (200 OK)**:
+
+```json
+{"status": "accepted", "page_count": 5}
+```
+
+Duplicate pages (same `page_sequence`) return `{"status": "duplicate", "page_count": 5}`.
+
+**Error Responses**: 404 (session not found), 409 (session not active), 422 (max pages reached)
+
+---
+
+#### POST /api/v1/capture/sessions/{session_id}/images
+
+Upload a large image separately from page submission.
+
+**Request**: `multipart/form-data`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `image` | File | Yes | Image file |
+| `alt` | String | No | Alt text |
+| `is_screenshot` | Boolean | No | Whether this is a screenshot |
+
+**Success Response (200 OK)**:
+
+```json
+{"image_ref": "images/hash.jpg", "status": "uploaded"}
+```
+
+**Error Responses**: 400 (no image / invalid path), 404 (session not found), 409 (session not active)
+
+---
+
+#### POST /api/v1/capture/sessions/{session_id}/finish
+
+Finalize capture session and queue assembly into a document.
+
+**Success Response (202 Accepted)**:
+
+```json
+{"job_id": "uuid", "status": "assembling", "status_url": "/api/v1/status/{job_id}"}
+```
+
+**Error Responses**: 404 (not found), 409 (already finished), 422 (no pages captured)
+
+---
+
+#### GET /api/v1/capture/sessions/{session_id}/status
+
+Poll capture session status.
+
+**Success Response (200 OK)**:
+
+```json
+{
+  "session_id": "uuid",
+  "status": "active",
+  "page_count": 5,
+  "title": "My Document",
+  "to_format": "markdown",
+  "job_id": "uuid",
+  "status_url": "/api/v1/status/{job_id}"
+}
+```
+
+**Error Responses**: 404 (not found)
+
+---
+
+### Health Checks
+
+No authentication required.
+
+| Endpoint | Response |
+|----------|----------|
+| `GET /healthz` | `OK` (200) — liveness probe |
+| `GET /readyz` | `{"status": "ready", "redis": "connected", "timestamp": ...}` (200) or 503 |
+| `GET /api/health` | `{"status": "healthy", "timestamp": ..., "components": {...}}` (200) with Redis, disk, GPU, Celery worker status |
+| `GET /api/status/services` | `{"disk_space": "ok", "marker": "ready", ...}` (200) |
+
+---
 
 ### Pandoc Options
 
-When using `engine=pandoc`, you can pass a `pandoc_options` JSON object to control Pandoc behavior. For PDF output, CJK font defaults (`xelatex`, `Noto Sans CJK SC`) apply automatically unless overridden.
+When using `engine=pandoc`, pass a `pandoc_options` JSON object to control Pandoc behavior. For PDF output, CJK font defaults (`xelatex`, `Noto Sans CJK SC`) apply automatically unless overridden.
 
 **Whitelisted Options**:
 
@@ -405,47 +440,29 @@ When using `engine=pandoc`, you can pass a `pandoc_options` JSON object to contr
 |-----|-------------|------|------------|
 | `pdf_engine` | `--pdf-engine` | enum | `xelatex`, `lualatex`, `pdflatex`, `tectonic`, `wkhtmltopdf` |
 | `toc` | `--toc` | bool | |
-| `toc_depth` | `--toc-depth` | int | 1–6 |
+| `toc_depth` | `--toc-depth` | int | 1-6 |
 | `number_sections` | `--number-sections` | bool | |
 | `highlight_style` | `--highlight-style` | enum | `pygments`, `tango`, `espresso`, `zenburn`, `kate`, `monochrome`, `breezedark`, `haddock` |
 | `listings` | `--listings` | bool | |
-| `dpi` | `--dpi` | int | 72–600 |
-| `columns` | `--columns` | int | 1–200 |
+| `dpi` | `--dpi` | int | 72-600 |
+| `columns` | `--columns` | int | 1-200 |
 | `standalone` | `--standalone` | bool | |
 | `wrap` | `--wrap` | enum | `auto`, `none`, `preserve` |
 | `strip_comments` | `--strip-comments` | bool | |
 | `shift_heading_level_by` | `--shift-heading-level-by` | int | -5 to 5 |
-| `variables` | `--variable` | object | Keys: `mainfont`, `CJKmainfont`, `monofont`, `fontsize`, `geometry`, `linestretch`, `margin-left`, `margin-right`, `margin-top`, `margin-bottom`, `papersize`, `documentclass` |
+| `variables` | `--variable` | object | Keys: `mainfont`, `CJKmainfont`, `monofont`, `fontsize`, `geometry`, `linestretch`, `margin-left/right/top/bottom`, `papersize`, `documentclass` |
 | `metadata` | `--metadata` | object | Keys: `title`, `author`, `date`, `lang`, `subject`, `description` |
 
 > **Security note:** Options like `--filter`, `--lua-filter`, `--template`, and `--include-*` are deliberately excluded to prevent arbitrary file reads or code execution.
 
-**Curl Example**:
+**Example**:
 
 ```bash
 curl -X POST http://localhost:5000/api/v1/convert \
+  -H "X-API-Key: dk_abc123..." \
   -F "file=@report.md" \
   -F "to_format=pdf" \
   -F 'pandoc_options={"toc": true, "number_sections": true, "variables": {"fontsize": "11pt", "geometry": "margin=0.75in"}}'
-```
-
-**Python Example**:
-
-```python
-import json
-import requests
-
-with open('report.md', 'rb') as f:
-    response = requests.post('http://localhost:5000/api/v1/convert', files={
-        'file': f,
-    }, data={
-        'to_format': 'pdf',
-        'pandoc_options': json.dumps({
-            'toc': True,
-            'number_sections': True,
-            'variables': {'fontsize': '11pt', 'geometry': 'margin=0.75in'}
-        })
-    })
 ```
 
 ---
@@ -455,221 +472,118 @@ with open('report.md', 'rb') as f:
 All error responses follow a consistent JSON structure:
 
 ```json
-{
-  "error": "Human-readable error message"
-}
+{"error": "Human-readable error message"}
+```
+
+Some 422 responses include additional detail:
+
+```json
+{"error": "Invalid pandoc_options", "details": ["unknown key: foo"]}
 ```
 
 **Common Error Codes**:
 
-- `400 Bad Request`: Invalid request parameters
-- `404 Not Found`: Resource not found (job, file)
-- `410 Gone`: Resource expired/deleted
-- `413 Payload Too Large`: File exceeds 100MB limit
-- `422 Unprocessable Entity`: Invalid format conversion
-- `429 Too Many Requests`: Rate limit exceeded
-- `507 Insufficient Storage`: Server disk full
-
-**Error Response Examples**:
-
-```json
-// Missing field
-{"error": "Missing required field: to_format"}
-
-// Invalid format
-{"error": "Unsupported output format: xyz"}
-
-// Job not found
-{"error": "Job not found"}
-
-// Files expired
-{"error": "Output files not found or expired"}
-
-// Rate limit
-{"error": "Rate limit exceeded", "message": "200 per 1 hour"}
-```
+| Code | Description |
+|------|-------------|
+| 400 | Invalid request parameters |
+| 401 | Missing authentication |
+| 403 | Invalid API key or admin secret |
+| 404 | Resource not found |
+| 409 | State conflict (e.g., session already finished) |
+| 410 | Resource expired/deleted |
+| 413 | File exceeds max upload size (200 MB) |
+| 422 | Validation error (invalid format, engine, options) |
+| 429 | Rate limit exceeded |
+| 507 | Server disk full |
 
 ## Examples
 
-### Complete Workflow Example
+### Complete Workflow
 
 ```bash
-#!/bin/bash
-
 # 1. Submit conversion job
 RESPONSE=$(curl -s -X POST http://localhost:5000/api/v1/convert \
+  -H "X-API-Key: dk_abc123..." \
   -F "file=@document.pdf" \
   -F "to_format=markdown" \
   -F "engine=marker")
 
-# Extract job ID
 JOB_ID=$(echo $RESPONSE | jq -r '.job_id')
-echo "Job submitted: $JOB_ID"
 
 # 2. Poll for completion
 while true; do
-  STATUS_RESPONSE=$(curl -s http://localhost:5000/api/v1/status/$JOB_ID)
-  STATUS=$(echo $STATUS_RESPONSE | jq -r '.status')
-  PROGRESS=$(echo $STATUS_RESPONSE | jq -r '.progress')
-
-  echo "Status: $STATUS, Progress: $PROGRESS%"
-
-  if [ "$STATUS" == "success" ]; then
-    echo "Conversion completed!"
-    break
-  elif [ "$STATUS" == "failure" ]; then
-    ERROR=$(echo $STATUS_RESPONSE | jq -r '.error')
-    echo "Conversion failed: $ERROR"
-    exit 1
-  fi
-
+  STATUS=$(curl -s http://localhost:5000/api/v1/status/$JOB_ID | jq -r '.status')
+  echo "Status: $STATUS"
+  [ "$STATUS" = "success" ] || [ "$STATUS" = "failure" ] && break
   sleep 2
 done
 
 # 3. Download result
-DOWNLOAD_URL=$(echo $STATUS_RESPONSE | jq -r '.download_url')
-curl -O -J http://localhost:5000$DOWNLOAD_URL
-
-echo "Download complete!"
+curl -OJ -H "X-API-Key: dk_abc123..." \
+  http://localhost:5000/api/v1/download/$JOB_ID
 ```
 
 ### Python Example
 
 ```python
-import requests
-import time
+import requests, time, json
 
-# 1. Submit job
-with open('document.pdf', 'rb') as f:
-    response = requests.post('http://localhost:5000/api/v1/convert', files={
-        'file': f,
-    }, data={
-        'to_format': 'markdown',
-        'engine': 'marker',
-        'force_ocr': 'true'
-    })
+BASE = "http://localhost:5000"
+HEADERS = {"X-API-Key": "dk_abc123..."}
 
-job = response.json()
-job_id = job['job_id']
-print(f"Job submitted: {job_id}")
+# Submit
+with open("document.pdf", "rb") as f:
+    r = requests.post(f"{BASE}/api/v1/convert", headers=HEADERS,
+                      files={"file": f}, data={"to_format": "markdown", "engine": "marker"})
+job_id = r.json()["job_id"]
 
-# 2. Poll for completion
+# Poll
 while True:
-    status_response = requests.get(f'http://localhost:5000/api/v1/status/{job_id}')
-    status_data = status_response.json()
-
-    status = status_data['status']
-    progress = status_data['progress']
-    print(f"Status: {status}, Progress: {progress}%")
-
-    if status == 'success':
+    status = requests.get(f"{BASE}/api/v1/status/{job_id}").json()
+    if status["status"] in ("success", "failure"):
         break
-    elif status == 'failure':
-        print(f"Error: {status_data['error']}")
-        exit(1)
-
     time.sleep(2)
 
-# 3. Download result
-download_url = status_data['download_url']
-download_response = requests.get(f'http://localhost:5000{download_url}')
-
-with open('result.md', 'wb') as f:
-    f.write(download_response.content)
-
-print("Download complete!")
-```
-
-### JavaScript/Node.js Example
-
-```javascript
-const FormData = require('form-data');
-const fs = require('fs');
-const axios = require('axios');
-
-async function convertDocument() {
-  // 1. Submit job
-  const form = new FormData();
-  form.append('file', fs.createReadStream('document.pdf'));
-  form.append('to_format', 'markdown');
-  form.append('engine', 'marker');
-
-  const submitResponse = await axios.post('http://localhost:5000/api/v1/convert', form, {
-    headers: form.getHeaders()
-  });
-
-  const jobId = submitResponse.data.job_id;
-  console.log(`Job submitted: ${jobId}`);
-
-  // 2. Poll for completion
-  while (true) {
-    const statusResponse = await axios.get(`http://localhost:5000/api/v1/status/${jobId}`);
-    const statusData = statusResponse.data;
-
-    console.log(`Status: ${statusData.status}, Progress: ${statusData.progress}%`);
-
-    if (statusData.status === 'success') {
-      // 3. Download result
-      const downloadUrl = statusData.download_url;
-      const downloadResponse = await axios.get(`http://localhost:5000${downloadUrl}`, {
-        responseType: 'arraybuffer'
-      });
-
-      fs.writeFileSync('result.md', downloadResponse.data);
-      console.log('Download complete!');
-      break;
-    } else if (statusData.status === 'failure') {
-      console.error(`Conversion failed: ${statusData.error}`);
-      process.exit(1);
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-}
-
-convertDocument();
+# Download
+if status["status"] == "success":
+    r = requests.get(f"{BASE}{status['download_url']}", headers=HEADERS)
+    with open("result.md", "wb") as f:
+        f.write(r.content)
 ```
 
 ## Best Practices
 
-1. **Polling Interval**: Use 2-5 second intervals when polling `/api/v1/status/{job_id}` to balance responsiveness and server load.
-
-2. **Error Handling**: Always check for `failure` status and handle errors gracefully.
-
-3. **File Size**: Keep uploads under 100MB. Larger files will be rejected with HTTP 413.
-
-4. **Format Validation**: Call `/api/v1/formats` to verify supported conversions before submitting jobs.
-
-5. **Download Window**: Download files promptly after completion. Files are deleted after:
-   - 10 minutes after download
-   - 1 hour if not downloaded
-   - 5 minutes after failure
-
-6. **Engine Selection**:
-   - Use `engine=marker` for PDF to Markdown conversions (AI-powered, high quality)
-   - Use `engine=pandoc` for all other conversions (universal, fast)
-
-7. **Multi-file Handling**: Check `is_multifile` in status response to determine if download will be a ZIP.
-
-## Future Enhancements
-
-Planned features for future API versions:
-
-- **API Key Authentication**: User-specific rate limits and quotas
-- **Webhook Callbacks**: Receive notifications when jobs complete
-- **Batch Conversion**: Submit multiple files in a single request
-- **WebSocket API**: Real-time progress updates without polling
-- **Metadata Extraction**: Return extracted document metadata
-- **Custom Retention**: Configure per-job file retention periods
+1. **Polling interval**: 2-5 seconds for `/api/v1/status/{job_id}`.
+2. **Download promptly**: Files are deleted 10 min after download, 1 hour if not downloaded, 5 min after failure.
+3. **Format validation**: Call `/api/v1/formats` to verify supported conversions before submitting.
+4. **Engine selection**: Use `marker` for PDF-to-Markdown (high quality); `pandoc` for everything else (fast).
+5. **Multi-file output**: Check `is_multifile` in status response — download will be a ZIP.
+6. **Webhook over polling**: Register a webhook to avoid polling overhead.
 
 ## Support
 
-For issues, feature requests, or questions about the API:
-
-- **GitHub Issues**: https://github.com/yourusername/docuflux/issues
-- **Documentation**: https://github.com/yourusername/docuflux/docs
+- **GitHub Issues**: https://github.com/aerocristobal/DocuFlux/issues
+- **API Docs (machine-readable)**: `GET /api` returns a Markdown reference for AI agents
+- **OpenAPI Spec**: [openapi.yaml](openapi.yaml)
 
 ## Changelog
+
+### v1.3.0 (2026-03-21)
+
+- OSCAL compliance integration (NIST SP 800-53)
+- Contract tests for all API response schemas
+- Encryption pipeline integration tests
+
+### v1.2.0 (2026-03-20)
+
+- API key authentication (`X-API-Key` header)
+- Admin key management endpoints
+- Webhook registration and callbacks (SSRF-protected)
+- Browser capture session endpoints (sessions, pages, images, finish, status)
+- SLM metadata extraction endpoint
+- Dead letter queue admin endpoint
+- Per-endpoint rate limiting
+- AES-256-GCM encryption at rest
 
 ### v1.1.0 (2026-03-11)
 
@@ -679,7 +593,4 @@ For issues, feature requests, or questions about the API:
 
 - Initial REST API release
 - Endpoints: convert, status, download, formats
-- IP-based rate limiting
-- CSRF exemption for REST compatibility
-- Multi-file ZIP support
 - Marker AI engine support

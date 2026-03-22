@@ -65,7 +65,16 @@ Environment variables are managed via `docker-compose.yml`. For production, it i
     - Failure: 5 minutes
 - **Isolation**: The worker Dockerfile uses a non-root `appuser`. The web container should also run as non-root in production.
 
+## OSCAL Compliance
+
+NIST SP 800-53 Rev 5 compliance artifacts are in `oscal/`:
+- `component-definition.json` — Control mappings (AC-2, AC-3, AU-2, SC-8, SC-28)
+- `ssp.json` — System Security Plan with implementation evidence
+
 ## Health Checks
 - **Web UI**: `GET /` (Port 5000)
+- **Liveness**: `GET /healthz` — returns `OK` if the process is alive
+- **Readiness**: `GET /readyz` — checks Redis connectivity
+- **Detailed Health**: `GET /api/health` — component-level status (Redis, disk, GPU, workers)
 - **Service Status**: `GET /api/status/services` (JSON)
 - **Build Profiles**: See [BUILD.md](../BUILD.md) for GPU/CPU build configuration

@@ -1,6 +1,6 @@
 # DocuFlux
 
-![Coverage](https://img.shields.io/badge/coverage-73.79%25-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-73%25-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 Containerized document conversion service combining **Pandoc** (universal converter), **Marker AI** (deep learning PDF), and a local **SLM** for intelligent metadata extraction — all behind a modern Material Design UI and a full REST API.
@@ -42,6 +42,7 @@ Containerized document conversion service combining **Pandoc** (universal conver
 | PDF (via XeLaTeX) | `pdf` | Output Only | Pandoc |
 | PDF (High Accuracy) | `pdf_marker` | Input Only | Marker AI |
 | PDF (Hybrid) | `pdf_hybrid` | Input Only | Pandoc → Marker |
+| PDF (SLM) | `pdf_marker_slm` | Input Only | Marker + SLM metadata |
 
 ## Tech Stack
 
@@ -76,8 +77,8 @@ Browser → Flask (5000) → Redis → Celery Worker
 **Prerequisites**: Docker, Docker Compose. GPU: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (optional).
 
 ```bash
-git clone https://github.com/yourusername/docuflux.git
-cd docuflux
+git clone https://github.com/aerocristobal/DocuFlux.git
+cd DocuFlux
 cp .env.example .env   # edit SECRET_KEY and any optional settings
 ```
 
@@ -105,14 +106,18 @@ All `/api/v1/` endpoints require `X-API-Key: dk_...` where noted. Keys are manag
 
 ### Authentication
 
-```bash
-# Create an API key
-curl -X POST http://localhost:5000/api/v1/auth/keys \
-  -H "Content-Type: application/json" -d '{"name": "my-app"}'
-# {"key": "dk_abc123...", "name": "my-app"}
+API key and webhook endpoints require admin authentication via `Authorization: Bearer <ADMIN_API_SECRET>`.
 
-# Delete a key
-curl -X DELETE http://localhost:5000/api/v1/auth/keys/dk_abc123...
+```bash
+# Create an API key (requires admin secret)
+curl -X POST http://localhost:5000/api/v1/auth/keys \
+  -H "Authorization: Bearer $ADMIN_API_SECRET" \
+  -H "Content-Type: application/json" -d '{"label": "my-app"}'
+# {"api_key": "dk_abc123...", "created_at": "1711036800.0", "label": "my-app"}
+
+# Revoke a key (requires admin secret)
+curl -X DELETE http://localhost:5000/api/v1/auth/keys/dk_abc123... \
+  -H "Authorization: Bearer $ADMIN_API_SECRET"
 ```
 
 ### Document Conversion
@@ -159,15 +164,17 @@ curl -OJ http://localhost:5000/api/v1/download/550e8400-e29b-41d4-a716-446655440
 |----------|--------|------|-------------|
 | `/api/v1/convert` | POST | Key | Submit conversion job |
 | `/api/v1/status/{job_id}` | GET | — | Job status and progress |
-| `/api/v1/download/{job_id}` | GET | — | Download converted file |
+| `/api/v1/download/{job_id}` | GET | Key | Download converted file |
 | `/api/v1/formats` | GET | — | List all supported formats |
-| `/api/v1/auth/keys` | POST | — | Create API key |
-| `/api/v1/auth/keys/{key}` | DELETE | — | Revoke API key |
-| `/api/v1/webhooks` | POST | — | Register webhook for a job |
-| `/api/v1/webhooks/{job_id}` | GET | — | Get webhook registration |
 | `/api/v1/jobs/{job_id}/extract-metadata` | POST | Key | Run SLM metadata extraction |
+| `/api/v1/auth/keys` | POST | Admin | Create API key |
+| `/api/v1/auth/keys/{key}` | DELETE | Admin | Revoke API key |
+| `/api/v1/admin/dlq` | GET | Admin | Dead letter queue contents |
+| `/api/v1/webhooks` | POST | Key | Register webhook for a job |
+| `/api/v1/webhooks/{job_id}` | GET | Key | Get webhook registration |
 | `/api/v1/capture/sessions` | POST | — | Create browser capture session |
 | `/api/v1/capture/sessions/{id}/pages` | POST | — | Upload pages to session |
+| `/api/v1/capture/sessions/{id}/images` | POST | — | Upload image to session |
 | `/api/v1/capture/sessions/{id}/finish` | POST | — | Assemble session into document |
 | `/api/v1/capture/sessions/{id}/status` | GET | — | Capture session status |
 | `/api/status/services` | GET | — | Service + GPU health |
@@ -176,13 +183,16 @@ curl -OJ http://localhost:5000/api/v1/download/550e8400-e29b-41d4-a716-446655440
 | `/readyz` | GET | — | Readiness probe |
 | `/metrics` | GET | — | Prometheus scrape (worker, port 9090) |
 
+Auth legend: **Key** = `X-API-Key: dk_...` header, **Admin** = `Authorization: Bearer <ADMIN_API_SECRET>` header.
+
 ### Webhooks
 
 ```bash
-# Register a callback URL for a job
+# Register a callback URL for a job (requires API key)
 curl -X POST http://localhost:5000/api/v1/webhooks \
+  -H "X-API-Key: dk_abc123..." \
   -H "Content-Type: application/json" \
-  -d '{"job_id": "550e8400-...", "url": "https://yourapp.com/callback"}'
+  -d '{"job_id": "550e8400-...", "webhook_url": "https://yourapp.com/callback"}'
 
 # DocuFlux POSTs this payload on completion:
 # {"job_id": "...", "status": "SUCCESS", "download_url": "/api/v1/download/..."}
@@ -198,9 +208,10 @@ SESSION=$(curl -s -X POST http://localhost:5000/api/v1/capture/sessions \
   -H "Content-Type: application/json" \
   -d '{"to_format": "markdown", "title": "My Book"}' | jq -r .session_id)
 
-# 2. Upload pages (up to 1000/hr, 500 pages/session, 50 pages/batch)
+# 2. Upload pages as JSON (up to 1000/hr, 500 pages/session)
 curl -X POST http://localhost:5000/api/v1/capture/sessions/$SESSION/pages \
-  -F "page_index=0" -F "screenshot=@page0.png" -F "html=<page0.html"
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/page/1", "title": "Chapter 1", "text": "# Chapter 1\nContent..."}'
 
 # 3. Finish and assemble
 curl -X POST http://localhost:5000/api/v1/capture/sessions/$SESSION/finish
@@ -287,22 +298,30 @@ Cleanup runs every 5 minutes via Celery Beat (`tasks.cleanup_old_files`).
 
 ```
 docuflux/
-├── web/app.py              # Flask routes + REST API (1707 lines)
-├── web/templates/          # Material Design 3 UI
-├── worker/tasks.py         # 11 Celery tasks (1727 lines)
-├── worker/warmup.py        # GPU detection + SLM eager load (213 lines)
-├── worker/metrics.py       # Prometheus metrics definitions
-├── worker/Dockerfile       # Multi-stage GPU/CPU build
-├── config.py               # Pydantic Settings (25+ env vars)
-├── deploy/                 # Infrastructure configs
+├── web/
+│   ├── app.py              # Flask app, middleware, auth
+│   ├── routes/             # 5 route blueprints (auth, capture, conversion, health, webhooks)
+│   ├── validation.py       # Input validation (MIME, UUID, SSRF, filename)
+│   ├── templates/          # Material Design 3 UI
+│   └── Dockerfile
+├── worker/
+│   ├── tasks/              # Celery tasks (capture, conversion, maintenance, metadata)
+│   ├── warmup.py           # GPU detection + SLM eager load
+│   ├── metrics.py          # Prometheus metrics definitions
+│   └── Dockerfile          # Multi-stage GPU/CPU build
+├── shared/                 # Shared modules (encryption, storage, formats, config, keys, secrets)
+├── extension-src/          # Chrome/Firefox browser extension source
+├── mcp_server/             # Playwright MCP server for vision extraction
+├── oscal/                  # NIST SP 800-53 component definition + SSP
+├── deploy/
 │   ├── cloudflare/         # Cloudflare Tunnel config + setup
 │   ├── certs/              # TLS certificates
 │   ├── monitoring/         # Prometheus alert rules
-│   └── k8s/                # 5 Kubernetes manifests
+│   └── k8s/                # Kubernetes manifests (namespace, secrets, redis, web, worker)
 ├── scripts/build.sh        # Build wrapper (auto/gpu/cpu)
 ├── tests/
-│   ├── unit/               # Pytest unit tests
-│   ├── integration/        # WebSocket + pipeline E2E tests
+│   ├── unit/               # Pytest unit tests (399 tests)
+│   ├── integration/        # E2E + encryption pipeline tests
 │   └── load/locustfile.py  # Locust load tests
 ├── docs/                   # 13 markdown docs + OpenAPI spec + Grafana dashboard
 └── docker-compose*.yml     # 5 Compose variants (base/gpu/cpu/tls/cloudflare)
@@ -330,7 +349,7 @@ pytest tests/integration/ -v
 ### Code Validation
 
 ```bash
-python3 -m py_compile web/app.py worker/tasks.py worker/warmup.py
+python3 -m py_compile web/app.py worker/tasks/conversion.py worker/warmup.py
 ```
 
 ## Documentation
