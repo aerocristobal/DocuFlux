@@ -92,7 +92,7 @@ def _save_marker_output(rendered, output_path, images_dir):
     with open(metadata_path, "w", encoding='utf-8') as f:
         json.dump(rendered.metadata, f, indent=2, default=str)
 
-    file_count = 2 + saved_images_count
+    file_count = 1 + saved_images_count  # Don't count metadata.json as user-facing
     return text, images, saved_images_count, file_count
 
 

@@ -133,7 +133,7 @@ class LocalStorageBackend:
     def serve_download(self, job_id: str, filename: str,
                        folder: str = "output"):
         from flask import send_from_directory
-        job_dir = self._job_path(job_id, folder=folder)
+        job_dir = os.path.abspath(self._job_path(job_id, folder=folder))
         return send_from_directory(job_dir, filename, as_attachment=True)
 
     def disk_usage(self) -> Optional[tuple[int, int, int]]:
