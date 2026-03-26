@@ -161,7 +161,8 @@ def list_jobs():
             if cached is not None:
                 file_count = int(cached)
             else:
-                file_count = len(_app_mod.storage.list_files(jid, folder='output'))
+                file_count = len([f for f in _app_mod.storage.list_files(jid, folder='output')
+                                     if os.path.basename(f) != 'metadata.json'])
 
         is_zip = file_count > 1
         download_url = None
@@ -322,17 +323,18 @@ def download_file(job_id):
     all_files = _app_mod.storage.list_files(job_id, folder='output')
     if not all_files: return "Not found", 404
 
+    # Exclude internal metadata from user-facing downloads
+    user_files = [f for f in all_files if os.path.basename(f) != 'metadata.json']
+    if not user_files: return "Not found", 404
+
     # Check for subdirectories (e.g., images/)
-    has_subdirs = any('/' in f for f in all_files)
+    has_subdirs = any('/' in f for f in user_files)
     if has_subdirs:
         return download_zip(job_id)
 
-    top_files = [f for f in all_files if not f.startswith('.')]
+    top_files = [f for f in user_files if not f.startswith('.')]
     if not top_files: return "Not found", 404
     target_file = top_files[0]
-    if len(top_files) > 1:
-        others = [f for f in top_files if f != 'metadata.json']
-        if others: target_file = others[0]
 
     job_meta = _app_mod.redis_client.hgetall(f"job:{job_id}")
     is_encrypted = job_meta.get('encrypted') == 'true'
@@ -383,6 +385,8 @@ def download_zip(job_id):
         try:
             with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
                 for rel_path in _app_mod.storage.list_files(job_id, folder='output'):
+                    if os.path.basename(rel_path) == 'metadata.json':
+                        continue
                     if is_encrypted:
                         abs_path = _app_mod.storage.get_local_path(job_id, rel_path, folder='output')
                         decrypted_path = _app_mod.decrypt_file_to_temp(abs_path, job_id)
