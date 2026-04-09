@@ -13,6 +13,9 @@
     "jsdom": "^26.0.0",
     "@vitest/coverage-v8": "^3.1.1"
   },
+  "overrides": {
+    "vite": "^7.3.2"
+  },
   "scripts": {
     "build": "node ../scripts/build-extension.js",
     "test": "vitest run",
