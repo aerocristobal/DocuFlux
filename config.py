@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     # Pydantic can parse JSON strings into Python types
     default_limits: List[str] = Field(["1000 per day", "200 per hour"], validation_alias="FLASK_LIMITER_DEFAULT_LIMITS")
     storage_uri: Optional[str] = Field(None, validation_alias="FLASK_LIMITER_STORAGE_URI") # Defaults to REDIS_METADATA_URL if None, handled below in settings instance creation
+    # Story 4.2: Explicit, configurable rate limit for the conversion endpoints
+    # (/convert and /api/v1/convert). Override via CONVERT_RATE_LIMIT, e.g.
+    # "60 per minute" or "500 per hour;50 per minute".
+    convert_rate_limit: str = Field("200 per hour", validation_alias="CONVERT_RATE_LIMIT")
 
     # --- Flask-SocketIO Settings ---
     socketio_async_mode: Literal["eventlet", "gevent", "threading", "fork"] = Field("eventlet", validation_alias="SOCKETIO_ASYNC_MODE")

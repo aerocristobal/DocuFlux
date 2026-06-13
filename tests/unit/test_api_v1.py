@@ -244,6 +244,72 @@ def test_api_v1_convert_cannot_detect_format(client, mock_disk_space, api_header
     assert 'auto-detect' in json_data['error']
 
 
+def test_api_v1_convert_rate_limit_returns_429(mock_redis, mock_celery, mock_disk_space, api_headers):
+    """Story 4.2: once the configured convert limit is exceeded, the next
+    request is rejected with HTTP 429.
+
+    Builds its own client so the limiter stays enabled (the shared `client`
+    fixture disables it), points the configurable limit at a small value, and
+    fires N+1 requests.
+    """
+    import os, tempfile
+    import web.app as web_app_mod
+    from storage import LocalStorageBackend
+    from web.app import app, limiter
+
+    app.config['TESTING'] = True
+    app.config['WTF_CSRF_ENABLED'] = False
+    _tmpdir = tempfile.mkdtemp(prefix='docuflux_ratelimit_test_')
+    _upload = os.path.join(_tmpdir, 'uploads')
+    _output = os.path.join(_tmpdir, 'outputs')
+    os.makedirs(_upload, exist_ok=True)
+    os.makedirs(_output, exist_ok=True)
+    web_app_mod.storage = LocalStorageBackend(upload_folder=_upload, output_folder=_output)
+    app.config['UPLOAD_FOLDER'] = _upload
+    app.config['OUTPUT_FOLDER'] = _output
+
+    mock_redis.hset = Mock()
+    mock_redis.hgetall = Mock(return_value={})
+    mock_celery.send_task = Mock()
+
+    n = 3  # configured limit for this test
+    original_enabled = limiter.enabled
+    original_limit = web_app_mod.app_settings.convert_rate_limit
+    web_app_mod.app_settings.convert_rate_limit = f"{n} per minute"
+    limiter.enabled = True
+    # Clear any limiter state accumulated by earlier tests
+    try:
+        limiter.reset()
+    except Exception:
+        pass
+
+    try:
+        def _post():
+            data = {
+                'file': (io.BytesIO(b"# Test Markdown"), 'test.md'),
+                'to_format': 'docx',
+                'engine': 'pandoc',
+            }
+            return client.post(
+                '/api/v1/convert', data=data,
+                content_type='multipart/form-data', headers=api_headers,
+            )
+
+        with app.test_client() as client:
+            statuses = [_post().status_code for _ in range(n + 1)]
+
+        # First N succeed (202), the N+1th is rate-limited (429)
+        assert statuses[:n] == [202] * n, f"expected first {n} to be 202, got {statuses}"
+        assert statuses[n] == 429, f"expected request {n + 1} to be 429, got {statuses}"
+    finally:
+        limiter.enabled = original_enabled
+        web_app_mod.app_settings.convert_rate_limit = original_limit
+        try:
+            limiter.reset()
+        except Exception:
+            pass
+
+
 # ============================================================================
 # GET /api/v1/status/{job_id} Tests
 # ============================================================================

@@ -432,7 +432,9 @@ def download_zip(job_id):
 @conversion_bp.route('/api/v1/convert', methods=['POST'])
 @_app_mod.csrf.exempt
 @_app_mod.require_api_key
-@_app_mod.limiter.limit("200 per hour")
+# Story 4.2: Rate limit is configurable via CONVERT_RATE_LIMIT (config.py),
+# not hardcoded. The callable is evaluated per-request so env overrides apply.
+@_app_mod.limiter.limit(lambda: _app_mod.app_settings.convert_rate_limit)
 def api_v1_convert():
     """REST API endpoint for document conversion submission."""
     if not _app_mod.check_disk_space():
