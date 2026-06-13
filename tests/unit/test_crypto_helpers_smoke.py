@@ -17,6 +17,9 @@ from tests.unit.crypto_helpers import (
     assert_wrong_key_fails,
 )
 
+# Fixtures (encryption_service, master_key_b64, dek_b64) are provided by
+# tests/unit/conftest.py.
+
 
 def test_master_key_is_32_bytes():
     assert len(MASTER_KEY_BYTES) == 32
