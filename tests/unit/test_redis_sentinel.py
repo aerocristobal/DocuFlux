@@ -107,3 +107,40 @@ class TestCelerySentinelConfig:
         broker_urls = ';'.join(f'sentinel://{h}:{p}' for h, p in sentinels)
         broker_url = f'{broker_urls}/0'
         assert broker_url == 'sentinel://host1:26379;sentinel://host2:26380;sentinel://host3:26381/0'
+
+
+class TestRedisTLS:
+    """Story 4.1a: rediss:// URLs enable TLS and wire the configured cert paths
+    into the redis client's SSL settings (boundary: paths must align)."""
+
+    def test_rediss_enables_tls_with_cert_paths(self):
+        with patch('redis.Redis.from_url') as mock_from_url:
+            from redis_client import create_redis_client
+            mock_settings = MagicMock()
+            mock_settings.redis_tls_ca_certs = '/certs/redis/ca.crt'
+            mock_settings.redis_tls_certfile = '/certs/redis/redis.crt'
+            mock_settings.redis_tls_keyfile = '/certs/redis/redis.key'
+
+            create_redis_client('rediss://:pw@redis:6380/0', mock_settings)
+
+            mock_from_url.assert_called_once()
+            kwargs = mock_from_url.call_args.kwargs
+            assert kwargs['ssl'] is True
+            assert kwargs['ssl_cert_reqs'] == 'required'
+            assert kwargs['ssl_ca_certs'] == '/certs/redis/ca.crt'
+            assert kwargs['ssl_certfile'] == '/certs/redis/redis.crt'
+            assert kwargs['ssl_keyfile'] == '/certs/redis/redis.key'
+
+    def test_plain_redis_url_has_no_tls(self):
+        with patch('redis.Redis.from_url') as mock_from_url:
+            from redis_client import create_redis_client
+            mock_settings = MagicMock()
+            mock_settings.redis_tls_ca_certs = None
+            mock_settings.redis_tls_certfile = None
+            mock_settings.redis_tls_keyfile = None
+
+            create_redis_client('redis://localhost:6379/0', mock_settings)
+
+            kwargs = mock_from_url.call_args.kwargs
+            assert 'ssl' not in kwargs
+            assert 'ssl_ca_certs' not in kwargs

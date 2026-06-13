@@ -12,6 +12,10 @@ from werkzeug.utils import secure_filename
 
 import tasks as _pkg
 from pandoc_options import build_pandoc_cmd
+from quality import score_markdown
+
+# Output formats whose content is Markdown (eligible for quality scoring, 1.1).
+_MARKDOWN_OUTPUT_FORMATS = {"markdown", "gfm"}
 
 
 # ── Marker helpers (shared by marker, marker_slm, hybrid) ──────────────────
@@ -224,13 +228,61 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
         logging.info(f"Conversion successful: {output_path}")
 
+        # Story 3.1: Pandoc can exit 0 yet write an empty / near-empty file
+        # (e.g. a malformed source). Detect that and fail loudly rather than
+        # shipping a half-converted document as success.
+        try:
+            output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+        except OSError:
+            output_size = 0
+        if output_size == 0:
+            error_msg = "Conversion produced empty output"
+            logging.error(f"Empty output for job {job_id}: {error_msg}")
+            _pkg.update_job_metadata(job_id, {
+                'status': 'FAILURE', 'completed_at': str(time.time()),
+                'error': error_msg, 'reason_code': 'empty_output',
+                'progress': '0', 'stage': 'Failed',
+            })
+            _pkg.redis_client.expire(f"job:{job_id}", 600)
+            _pkg.fire_webhook(job_id, 'FAILURE', {'error': error_msg, 'reason_code': 'empty_output'})
+
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='empty_output').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+            raise Exception(error_msg)
+
+        # Story 1.1: Score Markdown output quality and persist the report so
+        # degraded conversions are detectable before users see them. Scoring is
+        # best-effort — a scorer error must never fail an otherwise-good job.
+        quality_meta = {}
+        if to_format in _MARKDOWN_OUTPUT_FORMATS:
+            try:
+                with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
+                    md_text = fh.read()
+                page_count_raw = _pkg.redis_client.hget(f"job:{job_id}", 'page_count')
+                try:
+                    page_count = int(page_count_raw) if page_count_raw else None
+                except (TypeError, ValueError):
+                    page_count = None
+                report = score_markdown(md_text, page_count=page_count)
+                quality_meta = report.to_metadata()
+                logging.info(
+                    f"Quality for job {job_id}: grade={report.grade} "
+                    f"score={report.score} reasons={report.reason_codes}"
+                )
+            except Exception as qe:  # pragma: no cover - defensive
+                logging.warning(f"Quality scoring failed for job {job_id}: {qe}")
+
         _pkg.update_job_metadata(job_id, {
             'status': 'SUCCESS',
             'completed_at': str(time.time()),
             'progress': '100',
             'encrypted': 'false',
             'file_count': '1',
-            'stage': 'Complete'
+            'stage': 'Complete',
+            **quality_meta,
         })
         _pkg.redis_client.expire(f"job:{job_id}", 7200)
         _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})

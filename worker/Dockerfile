@@ -16,7 +16,14 @@ FROM base-${BUILD_GPU} AS base
 # Avoid interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies: Pandoc, LaTeX (with XeLaTeX), Python, Git-LFS, and OpenCV dependencies
+# Story 2.1a: Tesseract OCR language packs are configurable at build time.
+# Space-separated list of tesseract-ocr-<lang> suffixes, e.g.
+#   --build-arg TESSERACT_LANGS="eng chi_sim chi_tra jpn".
+# 'eng' is always available via the base tesseract-ocr package.
+ARG TESSERACT_LANGS="eng"
+
+# Install system dependencies: Pandoc, LaTeX (with XeLaTeX), Python, Git-LFS,
+# Tesseract OCR engine, and OpenCV dependencies
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y \
@@ -36,9 +43,25 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     curl \
     libgl1 \
     libglib2.0-0 \
+    tesseract-ocr \
     && git lfs install \
     && ln -s /usr/bin/python3 /usr/bin/python \
     && fc-cache -fv
+
+# Story 2.1a: Install the configured Tesseract language packs. Done in its own
+# layer so changing the language set doesn't rebuild the heavy base layer. Skips
+# 'eng' (already provided by tesseract-ocr) and tolerates an empty list.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    set -eux; \
+    pkgs=""; \
+    for lang in ${TESSERACT_LANGS}; do \
+        [ "$lang" = "eng" ] && continue; \
+        pkgs="$pkgs tesseract-ocr-$lang"; \
+    done; \
+    if [ -n "$pkgs" ]; then apt-get update && apt-get install -y $pkgs; fi; \
+    tesseract --version; \
+    tesseract --list-langs
 
 WORKDIR /app
 
@@ -96,6 +119,11 @@ RUN mkdir -p /app/.cache/huggingface && \
 ENV HOME=/app
 
 USER appuser
+
+# Story 3.2: Image-level healthcheck probes Celery itself (not the MCP server),
+# so a dead worker is reported unhealthy and restarted. Independent of MCP.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD celery -A tasks inspect ping -d celery@$HOSTNAME -t 5 >/dev/null 2>&1 || exit 1
 
 # Set entrypoint
 ENTRYPOINT ["./entrypoint.sh"]
