@@ -54,10 +54,31 @@ KAT_PLAINTEXTS = [
 def make_encryption_service(master_key_b64=MASTER_KEY_B64):
     """Return an EncryptionService bound to a deterministic master key.
 
-    Imported lazily so importing this helper module never drags in the
-    crypto stack unless a test actually needs it.
+    Imports the *real* ``encryption`` module by loading it from source, even if
+    another test (e.g. test_worker) has replaced ``sys.modules['encryption']``
+    with a MagicMock. This keeps the crypto scaffolding usable regardless of
+    test ordering. Falls back to a plain import when the real module is already
+    present.
     """
-    from encryption import EncryptionService
+    import sys
+    mod = sys.modules.get("encryption")
+    EncryptionService = getattr(mod, "EncryptionService", None) if mod else None
+
+    # If the cached module is a mock (no real AES-GCM behaviour), reload the
+    # genuine implementation from its file without disturbing sys.modules.
+    is_mock = EncryptionService is None or type(EncryptionService).__name__ in (
+        "MagicMock", "Mock", "NonCallableMagicMock",
+    )
+    if is_mock:
+        import importlib.util
+        import os
+        here = os.path.dirname(os.path.abspath(__file__))
+        enc_path = os.path.join(here, "..", "..", "shared", "encryption.py")
+        spec = importlib.util.spec_from_file_location("_real_encryption", enc_path)
+        real = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(real)
+        EncryptionService = real.EncryptionService
+
     return EncryptionService(master_key=master_key_b64)
 
 
