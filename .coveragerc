@@ -1,7 +1,5 @@
 [run]
 omit =
-    shared/key_manager.py
-    shared/secrets_manager.py
     web/validation.py
     worker/metrics.py
     worker/warmup.py
