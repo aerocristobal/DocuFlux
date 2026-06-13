@@ -144,11 +144,13 @@ class TestConvertDocument:
     @patch('tasks.socketio')
     @patch('subprocess.run')
     @patch('os.makedirs')
+    @patch('os.path.getsize')
     @patch('os.path.exists')
-    def test_success(self, mock_exists, mock_makedirs, mock_run,
+    def test_success(self, mock_exists, mock_getsize, mock_makedirs, mock_run,
                      mock_socketio, mock_redis, sample_job_id):
         """Pandoc conversion returns success and calls subprocess with pandoc."""
         mock_exists.return_value = True
+        mock_getsize.return_value = 1234  # non-empty output (Story 3.1)
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mock_redis.hset = MagicMock()
         mock_redis.hgetall = MagicMock(return_value={})
@@ -213,12 +215,14 @@ class TestConvertDocument:
     @patch('tasks.socketio')
     @patch('subprocess.run')
     @patch('os.makedirs')
+    @patch('os.path.getsize')
     @patch('os.path.exists')
-    def test_pdf_output_uses_xelatex(self, mock_exists, mock_makedirs,
+    def test_pdf_output_uses_xelatex(self, mock_exists, mock_getsize, mock_makedirs,
                                       mock_run, mock_socketio, mock_redis,
                                       sample_job_id):
         """PDF conversion includes XeLaTeX engine flag for CJK support."""
         mock_exists.return_value = True
+        mock_getsize.return_value = 4096  # non-empty output (Story 3.1)
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mock_redis.hset = MagicMock()
         mock_redis.hgetall = MagicMock(return_value={})
@@ -261,6 +265,90 @@ class TestConvertDocument:
             )
 
         mock_redis.hset.assert_called()
+
+
+class TestEmptyOutputDetection:
+    """Story 3.1: Pandoc exiting 0 with empty output must FAIL, not COMPLETE."""
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('subprocess.run')
+    @patch('os.makedirs')
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_empty_output_marks_failure_with_reason(
+            self, mock_exists, mock_getsize, mock_makedirs, mock_run,
+            mock_socketio, mock_redis, sample_job_id):
+        """Pandoc writes a 0-byte file but exits 0 -> job FAILED, reason empty_output."""
+        import subprocess as _sp
+        mock_exists.return_value = True
+        mock_getsize.return_value = 0  # 0-byte output despite success exit
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_redis.hset = MagicMock()
+        mock_redis.hgetall = MagicMock(return_value={})
+
+        with pytest.raises(Exception, match="empty output"):
+            tasks.convert_document(
+                job_id=sample_job_id,
+                input_filename='bad.md',
+                output_filename='bad.html',
+                from_format='markdown',
+                to_format='html',
+            )
+
+        # The FAILURE metadata write must carry the empty_output reason code.
+        wrote_reason = any(
+            isinstance(c.kwargs.get('mapping'), dict)
+            and c.kwargs['mapping'].get('reason_code') == 'empty_output'
+            and c.kwargs['mapping'].get('status') == 'FAILURE'
+            for c in mock_redis.hset.call_args_list
+        )
+        assert wrote_reason, "expected a FAILURE write with reason_code=empty_output"
+
+
+class TestQualityScoringPersistence:
+    """Story 1.1: a Markdown conversion persists a quality grade/score/reasons."""
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('subprocess.run')
+    @patch('os.makedirs')
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_quality_metadata_persisted_for_markdown_output(
+            self, mock_exists, mock_getsize, mock_makedirs, mock_run,
+            mock_socketio, mock_redis, sample_job_id):
+        """A poor Markdown output persists quality_grade/score/reasons."""
+        mock_exists.return_value = True
+        mock_getsize.return_value = 12  # non-empty (passes 3.1)
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_redis.hset = MagicMock()
+        # page_count lookup used by the scorer
+        mock_redis.hget = MagicMock(return_value="10")
+        mock_redis.hgetall = MagicMock(return_value={})
+
+        # The converted file reads back as sparse markdown -> grade "poor".
+        sparse_md = "foo bar baz\n" * 10
+        with patch('builtins.open', mock_open(read_data=sparse_md)):
+            result = tasks.convert_document(
+                job_id=sample_job_id,
+                input_filename='scan.pdf',
+                output_filename='scan.md',
+                from_format='pdf',
+                to_format='markdown',
+            )
+
+        assert result['status'] == 'success'
+        # The SUCCESS metadata write must include quality fields.
+        success_write = None
+        for c in mock_redis.hset.call_args_list:
+            d = c.kwargs.get('mapping')
+            if isinstance(d, dict) and d.get('status') == 'SUCCESS':
+                success_write = d
+        assert success_write is not None, "no SUCCESS metadata write captured"
+        assert success_write.get('quality_grade') == 'poor'
+        assert 'low_word_density' in success_write.get('quality_reasons', '')
+        assert int(success_write.get('quality_score', '100')) < 45
 
 
 # ============================================================
