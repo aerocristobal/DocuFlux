@@ -97,6 +97,11 @@ ENV HOME=/app
 
 USER appuser
 
+# Story 3.2: Image-level healthcheck probes Celery itself (not the MCP server),
+# so a dead worker is reported unhealthy and restarted. Independent of MCP.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD celery -A tasks inspect ping -d celery@$HOSTNAME -t 5 >/dev/null 2>&1 || exit 1
+
 # Set entrypoint
 ENTRYPOINT ["./entrypoint.sh"]
 

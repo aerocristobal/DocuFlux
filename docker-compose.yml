@@ -142,12 +142,15 @@ services:
       - ALL
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=3g  # Increased for Marker model downloads
+    # Story 3.2: Probe Celery itself, not the MCP server. A dead Celery worker
+    # now flips the container to unhealthy so the orchestrator restarts it, and
+    # the check no longer depends on the MCP endpoint being reachable.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "celery -A tasks inspect ping -d celery@$${HOSTNAME} -t 5 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     restart: unless-stopped
 
   beat:
