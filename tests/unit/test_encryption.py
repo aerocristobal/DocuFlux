@@ -166,3 +166,56 @@ class TestRedisEncryption:
         re_mod, helper = self._helper()
         assert helper.should_encrypt_field("filename") is True
         assert helper.should_encrypt_field("status") is False
+
+    def test_module_level_encrypt_decrypt_field(self, set_master_key_env):
+        re_mod, _ = self._helper()
+        dek = make_encryption_service().generate_key()
+        enc = re_mod.encrypt_field("sensitive.pdf", dek, "filename", "job-9")
+        assert enc != "sensitive.pdf"
+        dec = re_mod.decrypt_field(enc, dek, "filename", "job-9")
+        assert dec == "sensitive.pdf"
+
+    def test_decrypt_metadata_skips_unencrypted(self):
+        _, helper = self._helper()
+        dek = make_encryption_service().generate_key()
+        # No *_encrypted flags -> values pass through unchanged.
+        out = helper.decrypt_metadata({"status": "SUCCESS", "to": "pdf"}, dek, "j")
+        assert out == {"status": "SUCCESS", "to": "pdf"}
+
+
+class TestEncryptionConvenienceAndFiles:
+    """Cover encrypt_string/decrypt_string and the file encryption paths."""
+
+    def test_encrypt_decrypt_string_roundtrip(self, set_master_key_env):
+        enc = _load_real("encryption", "encryption.py")
+        svc = make_encryption_service()
+        dek = svc.generate_key()
+        blob = enc.encrypt_string("hello", dek)
+        assert enc.decrypt_string(blob, dek) == "hello"
+
+    def test_encrypt_decrypt_file_roundtrip(self, tmp_path):
+        svc = make_encryption_service()
+        dek = svc.generate_key()
+        src = tmp_path / "in.bin"
+        enc_out = tmp_path / "out.enc"
+        dec_out = tmp_path / "out.dec"
+        data = b"file contents \x00\x01 over several bytes" * 10
+        src.write_bytes(data)
+        svc.encrypt_file(str(src), str(enc_out), dek)
+        assert enc_out.read_bytes() != data
+        svc.decrypt_file(str(enc_out), str(dec_out), dek)
+        assert dec_out.read_bytes() == data
+
+    def test_streaming_roundtrip(self, tmp_path):
+        svc = make_encryption_service()
+        dek = svc.generate_key()
+        data = b"X" * (200 * 1024)  # 200 KiB -> multiple chunks
+        src = tmp_path / "big.bin"
+        src.write_bytes(data)
+        encrypted_chunks = list(svc.encrypt_file_streaming(str(src), dek))
+        # The streaming API yields base64-encoded encrypted chunks; assert it
+        # produced output and the first chunk differs from the plaintext head.
+        assert len(encrypted_chunks) >= 1
+        first = encrypted_chunks[0]
+        first_bytes = first if isinstance(first, bytes) else first.encode()
+        assert first_bytes[:16] != data[:16]

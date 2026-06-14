@@ -133,6 +133,9 @@ class TestPagination:
 class TestMetrics:
 
     def _load(self):
+        """Load the real metrics module under a private name without disturbing
+        sys.modules['metrics'] (test_worker.py installs a MagicMock there and
+        relies on it — we must not clobber it)."""
         if _WORKER not in sys.path:
             sys.path.insert(0, _WORKER)
         cached = sys.modules.get("metrics")
@@ -140,11 +143,21 @@ class TestMetrics:
             "MagicMock", "Mock", "NonCallableMagicMock",
         ):
             return cached
+        if "_real_metrics" in sys.modules:
+            return sys.modules["_real_metrics"]
         spec = importlib.util.spec_from_file_location(
-            "metrics", os.path.join(_WORKER, "metrics.py"))
+            "_real_metrics", os.path.join(_WORKER, "metrics.py"))
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["metrics"] = mod
-        spec.loader.exec_module(mod)
+        saved = sys.modules.get("metrics")
+        sys.modules["_real_metrics"] = mod
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            # Restore whatever 'metrics' was (mock or absent) for other tests.
+            if saved is not None:
+                sys.modules["metrics"] = saved
+            else:
+                sys.modules.pop("metrics", None)
         return mod
 
     def test_counters_exist(self):
@@ -174,6 +187,8 @@ class TestMetrics:
 class TestWarmup:
 
     def _load(self):
+        """Load the real warmup module under a private name without clobbering
+        sys.modules['warmup'] (test_worker.py relies on its MagicMock)."""
         if _WORKER not in sys.path:
             sys.path.insert(0, _WORKER)
         cached = sys.modules.get("warmup")
@@ -181,6 +196,8 @@ class TestWarmup:
             "MagicMock", "Mock", "NonCallableMagicMock",
         ):
             return cached
+        if "_real_warmup" in sys.modules:
+            return sys.modules["_real_warmup"]
         # warmup.py does `from llama_cpp import Llama` at module top; llama_cpp
         # is not installed in the CI test image, so stub it before loading.
         if "llama_cpp" not in sys.modules:
@@ -188,10 +205,17 @@ class TestWarmup:
             stub.Llama = MagicMock()
             sys.modules["llama_cpp"] = stub
         spec = importlib.util.spec_from_file_location(
-            "warmup", os.path.join(_WORKER, "warmup.py"))
+            "_real_warmup", os.path.join(_WORKER, "warmup.py"))
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["warmup"] = mod
-        spec.loader.exec_module(mod)
+        saved = sys.modules.get("warmup")
+        sys.modules["_real_warmup"] = mod
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            if saved is not None:
+                sys.modules["warmup"] = saved
+            else:
+                sys.modules.pop("warmup", None)
         return mod
 
     def test_check_gpu_availability_no_torch_returns_unavailable(self):

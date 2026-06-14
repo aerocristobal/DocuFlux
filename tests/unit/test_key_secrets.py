@@ -98,6 +98,38 @@ class TestKeyManager:
         dek = km.generate_job_key("job-5")
         assert km.get_job_key("job-5") == dek
 
+    def test_get_key_metadata(self):
+        km, r = self._km()
+        km.generate_job_key("job-6", metadata={"filename": "x.pdf"})
+        meta = km.get_key_metadata("job-6")
+        assert meta is not None and meta.get("filename") == "x.pdf"
+
+    def test_get_key_metadata_missing_returns_none(self):
+        km, r = self._km()
+        assert km.get_key_metadata("nope") is None
+
+    def test_rotate_job_key_changes_key(self):
+        km, r = self._km()
+        original = km.generate_job_key("job-7")
+        rotated = km.rotate_job_key("job-7")
+        assert rotated != original
+        assert km.get_job_key("job-7") == rotated
+
+    def test_list_all_keys(self):
+        km, r = self._km()
+        km.generate_job_key("job-a")
+        km.generate_job_key("job-b")
+        keys = km.list_all_keys()
+        assert isinstance(keys, list)
+        assert any("job-a" in str(k) for k in keys)
+
+    def test_cleanup_expired_keys_runs(self):
+        km, r = self._km()
+        km.generate_job_key("job-c")
+        # No keys are old enough to expire; cleanup returns a count without error.
+        removed = km.cleanup_expired_keys(days=7)
+        assert isinstance(removed, int)
+
 
 # ---------------------------------------------------------------------------
 # secrets_manager.py — source precedence
