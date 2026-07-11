@@ -1,5 +1,5 @@
 # Use a Playwright base image which includes Node.js and browser dependencies
-FROM mcr.microsoft.com/playwright:v1.58.2-jammy
+FROM mcr.microsoft.com/playwright:v1.58.2-jammy@sha256:4698a73749c5848d3f5fcd42a2174d172fcad2b2283e087843b115424303a565
 
 WORKDIR /app
 
