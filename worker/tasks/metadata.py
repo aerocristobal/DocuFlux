@@ -11,6 +11,27 @@ from urllib.parse import urlparse
 import tasks as _pkg
 
 
+def _parse_slm_json(generated_text):
+    """Extract and validate the {title, tags, summary} object from raw SLM output.
+
+    Raises ValueError if no JSON object is found, it doesn't parse, or it's
+    missing required keys.
+    """
+    json_start = generated_text.find('{')
+    json_end = generated_text.rfind('}')
+    if json_start == -1 or json_end == -1:
+        raise ValueError("No valid JSON found in SLM output.")
+    json_str = generated_text[json_start:json_end + 1]
+
+    metadata = json.loads(json_str)
+
+    if not all(k in metadata for k in ["title", "tags", "summary"]):
+        raise ValueError("Invalid metadata structure returned by SLM.")
+    if not isinstance(metadata["tags"], list):
+        metadata["tags"] = [str(metadata["tags"])]
+    return metadata
+
+
 @_pkg.celery.task(
     name='tasks.extract_slm_metadata',
     time_limit=300,
@@ -77,19 +98,51 @@ def extract_slm_metadata(job_id, markdown_file_path):
         generated_text = output['choices'][0]['text'].strip()
         logging.info(f"SLM generated raw text for job {job_id}:\n{generated_text}")
 
-        json_start = generated_text.find('{')
-        json_end = generated_text.rfind('}')
-        if json_start != -1 and json_end != -1:
-            json_str = generated_text[json_start:json_end+1]
-        else:
-            raise ValueError("No valid JSON found in SLM output.")
-
-        metadata = json.loads(json_str)
-
-        if not all(k in metadata for k in ["title", "tags", "summary"]):
-            raise ValueError("Invalid metadata structure returned by SLM.")
-        if not isinstance(metadata["tags"], list):
-            metadata["tags"] = [str(metadata["tags"])]
+        try:
+            metadata = _pkg._parse_slm_json(generated_text)
+        except (ValueError, json.JSONDecodeError) as parse_err:
+            logging.warning(
+                f"SLM JSON parse failed for job {job_id}: {parse_err}. "
+                f"Attempting one constrained re-prompt."
+            )
+            repair_prompt = (
+                "Your previous response could not be parsed as JSON. "
+                "Respond with ONLY a single valid JSON object — no markdown "
+                "fences, no commentary, no text before or after it — matching "
+                "exactly this structure:\n"
+                '{"title": "Concise document title", "tags": ["tag1", "tag2"], '
+                '"summary": "Brief summary of the document."}\n\n'
+                "Markdown Content:\n"
+                f"{markdown_content}\n\n"
+                "JSON Output:\n"
+            )
+            try:
+                retry_output = slm.create_completion(
+                    repair_prompt,
+                    max_tokens=512,
+                    temperature=0.0,
+                    top_p=0.9,
+                    stop=["```"],
+                )
+                retry_text = retry_output['choices'][0]['text'].strip()
+                metadata = _pkg._parse_slm_json(retry_text)
+                logging.info(f"SLM JSON repair retry succeeded for job {job_id}")
+            except (ValueError, json.JSONDecodeError) as retry_err:
+                error_msg = (
+                    f"SLM metadata extraction failed for job {job_id}: JSON parse "
+                    f"failed on both the original response and the repair retry "
+                    f"(initial: {parse_err}; retry: {retry_err})"
+                )
+                logging.error(error_msg)
+                # Never emit a silent identical/default fallback as if extraction
+                # succeeded — surface the degraded state explicitly instead.
+                _pkg.update_job_metadata(job_id, {
+                    'slm_status': 'FAILURE',
+                    'slm_completed_at': str(time.time()),
+                    'slm_error': error_msg[:500],
+                    'metadata_degraded': 'true',
+                })
+                return {"status": "failure", "message": error_msg, "metadata_degraded": True}
 
         _pkg.update_job_metadata(job_id, {
             'slm_status': 'SUCCESS',
