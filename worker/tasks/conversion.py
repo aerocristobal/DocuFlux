@@ -3,6 +3,7 @@ Conversion tasks: Pandoc, Marker AI, Marker+SLM, and Hybrid.
 """
 
 import os
+import re
 import subprocess
 import time
 import logging
@@ -76,18 +77,29 @@ def _run_marker(input_path, options):
     return converter, rendered
 
 
-def _save_marker_output(rendered, output_path, images_dir):
-    """Extract text and images from a Marker result and write to disk."""
+def _save_marker_output(rendered, output_path, images_dir, include_images=True):
+    """Extract text and images from a Marker result and write to disk.
+
+    Story 1.5: when include_images is False (a text-only consumer doesn't
+    want the extracted images), images are not written to disk at all and
+    their references are stripped from the Markdown entirely — never left
+    as broken links pointing at files that don't exist in the archive.
+    """
     from marker.output import text_from_rendered
 
     text, _, images = text_from_rendered(rendered)
 
     saved_images_count = 0
-    for filename, image in images.items():
-        image.save(os.path.join(images_dir, filename))
-        saved_images_count += 1
-        text = text.replace(f"({filename})", f"(images/{filename})")
-    logging.info(f"Saved {saved_images_count} images to {images_dir}")
+    if include_images:
+        for filename, image in images.items():
+            image.save(os.path.join(images_dir, filename))
+            saved_images_count += 1
+            text = text.replace(f"({filename})", f"(images/{filename})")
+        logging.info(f"Saved {saved_images_count} images to {images_dir}")
+    elif images:
+        for filename in images:
+            text = re.sub(rf'!\[[^\]]*\]\({re.escape(filename)}\)', '', text)
+        logging.info(f"Omitted {len(images)} images (include_images=False)")
 
     with open(output_path, "w", encoding='utf-8') as f:
         f.write(text)
@@ -414,7 +426,10 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
             converter, rendered = _pkg._run_marker(input_path, options or {})
 
             _pkg.update_job_metadata(job_id, {'progress': '80', 'stage': 'Saving extracted content'})
-            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+            text, images, _, file_count = _pkg._save_marker_output(
+                rendered, output_path, images_dir,
+                include_images=(options or {}).get('include_images', True),
+            )
 
             _pkg.update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count), 'stage': 'Finalizing output'})
             logging.info(f"Marker conversion successful: {output_path}")
@@ -511,7 +526,10 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
             converter, rendered = _pkg._run_marker(input_path, options or {})
 
             _pkg.update_job_metadata(job_id, {'progress': '50', 'stage': 'Saving AI conversion output'})
-            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+            text, images, _, file_count = _pkg._save_marker_output(
+                rendered, output_path, images_dir,
+                include_images=(options or {}).get('include_images', True),
+            )
 
             _pkg._cleanup_marker_memory(converter, rendered)
             converter = rendered = None
@@ -669,7 +687,10 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         try:
             converter, rendered = _pkg._run_marker(input_path, options or {})
             _pkg.update_job_metadata(job_id, {'progress': '85', 'stage': 'Saving extracted content'})
-            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+            text, images, _, file_count = _pkg._save_marker_output(
+                rendered, output_path, images_dir,
+                include_images=(options or {}).get('include_images', True),
+            )
 
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),

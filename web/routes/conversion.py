@@ -462,6 +462,8 @@ def api_v1_convert():
     engine = request.form.get('engine', 'pandoc')
     force_ocr = request.form.get('force_ocr', 'false').lower() == 'true'
     use_llm = request.form.get('use_llm', 'false').lower() == 'true'
+    # Story 1.5: text-only consumers can skip extracted images entirely.
+    include_images = request.form.get('include_images', 'true').lower() == 'true'
 
     if engine not in ['pandoc', 'marker', 'ocr']:
         return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc", "marker", or "ocr"'}), 422
@@ -541,21 +543,21 @@ def api_v1_convert():
     file_size = _app_mod.storage.get_file_size(job_id, safe_filename, folder='upload')
 
     if internal_from_format == 'pdf_marker':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_hybrid':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_marker_slm':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],

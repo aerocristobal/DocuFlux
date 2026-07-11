@@ -137,6 +137,30 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
     options = call_args[1]['args'][5]
     assert options['force_ocr'] == True
     assert options['use_llm'] == False
+    assert options['include_images'] == True  # Story 1.5 default
+
+
+def test_api_v1_convert_include_images_false_reaches_task_options(
+    client, mock_redis, mock_celery, mock_disk_space, api_headers
+):
+    """Story 1.5: include_images=false is forwarded to the Celery task options."""
+    mock_redis.hset = Mock()
+    mock_redis.hgetall = Mock(return_value={})
+    mock_celery.send_task = Mock()
+
+    data = {
+        'file': (io.BytesIO(b"%PDF-1.4 test content"), 'test.pdf'),
+        'to_format': 'markdown',
+        'engine': 'marker',
+        'include_images': 'false',
+    }
+
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+
+    assert response.status_code == 202
+    call_args = mock_celery.send_task.call_args
+    options = call_args[1]['args'][5]
+    assert options['include_images'] == False
 
 
 def test_api_v1_convert_success_ocr(client, mock_redis, mock_celery, mock_disk_space, api_headers):

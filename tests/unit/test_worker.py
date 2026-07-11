@@ -1309,6 +1309,73 @@ class TestFireWebhook:
             tasks.fire_webhook(job_id, 'FAILURE', {'error': 'oops'})
 
 
+class TestSaveMarkerOutput:
+    """Tests for _save_marker_output's include_images option (Story 1.5)."""
+
+    def _mock_rendered(self, text, images):
+        rendered = MagicMock()
+        rendered.metadata = {}
+        sys.modules['marker.output'].text_from_rendered.return_value = (text, {}, images)
+        return rendered
+
+    def test_include_images_true_writes_files_and_relinks(self, tmp_path):
+        img = MagicMock()
+        rendered = self._mock_rendered(
+            "See figure: ![fig1](fig1.png) for details.",
+            {"fig1.png": img},
+        )
+        output_path = tmp_path / "out.md"
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+
+        text, images, count, file_count = tasks._save_marker_output(
+            rendered, str(output_path), str(images_dir), include_images=True
+        )
+
+        img.save.assert_called_once_with(str(images_dir / "fig1.png"))
+        assert "images/fig1.png" in text
+        assert count == 1
+        assert file_count == 2  # markdown + 1 image
+        assert "images/fig1.png" in output_path.read_text()
+
+    def test_include_images_false_skips_files_and_strips_references(self, tmp_path):
+        img = MagicMock()
+        rendered = self._mock_rendered(
+            "See figure: ![fig1](fig1.png) for details.",
+            {"fig1.png": img},
+        )
+        output_path = tmp_path / "out.md"
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+
+        text, images, count, file_count = tasks._save_marker_output(
+            rendered, str(output_path), str(images_dir), include_images=False
+        )
+
+        img.save.assert_not_called()
+        assert "fig1.png" not in text
+        assert "![" not in text  # no broken image markdown left behind
+        assert "See figure:" in text and "for details." in text
+        assert count == 0
+        assert file_count == 1  # markdown only
+        written = output_path.read_text()
+        assert "fig1.png" not in written
+        assert list(images_dir.iterdir()) == []  # nothing written to disk
+
+    def test_include_images_defaults_to_true(self, tmp_path):
+        """Existing callers that don't pass include_images keep prior behavior."""
+        img = MagicMock()
+        rendered = self._mock_rendered("Text ![a](a.png)", {"a.png": img})
+        output_path = tmp_path / "out.md"
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+
+        _, _, count, _ = tasks._save_marker_output(rendered, str(output_path), str(images_dir))
+
+        assert count == 1
+        img.save.assert_called_once()
+
+
 class TestAssessPandocQuality:
     """Tests for the _assess_pandoc_quality helper."""
 
