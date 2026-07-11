@@ -172,6 +172,28 @@ def cleanup_old_files():
         logging.warning(f"Error cleaning up capture session keys: {e}")
 
 
+@_pkg.celery.task(name='tasks.sweep_orphaned_temp_files')
+def sweep_orphaned_temp_files():
+    """Story 3.3 backstop: remove S3StorageBackend local-staging directories
+    left behind by a hard-killed worker (finally blocks never ran).
+
+    No-op for LocalStorageBackend — cleanup_local_stage() there is a no-op
+    too, since local backend's "local path" is the real file, not a stage.
+    sweep_orphaned_local_stage() only ever deletes inside the backend's own
+    temp root (see S3StorageBackend._stage_path_for's containment check).
+    """
+    ORPHAN_STAGE_MAX_AGE = 3600  # 1h — generous vs. the longest task time_limit (1800s)
+
+    sweep = getattr(_pkg.storage, 'sweep_orphaned_local_stage', None)
+    if sweep is None:
+        return 0
+
+    removed = sweep(ORPHAN_STAGE_MAX_AGE)
+    if removed:
+        logging.info(f"Orphan sweep: removed {removed} stale local-stage director(y/ies)")
+    return removed
+
+
 @_pkg.celery.task(name='tasks.migrate_filesystem_jobs')
 def migrate_filesystem_jobs():
     """One-time migration: register filesystem jobs into Redis sorted set.
