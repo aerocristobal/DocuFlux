@@ -4,9 +4,14 @@
   "description": "MCP Server using Playwright for browser automation",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "lint": "eslint ."
   },
   "dependencies": {
     "playwright": "1.58.2"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0"
   }
 }
