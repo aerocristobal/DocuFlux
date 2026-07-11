@@ -14,6 +14,7 @@ from werkzeug.utils import secure_filename
 import tasks as _pkg
 from pandoc_options import build_pandoc_cmd
 from quality import score_markdown
+from table_postprocess import normalize_tables
 
 # Output formats whose content is Markdown (eligible for quality scoring, 1.1).
 _MARKDOWN_OUTPUT_FORMATS = {"markdown", "gfm"}
@@ -77,7 +78,7 @@ def _run_marker(input_path, options):
     return converter, rendered
 
 
-def _save_marker_output(rendered, output_path, images_dir, include_images=True):
+def _save_marker_output(rendered, output_path, images_dir, include_images=True, job_id=None):
     """Extract text and images from a Marker result and write to disk.
 
     Story 1.5: when include_images is False (a text-only consumer doesn't
@@ -100,6 +101,9 @@ def _save_marker_output(rendered, output_path, images_dir, include_images=True):
         for filename in images:
             text = re.sub(rf'!\[[^\]]*\]\({re.escape(filename)}\)', '', text)
         logging.info(f"Omitted {len(images)} images (include_images=False)")
+
+    # Story 1.4: repair ragged tables in Marker's Markdown output too.
+    text = _pkg._postprocess_tables(text, job_id)
 
     with open(output_path, "w", encoding='utf-8') as f:
         f.write(text)
@@ -166,6 +170,26 @@ def _slm_refine_markdown(text, job_id):
         _pkg.update_job_metadata(job_id, {'progress': str(50 + int(40 * (i + 1) / len(chunks))), 'stage': 'Refining text with language model'})
 
     return "\n\n".join(refined_chunks)
+
+
+def _postprocess_tables(text, job_id=None):
+    """Repair ragged Markdown tables (Story 1.4) before scoring/persisting.
+
+    Runs on every Pandoc/Marker/OCR Markdown output. Best-effort — a
+    postprocess error must never fail an otherwise-good job, so falls back
+    to the original text on any exception.
+    """
+    try:
+        result = normalize_tables(text)
+        if result.tables_found:
+            logging.info(
+                f"Table postprocess for job {job_id}: found={result.tables_found} "
+                f"repaired={result.tables_repaired} unrepairable={result.tables_unrepairable}"
+            )
+        return result.text
+    except Exception as e:
+        logging.warning(f"Table postprocess failed for job {job_id}: {e}")
+        return text
 
 
 def _assess_pandoc_quality(output_path, page_count):
@@ -287,6 +311,9 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
                 try:
                     with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
                         md_text = fh.read()
+                    md_text = _pkg._postprocess_tables(md_text, job_id)
+                    with open(output_path, 'w', encoding='utf-8') as fh:
+                        fh.write(md_text)
                     page_count_raw = _pkg.redis_client.hget(f"job:{job_id}", 'page_count')
                     try:
                         page_count = int(page_count_raw) if page_count_raw else None
@@ -435,6 +462,7 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
             text, images, _, file_count = _pkg._save_marker_output(
                 rendered, output_path, images_dir,
                 include_images=(options or {}).get('include_images', True),
+                job_id=job_id,
             )
 
             _pkg.update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count), 'stage': 'Finalizing output'})
@@ -535,6 +563,7 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
             text, images, _, file_count = _pkg._save_marker_output(
                 rendered, output_path, images_dir,
                 include_images=(options or {}).get('include_images', True),
+                job_id=job_id,
             )
 
             _pkg._cleanup_marker_memory(converter, rendered)
@@ -542,6 +571,10 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
 
             logging.info(f"[{job_id}] Starting SLM refinement pass")
             refined_text = _pkg._slm_refine_markdown(text, job_id)
+            # Story 1.4: the SLM pass can re-mangle table structure, so repair
+            # again on the refined text (the initial post-process inside
+            # _save_marker_output only covered the pre-SLM save).
+            refined_text = _pkg._postprocess_tables(refined_text, job_id)
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(refined_text)
 
@@ -658,8 +691,12 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
             report = None
             try:
                 with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
-                    report = score_markdown(fh.read(), page_count=page_count)
-                    quality_meta = report.to_metadata()
+                    pandoc_text = fh.read()
+                pandoc_text = _pkg._postprocess_tables(pandoc_text, job_id)
+                with open(output_path, 'w', encoding='utf-8') as fh:
+                    fh.write(pandoc_text)
+                report = score_markdown(pandoc_text, page_count=page_count)
+                quality_meta = report.to_metadata()
             except Exception as qe:  # pragma: no cover - defensive
                 logging.warning(f"Quality metadata persistence failed for job {job_id}: {qe}")
 
@@ -703,6 +740,7 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
             text, images, _, file_count = _pkg._save_marker_output(
                 rendered, output_path, images_dir,
                 include_images=(options or {}).get('include_images', True),
+                job_id=job_id,
             )
 
             _pkg.update_job_metadata(job_id, {
@@ -803,6 +841,7 @@ def convert_with_ocr(job_id, input_filename, output_filename, from_format, to_fo
             page_texts.append(pytesseract.image_to_string(page, lang=lang).strip())
 
         markdown_text = "\n\n---\n\n".join(page_texts)
+        markdown_text = _pkg._postprocess_tables(markdown_text, job_id)
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(markdown_text)

@@ -180,7 +180,7 @@ from tasks.metadata import extract_slm_metadata, test_amazon_session
 from tasks.conversion import (
     get_model_dict, model_dict, _check_pdf_page_limit, _run_marker,
     _save_marker_output, _cleanup_marker_memory, _slm_refine_markdown,
-    _assess_pandoc_quality, PageLimitExceeded,
+    _assess_pandoc_quality, _postprocess_tables, PageLimitExceeded,
 )
 from tasks.maintenance import (
     _get_disk_usage_percent, _get_directory_size, _job_retention_decision,
