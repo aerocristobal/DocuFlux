@@ -139,6 +139,31 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
     assert options['use_llm'] == False
 
 
+def test_api_v1_convert_success_ocr(client, mock_redis, mock_celery, mock_disk_space, api_headers):
+    """Story 2.1b: engine=ocr dispatches to tasks.convert_with_ocr on a CPU queue."""
+    mock_redis.hset = Mock()
+    mock_redis.hgetall = Mock(return_value={})
+    mock_celery.send_task = Mock()
+
+    data = {
+        'file': (io.BytesIO(b"%PDF-1.4 scanned content"), 'scan.pdf'),
+        'to_format': 'markdown',
+        'engine': 'ocr',
+    }
+
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+
+    assert response.status_code == 202
+    json_data = response.get_json()
+    assert json_data['status'] == 'queued'
+
+    mock_celery.send_task.assert_called_once()
+    call_args = mock_celery.send_task.call_args
+    assert call_args[0][0] == 'tasks.convert_with_ocr'
+    assert call_args[1]['args'][3] == 'pdf_ocr'  # internal from_format
+    assert call_args[1]['queue'] != 'gpu'  # CPU-only path, never the gpu queue
+
+
 def test_api_v1_convert_auto_detect_format(client, mock_redis, mock_celery, mock_disk_space, api_headers):
     """Test auto-detection of input format from file extension"""
     mock_redis.hset = Mock()

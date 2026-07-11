@@ -702,3 +702,115 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
             raise
     finally:
         _pkg.storage.cleanup_local_stage(safe_job_id)
+
+
+@_pkg.celery.task(
+    name='tasks.convert_with_ocr',
+    time_limit=900,
+    soft_time_limit=840,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=1,
+)
+def convert_with_ocr(job_id, input_filename, output_filename, from_format, to_format, options=None):
+    """Convert a scanned PDF to Markdown via Tesseract OCR (Story 2.1b).
+
+    CPU-only path: rasterizes each page (pdf2image/poppler) and runs
+    Tesseract over it, so scanned documents convert without a GPU or
+    Marker AI. Routed to the CPU queues, never 'gpu'.
+    """
+    from metrics import worker_tasks_active, conversion_total, conversion_failures_total, conversion_duration_seconds
+
+    worker_tasks_active.inc()
+    start_time = time.time()
+
+    if not _pkg.is_valid_uuid(job_id):
+        logging.error(f"Invalid job_id received: {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "error", "message": "Invalid job ID"}
+
+    current_status = _pkg.redis_client.hget(f"job:{job_id}", 'status')
+    if current_status in ('FAILURE', 'REVOKED'):
+        logging.warning(f"Skipping re-queued task for already-{current_status} job {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "skipped", "reason": current_status}
+
+    safe_job_id = secure_filename(job_id)
+    safe_input = secure_filename(input_filename)
+    safe_output = secure_filename(output_filename)
+    input_path = _pkg.storage.get_local_path(safe_job_id, safe_input, folder='upload')
+    output_path = _pkg.storage.get_local_path(safe_job_id, safe_output, folder='output')
+
+    logging.info(f"Starting OCR conversion for job {job_id}")
+    _pkg.update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing OCR'})
+
+    try:
+        if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
+        _pkg.storage.makedirs(safe_job_id, folder='output')
+
+        import pytesseract
+        from pdf2image import convert_from_path
+
+        lang = (options or {}).get('ocr_lang', 'eng')
+
+        _pkg.update_job_metadata(job_id, {'progress': '15', 'stage': 'Rasterizing pages'})
+        pages = convert_from_path(input_path)
+        _pkg.update_job_metadata(job_id, {'page_count': str(len(pages))})
+
+        page_texts = []
+        for i, page in enumerate(pages):
+            _pkg.update_job_metadata(job_id, {
+                'progress': str(15 + int(70 * (i + 1) / max(len(pages), 1))),
+                'stage': f'OCR page {i + 1}/{len(pages)}',
+            })
+            page_texts.append(pytesseract.image_to_string(page, lang=lang).strip())
+
+        markdown_text = "\n\n---\n\n".join(page_texts)
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_text)
+
+        # Story 1.1: score OCR output the same way as every other engine —
+        # OCR is especially prone to garbage/empty pages, so this is where
+        # the scorer earns its keep most.
+        report = score_markdown(markdown_text, page_count=len(pages))
+        quality_meta = report.to_metadata()
+        logging.info(
+            f"OCR quality for job {job_id}: grade={report.grade} "
+            f"score={report.score} reasons={report.reason_codes}"
+        )
+
+        _pkg.update_job_metadata(job_id, {
+            'status': 'SUCCESS', 'completed_at': str(time.time()),
+            'progress': '100', 'encrypted': 'false', 'file_count': '1',
+            'stage': 'Complete',
+            **quality_meta,
+        })
+        _pkg.redis_client.expire(f"job:{job_id}", 7200)
+        _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+        _pkg.extract_slm_metadata.delay(job_id, output_path)
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+
+        return {"status": "success", "output_file": os.path.basename(output_path)}
+
+    except Exception as e:
+        logging.error(f"OCR error for job {job_id}: {e}")
+        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
+        _pkg.redis_client.expire(f"job:{job_id}", 600)
+        _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='ocr_error').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+        raise
+    finally:
+        _pkg.storage.cleanup_local_stage(safe_job_id)

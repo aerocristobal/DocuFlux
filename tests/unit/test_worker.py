@@ -1574,6 +1574,112 @@ class TestConvertWithHybrid:
 
 
 # ============================================================
+# convert_with_ocr tests (Story 2.1b — CPU-only Tesseract OCR path)
+# ============================================================
+
+class TestConvertWithOcr:
+    """Tests for the convert_with_ocr Celery task."""
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('pytesseract.image_to_string')
+    @patch('pdf2image.convert_from_path')
+    def test_success_scores_and_persists_quality(
+        self, mock_convert, mock_ocr, mock_slm, mock_socketio, mock_redis
+    ):
+        """Multi-page OCR success: text joined, quality scored and persisted."""
+        import tasks, tempfile, os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+        mock_convert.return_value = [MagicMock(), MagicMock()]  # 2 "pages"
+        mock_ocr.side_effect = [
+            "# Chapter One\n\n" + ("Real OCR'd prose text here. " * 30),
+            "# Chapter Two\n\n" + ("More recognizable body text. " * 30),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'scan.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake scanned pdf')
+
+            result = tasks.convert_with_ocr(job_id, 'scan.pdf', 'scan.md', 'pdf_ocr', 'markdown')
+
+            output_path = os.path.join(tmpdir, job_id, 'scan.md')
+            with open(output_path, encoding='utf-8') as f:
+                written = f.read()
+
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert 'Chapter One' in written and 'Chapter Two' in written
+        assert mock_ocr.call_count == 2
+        update_calls = [c.kwargs['mapping'] for c in mock_redis.hset.call_args_list]
+        success_calls = [c for c in update_calls if c.get('status') == 'SUCCESS']
+        assert len(success_calls) == 1
+        assert success_calls[0]['quality_grade'] == 'good'
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    def test_invalid_uuid_returns_error(self, mock_socketio, mock_redis):
+        """Invalid job_id returns error dict without any OCR processing."""
+        import tasks
+        result = tasks.convert_with_ocr(
+            'not-a-uuid', 'scan.pdf', 'scan.md', 'pdf_ocr', 'markdown'
+        )
+        assert result['status'] == 'error'
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('os.path.exists', return_value=False)
+    def test_missing_input_raises(self, mock_exists, mock_socketio, mock_redis):
+        """FileNotFoundError raised when input file is absent."""
+        import tasks
+        mock_redis.hget.return_value = None
+        job_id = str(uuid.uuid4())
+        with pytest.raises(FileNotFoundError):
+            tasks.convert_with_ocr(
+                job_id, 'scan.pdf', 'scan.md', 'pdf_ocr', 'markdown'
+            )
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('pdf2image.convert_from_path', side_effect=Exception("poppler not found"))
+    def test_ocr_failure_marks_job_failed_and_cleans_up(
+        self, mock_convert, mock_socketio, mock_redis
+    ):
+        """A rasterization/OCR error fails the job and still releases the local stage."""
+        import tasks, tempfile, os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'scan.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake scanned pdf')
+
+            with pytest.raises(Exception, match="poppler not found"):
+                tasks.convert_with_ocr(job_id, 'scan.pdf', 'scan.md', 'pdf_ocr', 'markdown')
+
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        fail_calls = [c.kwargs['mapping'] for c in mock_redis.hset.call_args_list]
+        assert any(c.get('status') == 'FAILURE' for c in fail_calls)
+
+
+# ============================================================
 # Performance & Resource Optimization config tests
 # ============================================================
 

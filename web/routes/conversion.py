@@ -103,6 +103,8 @@ def convert():
             task_name = 'tasks.convert_with_hybrid'
         elif from_format == 'pdf_marker_slm':
             task_name = 'tasks.convert_with_marker_slm'
+        elif from_format == 'pdf_ocr':
+            task_name = 'tasks.convert_with_ocr'
         else:
             task_name = 'tasks.convert_document'
         task_args = [job_id, input_filename, output_filename, from_format, to_format]
@@ -291,6 +293,8 @@ def retry_job(job_id):
         task_name = 'tasks.convert_with_hybrid'
     elif original_from == 'pdf_marker_slm':
         task_name = 'tasks.convert_with_marker_slm'
+    elif original_from == 'pdf_ocr':
+        task_name = 'tasks.convert_with_ocr'
     else:
         task_name = 'tasks.convert_document'
     task_args = [new_job_id, input_filename, output_filename, original_from, job_data.get('to')]
@@ -459,8 +463,8 @@ def api_v1_convert():
     force_ocr = request.form.get('force_ocr', 'false').lower() == 'true'
     use_llm = request.form.get('use_llm', 'false').lower() == 'true'
 
-    if engine not in ['pandoc', 'marker']:
-        return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc" or "marker"'}), 422
+    if engine not in ['pandoc', 'marker', 'ocr']:
+        return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc", "marker", or "ocr"'}), 422
 
     pandoc_options = None
     raw_pandoc = request.form.get('pandoc_options')
@@ -490,6 +494,9 @@ def api_v1_convert():
         internal_from_format = 'pdf_hybrid'
     elif engine == 'marker_slm' and from_format == 'pdf':
         internal_from_format = 'pdf_marker_slm'
+    elif engine == 'ocr' and from_format == 'pdf':
+        # Story 2.1b: CPU-only Tesseract OCR path for scanned PDFs.
+        internal_from_format = 'pdf_ocr'
     else:
         internal_from_format = from_format
 
@@ -553,6 +560,14 @@ def api_v1_convert():
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
+        )
+    elif internal_from_format == 'pdf_ocr':
+        # Story 2.1b: CPU-only OCR — size-routed like Pandoc, never 'gpu'.
+        queue_name = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
+        _app_mod.celery.send_task(
+            'tasks.convert_with_ocr',
+            args=[job_id, safe_filename, output_filename, internal_from_format, to_format],
+            queue=queue_name
         )
     else:
         task_kwargs = {}
