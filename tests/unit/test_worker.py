@@ -1797,6 +1797,54 @@ class TestConvertWithOcr:
 
 
 # ============================================================
+# _eager_marker_warmup tests (Story 6.2)
+# ============================================================
+
+class TestEagerMarkerWarmup:
+
+    def test_disabled_by_default_does_nothing(self):
+        """eager_marker_warmup=False (the default) never touches get_model_dict
+        or Redis — zero behavior change for deployments that don't opt in."""
+        with patch.object(tasks.app_settings, 'eager_marker_warmup', False), \
+             patch.object(tasks.conversion, 'get_model_dict') as mock_get, \
+             patch.object(tasks, 'redis_client') as mock_redis:
+            tasks._eager_marker_warmup()
+
+        mock_get.assert_not_called()
+        mock_redis.set.assert_not_called()
+
+    def test_enabled_loads_model_and_sets_warm_flag(self):
+        """eager_marker_warmup=True calls get_model_dict() (in this worker
+        process, not warmup.py's) and marks marker:model_warm true."""
+        with patch.object(tasks.app_settings, 'eager_marker_warmup', True), \
+             patch.object(tasks.conversion, 'get_model_dict') as mock_get, \
+             patch.object(tasks, 'redis_client') as mock_redis:
+            tasks._eager_marker_warmup()
+
+        mock_get.assert_called_once()
+        mock_redis.set.assert_called_once_with('marker:model_warm', 'true')
+
+    def test_enabled_but_load_fails_falls_back_gracefully(self):
+        """A model-load failure sets the flag false and does not raise —
+        never blocks worker startup."""
+        with patch.object(tasks.app_settings, 'eager_marker_warmup', True), \
+             patch.object(tasks.conversion, 'get_model_dict', side_effect=RuntimeError("no GPU")), \
+             patch.object(tasks, 'redis_client') as mock_redis:
+            tasks._eager_marker_warmup()  # must not raise
+
+        mock_redis.set.assert_called_once_with('marker:model_warm', 'false')
+
+    def test_redis_unreachable_after_load_failure_does_not_raise(self):
+        """Even if Redis itself is unreachable while reporting the failure,
+        _eager_marker_warmup must not propagate — status flag is best-effort."""
+        with patch.object(tasks.app_settings, 'eager_marker_warmup', True), \
+             patch.object(tasks.conversion, 'get_model_dict', side_effect=RuntimeError("no GPU")), \
+             patch.object(tasks, 'redis_client') as mock_redis:
+            mock_redis.set.side_effect = ConnectionError("redis down")
+            tasks._eager_marker_warmup()  # must not raise
+
+
+# ============================================================
 # Performance & Resource Optimization config tests
 # ============================================================
 

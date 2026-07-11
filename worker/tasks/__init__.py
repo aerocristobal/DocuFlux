@@ -186,6 +186,38 @@ from tasks.maintenance import (
     _get_disk_usage_percent, _get_directory_size, _job_retention_decision,
 )
 
+def _eager_marker_warmup():
+    """Story 6.2: preload Marker models in this Celery worker process at
+    startup instead of on the first PDF conversion.
+
+    warmup.py (the health-check sidecar) runs as a *separate process* from
+    this worker (see worker/entrypoint.sh — `python3 warmup.py &` then
+    `exec celery ...`), so loading models there would warm the wrong
+    process. This runs in the worker process itself, at import time — the
+    same point every task will later call get_model_dict() from — so a
+    real conversion never pays the model-load penalty on its first
+    request. Opt-in and best-effort: a failure here just falls back to
+    today's lazy-loading behavior, never blocks the worker from starting.
+    The Redis key is left absent when the feature is off, so consumers
+    should treat "missing" the same as "false" (cold/lazy).
+    """
+    if not app_settings.eager_marker_warmup:
+        return
+    try:
+        logging.info("Story 6.2: eager Marker warmup starting...")
+        conversion.get_model_dict()
+        redis_client.set('marker:model_warm', 'true')
+        logging.info("Story 6.2: eager Marker warmup complete.")
+    except Exception as e:
+        logging.warning(f"Story 6.2: eager Marker warmup failed, falling back to lazy loading: {e}")
+        try:
+            redis_client.set('marker:model_warm', 'false')
+        except Exception:
+            pass  # Redis unreachable — don't crash worker startup over a status flag
+
+
+_eager_marker_warmup()
+
 # Beat schedule
 celery.conf.beat_schedule = {
     'cleanup-every-5-minutes': {

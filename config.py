@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     slm_model_path: Optional[str] = Field(None, validation_alias="SLM_MODEL_PATH")  # No default, as it might be dynamically loaded
     marker_enabled: bool = Field(False, validation_alias="MARKER_ENABLED") # Default to False if not specified
     build_gpu: bool = Field(False, validation_alias="BUILD_GPU") # Default to False if not specified
+    # Story 6.2: preload Marker models in the Celery worker process at
+    # startup instead of on the first PDF conversion. Opt-in (defaults to
+    # today's lazy-loading behavior) since it adds real time/VRAM cost to
+    # worker startup.
+    eager_marker_warmup: bool = Field(False, validation_alias="EAGER_MARKER_WARMUP")
 
     @validator('build_gpu', pre=True)
     def build_gpu_auto(cls, v):

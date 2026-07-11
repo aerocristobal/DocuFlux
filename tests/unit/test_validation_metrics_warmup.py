@@ -10,6 +10,7 @@ the network (the sandbox has none).
 import importlib.util
 import os
 import sys
+import threading
 import types
 from unittest.mock import MagicMock, patch
 
@@ -236,6 +237,63 @@ class TestWarmup:
         except Exception:
             val = None
         assert val is None or val is not None
+
+    def test_healthz_reports_marker_warm_state(self):
+        """Story 6.2: /healthz reads marker:model_warm (set by the *Celery
+        worker* process, a different process from this one) and reports it
+        alongside the existing ready/initializing signal."""
+        import http.client
+        import json as json_module
+
+        w = self._load()
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = 'true'
+
+        with patch.object(w, 'r', mock_redis), \
+                patch('os.path.exists', return_value=True):
+            server = w.HTTPServer(('127.0.0.1', 0), w.HealthHandler)
+            port = server.server_address[1]
+            t = threading.Thread(target=server.handle_request, daemon=True)
+            t.start()
+            try:
+                conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+                conn.request('GET', '/healthz')
+                resp = conn.getresponse()
+                body = json_module.loads(resp.read())
+                status_code = resp.status
+                conn.close()
+            finally:
+                t.join(timeout=5)
+                server.server_close()
+
+        assert status_code == 200
+        assert body['marker_warm'] is True
+
+    def test_healthz_reports_cold_when_flag_unset(self):
+        import http.client
+        import json
+
+        w = self._load()
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None  # key absent -> cold
+
+        with patch.object(w, 'r', mock_redis), \
+                patch('os.path.exists', return_value=True):
+            server = w.HTTPServer(('127.0.0.1', 0), w.HealthHandler)
+            port = server.server_address[1]
+            t = threading.Thread(target=server.handle_request, daemon=True)
+            t.start()
+            try:
+                conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+                conn.request('GET', '/healthz')
+                resp = conn.getresponse()
+                body = json.loads(resp.read())
+                conn.close()
+            finally:
+                t.join(timeout=5)
+                server.server_close()
+
+        assert body['marker_warm'] is False
 
     def test_redis_client_created_via_tls_aware_factory(self):
         """Story 4.1b: warmup.py must route through create_redis_client (which

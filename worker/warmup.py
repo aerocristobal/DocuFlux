@@ -30,14 +30,28 @@ r = create_redis_client(redis_url, _app_settings, decode_responses=True)
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/healthz':
+            # Story 6.2: report Marker warm/cold state alongside the existing
+            # ready/initializing signal. marker:model_warm is set by the
+            # Celery worker process (worker/tasks/__init__.py) — a separate
+            # process from this one — via Redis, since eager warmup happens
+            # in the worker process, not here.
+            try:
+                marker_warm = r.get('marker:model_warm') == 'true'
+            except Exception:
+                marker_warm = False
+
             if os.path.exists(MODELS_READY_FILE):
                 self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(b"OK")
+                self.wfile.write(('{"status": "OK", "marker_warm": %s}' %
+                                   ('true' if marker_warm else 'false')).encode())
             else:
                 self.send_response(503)
+                self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(b"Initializing")
+                self.wfile.write(('{"status": "Initializing", "marker_warm": %s}' %
+                                   ('true' if marker_warm else 'false')).encode())
         else:
             self.send_response(404)
             self.end_headers()
