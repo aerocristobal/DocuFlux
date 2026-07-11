@@ -29,6 +29,24 @@ DocuFlux uses TLS certificates for:
 | Redis CA | Internal PKI root | `deploy/certs/redis/ca.crt` | 10 years (dev) | Manual |
 | Redis Server | Redis TLS | `deploy/certs/redis/redis.crt` | 10 years (dev) | Manual |
 
+### TLS Enforcement (Story 4.1a/4.1b)
+
+Under the `docker-compose.tls.yml` overlay, Redis is TLS-only, not
+TLS-optional: the server is started with `--port 0 --tls-port 6380`, which
+disables the plaintext listener entirely rather than accepting both. A
+client that connects without a `rediss://` URL and valid client
+certificate cannot reach Redis at all under this profile.
+
+On the client side, every Redis-connecting code path — `web/app.py`,
+`worker/tasks/__init__.py`, and `worker/warmup.py` — constructs its client
+exclusively through `shared/redis_client.py`'s `create_redis_client()` /
+`create_sentinel_client()`. Those factories set `ssl_cert_reqs=required`
+plus `ssl_ca_certs`/`ssl_certfile`/`ssl_keyfile` whenever the URL scheme is
+`rediss://`. No consumer in the codebase constructs a raw, unverified
+Redis client — this is asserted directly by
+`tests/unit/test_validation_metrics_warmup.py::TestWarmup::test_redis_client_created_via_tls_aware_factory`
+and `tests/unit/test_redis_sentinel.py`.
+
 ---
 
 ## Development Certificates
@@ -329,6 +347,10 @@ chmod 444 deploy/certs/redis/*.crt
 - **PCI DSS**: Strong cryptography (TLS 1.2+, 2048-bit keys)
 - **HIPAA**: Encryption in transit for PHI
 - **GDPR**: Encryption for personal data
+- **OSCAL SC-8** (Transmission Confidentiality and Integrity): mapped in
+  `oscal/ssp.json` and `oscal/component-definition.json` (DocuFlux Redis
+  Service component) — status `implemented`, citing this document plus
+  Stories 4.1a/4.1b's enforcement and test coverage.
 
 ---
 
