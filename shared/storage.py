@@ -11,6 +11,7 @@ import os
 import shutil
 import logging
 import tempfile
+import time
 from typing import Protocol, Optional, BinaryIO, Iterator, Union, runtime_checkable
 
 
@@ -52,6 +53,8 @@ class StorageBackend(Protocol):
                        folder: str = "output") -> None: ...
 
     def job_dir_exists(self, job_id: str, folder: str = "output") -> bool: ...
+
+    def cleanup_local_stage(self, job_id: str) -> None: ...
 
 
 class LocalStorageBackend:
@@ -156,6 +159,12 @@ class LocalStorageBackend:
 
     def job_dir_exists(self, job_id: str, folder: str = "output") -> bool:
         return os.path.isdir(self._job_path(job_id, folder=folder))
+
+    def cleanup_local_stage(self, job_id: str) -> None:
+        # Local backend's "local path" IS the real upload/output file — deleting
+        # it here would destroy the user's data. Only S3StorageBackend stages a
+        # separate local copy that needs cleanup.
+        pass
 
     def ensure_directories(self) -> None:
         """Create upload and output root directories if they don't exist."""
@@ -353,6 +362,55 @@ class S3StorageBackend:
 
     def job_dir_exists(self, job_id: str, folder: str = "output") -> bool:
         return self.file_exists(job_id, "", folder)
+
+    def _stage_path_for(self, job_id: str) -> Optional[str]:
+        """Resolve job_id's local staging dir, refusing to leave self._temp_dir."""
+        candidate = os.path.abspath(os.path.join(self._temp_dir, job_id))
+        temp_root = os.path.abspath(self._temp_dir)
+        if candidate != temp_root and not candidate.startswith(temp_root + os.sep):
+            logging.error(
+                f"Refusing to touch local stage path outside temp root: "
+                f"job_id={job_id!r} resolved to {candidate}, root is {temp_root}"
+            )
+            return None
+        return candidate
+
+    def cleanup_local_stage(self, job_id: str) -> None:
+        """Remove this job's locally-staged files (downloaded via get_local_path).
+
+        Called from a task's finally block so a soft-timeout or normal
+        completion always frees the local copy. A hard kill of the worker
+        process skips this — sweep_orphaned_local_stage() is the backstop.
+        """
+        path = self._stage_path_for(job_id)
+        if path and os.path.exists(path):
+            shutil.rmtree(path, ignore_errors=True)
+
+    def sweep_orphaned_local_stage(self, max_age_seconds: int) -> int:
+        """Delete locally-staged job directories older than max_age_seconds.
+
+        Backstop for cleanup_local_stage(): catches staged files left behind
+        when a worker is hard-killed mid-task (finally blocks never run).
+        Only ever deletes inside self._temp_dir. Returns count removed.
+        """
+        temp_root = os.path.abspath(self._temp_dir)
+        if not os.path.isdir(temp_root):
+            return 0
+
+        now = time.time()
+        removed = 0
+        for entry in os.listdir(temp_root):
+            path = self._stage_path_for(entry)
+            if not path or not os.path.isdir(path):
+                continue
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if now - mtime > max_age_seconds:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        return removed
 
     def ensure_directories(self) -> None:
         # S3 doesn't need directory creation
