@@ -5,6 +5,7 @@ import time
 import requests
 import logging
 from celery import Celery
+from celery.signals import task_prerun, task_postrun
 from flask_socketio import SocketIO
 
 from config import settings
@@ -14,13 +15,26 @@ from job_metadata import update_job_metadata as _shared_update, get_job_metadata
 from uuid_validation import validate_uuid
 from pandoc_options import PANDOC_OPTIONS_SCHEMA, PDF_DEFAULTS, build_pandoc_cmd
 from storage import create_storage_backend
+from logging_config import configure_json_logging, set_job_context
 
-# Configure Structured Logging
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
-root_logger = logging.getLogger()
-root_logger.addHandler(handler)
-root_logger.setLevel(logging.INFO)
+# Story 3.5: shared JSON log format with the web tier (shared/logging_config.py).
+configure_json_logging()
+
+
+@task_prerun.connect
+def _set_job_log_context(task_id=None, args=None, **_kwargs):
+    """Correlate every log line for a task's execution with its job_id/task_id.
+
+    Every task in this module takes job_id as its first positional arg, so
+    this one signal handler covers all of them without touching each task.
+    """
+    job_id = args[0] if args else None
+    set_job_context(job_id=job_id, task_id=task_id)
+
+
+@task_postrun.connect
+def _clear_job_log_context(**_kwargs):
+    set_job_context()
 
 # Load secrets and settings
 try:

@@ -35,27 +35,11 @@ from key_manager import create_key_manager
 from formats import FORMATS, detect_format_from_extension
 from pandoc_options import PANDOC_OPTIONS_SCHEMA, validate_pandoc_options
 from storage import create_storage_backend
+from logging_config import configure_json_logging, set_request_id
 import tempfile
 
-# Configure Structured Logging with request-ID correlation
-class _RequestIdFilter(logging.Filter):
-    """Inject the current Flask request_id into every log record."""
-    def filter(self, record):
-        try:
-            record.request_id = getattr(g, 'request_id', '-')
-        except RuntimeError:
-            record.request_id = '-'
-        return True
-
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter(
-    '{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s",'
-    ' "request_id": "%(request_id)s", "message": "%(message)s"}'
-))
-handler.addFilter(_RequestIdFilter())
-root_logger = logging.getLogger()
-root_logger.addHandler(handler)
-root_logger.setLevel(logging.INFO)
+# Story 3.5: shared JSON log format with the worker tier (shared/logging_config.py).
+configure_json_logging()
 
 # Load secrets and settings
 try:
@@ -133,6 +117,7 @@ def request_entity_too_large(error):
 def _assign_request_id():
     """Generate or propagate a correlation ID for structured log tracing."""
     g.request_id = request.headers.get('X-Request-ID') or str(uuid.uuid4())[:8]
+    set_request_id(g.request_id)
 
 
 @app.after_request
