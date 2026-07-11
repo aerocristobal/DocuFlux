@@ -266,6 +266,56 @@ class TestConvertDocument:
 
         mock_redis.hset.assert_called()
 
+    @patch('tasks.fire_webhook')
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('subprocess.run')
+    def test_success_webhook_includes_quality_for_markdown_output(
+        self, mock_run, mock_socketio, mock_redis, mock_webhook, sample_job_id
+    ):
+        """Story 1.3: SUCCESS webhook payload carries the quality object
+        (same shape as api_v1_status), using the real scorer end-to-end."""
+        import os
+        import tempfile
+        mock_redis.hget.return_value = None
+        mock_redis.hgetall.return_value = {}
+        mock_redis.expire.return_value = True
+
+        good_text = "# Title\n\n" + ("Real prose content here. " * 30)
+
+        def _write_output(cmd, **kwargs):
+            output_path = cmd[cmd.index('-o') + 1]
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(good_text)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _write_output
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            os.makedirs(os.path.join(tmpdir, sample_job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, sample_job_id, 'test.md'), 'w') as f:
+                f.write('# hi')
+
+            result = tasks.convert_document(
+                job_id=sample_job_id,
+                input_filename='test.md',
+                output_filename='test.md',
+                from_format='markdown',
+                to_format='markdown',
+            )
+            tasks.storage = old_storage
+
+        assert result['status'] == 'success'
+        mock_webhook.assert_called_once()
+        args, _ = mock_webhook.call_args
+        _, webhook_status, webhook_extra = args
+        assert webhook_status == 'SUCCESS'
+        assert 'quality' in webhook_extra
+        assert webhook_extra['quality']['grade'] in ('good', 'fair', 'poor')
+        assert isinstance(webhook_extra['quality']['metrics'], dict)
+
     @patch('tasks.storage.cleanup_local_stage')
     @patch('tasks.redis_client')
     @patch('tasks.socketio')

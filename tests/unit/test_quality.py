@@ -94,8 +94,18 @@ def test_deterministic_repeatable():
 def test_to_metadata_is_string_valued():
     report = score_markdown(GOOD_MD, page_count=1)
     meta = report.to_metadata()
-    assert set(meta) == {"quality_grade", "quality_score", "quality_reasons"}
+    assert set(meta) == {"quality_grade", "quality_score", "quality_reasons", "quality_metrics"}
     assert all(isinstance(v, str) for v in meta.values())
+
+
+def test_to_metadata_quality_metrics_is_json_of_the_per_dimension_metrics():
+    """Story 1.3: quality_metrics carries the per-dimension breakdown as JSON,
+    so API responses can surface it without a second scoring pass."""
+    import json
+    report = score_markdown(GOOD_MD, page_count=1)
+    meta = report.to_metadata()
+    parsed = json.loads(meta["quality_metrics"])
+    assert parsed == report.metrics
 
 
 def test_page_count_none_defaults_to_one():

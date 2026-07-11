@@ -282,6 +282,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
             # degraded conversions are detectable before users see them. Scoring is
             # best-effort — a scorer error must never fail an otherwise-good job.
             quality_meta = {}
+            report = None
             if to_format in _MARKDOWN_OUTPUT_FORMATS:
                 try:
                     with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
@@ -310,7 +311,12 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
                 **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            # Story 1.3: quality object in the webhook payload, same shape as
+            # api_v1_status's response — never omitted just because it's a webhook.
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
 
             duration = time.time() - start_time
             conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
@@ -649,9 +655,11 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
             # Story 1.1/1.2: persist the same quality report that decided the
             # routing, so the accepted engine's grade/reasons are visible too.
             quality_meta = {}
+            report = None
             try:
                 with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
-                    quality_meta = score_markdown(fh.read(), page_count=page_count).to_metadata()
+                    report = score_markdown(fh.read(), page_count=page_count)
+                    quality_meta = report.to_metadata()
             except Exception as qe:  # pragma: no cover - defensive
                 logging.warning(f"Quality metadata persistence failed for job {job_id}: {qe}")
 
@@ -662,7 +670,12 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
                 **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            # Story 1.3: quality object in the webhook payload, same shape as
+            # api_v1_status's response.
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
             _pkg.extract_slm_metadata.delay(job_id, output_path)
 
             duration = time.time() - start_time
@@ -811,7 +824,12 @@ def convert_with_ocr(job_id, input_filename, output_filename, from_format, to_fo
             **quality_meta,
         })
         _pkg.redis_client.expire(f"job:{job_id}", 7200)
-        _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+        # Story 1.3: quality object in the webhook payload, same shape as
+        # api_v1_status's response.
+        _pkg.fire_webhook(job_id, 'SUCCESS', {
+            'download_url': f'/api/v1/download/{job_id}',
+            'quality': report.to_summary(),
+        })
         _pkg.extract_slm_metadata.delay(job_id, output_path)
 
         duration = time.time() - start_time

@@ -594,9 +594,31 @@ def api_v1_status(job_id):
     if not metadata:
         return jsonify({'error': 'Job not found'}), 404
 
+    # Story 1.3: surface the Story 1.1/1.2 quality report, if this job has one.
+    quality = None
+    if metadata.get('quality_grade'):
+        quality = {
+            'grade': metadata['quality_grade'],
+            'score': int(metadata.get('quality_score', 0)),
+            'reasons': [r for r in metadata.get('quality_reasons', '').split(',') if r],
+        }
+        raw_metrics = metadata.get('quality_metrics')
+        if raw_metrics:
+            try:
+                quality['metrics'] = json.loads(raw_metrics)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    status_value = metadata.get('status', 'unknown').lower()
+    if metadata.get('status') == 'SUCCESS' and quality and quality['grade'] == 'poor':
+        # Degraded output completes as completed-with-warnings, never silently
+        # as plain success — the underlying Redis status stays SUCCESS
+        # (retention/cleanup logic elsewhere keys off it unchanged).
+        status_value = 'completed-with-warnings'
+
     response = {
         'job_id': job_id,
-        'status': metadata.get('status', 'unknown').lower(),
+        'status': status_value,
         'progress': int(metadata.get('progress', 0)),
         'filename': metadata.get('filename'),
         'from_format': metadata.get('from'),
@@ -604,6 +626,8 @@ def api_v1_status(job_id):
         'engine': metadata.get('engine', 'pandoc'),
         'created_at': datetime.fromtimestamp(float(metadata.get('created_at', 0))).isoformat() + 'Z'
     }
+    if quality:
+        response['quality'] = quality
 
     if 'started_at' in metadata:
         response['started_at'] = datetime.fromtimestamp(float(metadata['started_at'])).isoformat() + 'Z'

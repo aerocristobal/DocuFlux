@@ -31,6 +31,7 @@ Grades:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
@@ -70,12 +71,29 @@ class QualityReport:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    def to_summary(self) -> dict:
+        """API/webhook-facing shape (Story 1.3): grade, score, reasons,
+        per-dimension metrics — same field names in both api_v1_status
+        responses and SUCCESS webhook payloads."""
+        return {
+            "grade": self.grade,
+            "score": self.score,
+            "reasons": list(self.reason_codes),
+            "metrics": dict(self.metrics),
+        }
+
     def to_metadata(self) -> Dict[str, str]:
-        """Flatten into string values suitable for a Redis hash (job metadata)."""
+        """Flatten into string values suitable for a Redis hash (job metadata).
+
+        quality_metrics (Story 1.3) is the per-dimension breakdown (words_per_page,
+        garbage_ratio, has_headings, malformed_tables, empty_page_ratio) as a JSON
+        string, so API responses can surface it without a second scoring pass.
+        """
         return {
             "quality_grade": self.grade,
             "quality_score": str(self.score),
             "quality_reasons": ",".join(self.reason_codes),
+            "quality_metrics": json.dumps(self.metrics),
         }
 
 

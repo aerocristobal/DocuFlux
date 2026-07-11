@@ -482,6 +482,71 @@ def test_api_v1_status_success(client, mock_redis):
     assert json_data['file_count'] == 1
 
 
+def test_api_v1_status_good_quality_stays_success(client, mock_redis):
+    """Story 1.3: a 'good' quality grade doesn't downgrade the reported status."""
+    job_id = '550e8400-e29b-41d4-a716-446655440001'
+    import json as json_module
+    mock_redis.hgetall = Mock(return_value={
+        'status': 'SUCCESS',
+        'filename': 'test.pdf',
+        'from': 'pdf',
+        'to': 'markdown',
+        'engine': 'pandoc',
+        'created_at': str(time.time() - 60),
+        'completed_at': str(time.time() - 5),
+        'progress': '100',
+        'quality_grade': 'good',
+        'quality_score': '90',
+        'quality_reasons': '',
+        'quality_metrics': json_module.dumps({'words_per_page': 500.0, 'has_headings': 1.0}),
+    })
+
+    import web.app as _app
+    _app.storage.save_file(job_id, 'test.md', b'# Converted', folder='output')
+
+    response = client.get(f'/api/v1/status/{job_id}')
+
+    assert response.status_code == 200
+    json_data = response.get_json()
+    assert json_data['status'] == 'success'
+    assert json_data['quality']['grade'] == 'good'
+    assert json_data['quality']['score'] == 90
+    assert json_data['quality']['reasons'] == []
+    assert json_data['quality']['metrics']['has_headings'] == 1.0
+
+
+def test_api_v1_status_poor_quality_reports_completed_with_warnings(client, mock_redis):
+    """Story 1.3: a 'poor' quality grade completes as completed-with-warnings,
+    never silently as plain success."""
+    job_id = '550e8400-e29b-41d4-a716-446655440002'
+    mock_redis.hgetall = Mock(return_value={
+        'status': 'SUCCESS',
+        'filename': 'scan.pdf',
+        'from': 'pdf_ocr',
+        'to': 'markdown',
+        'engine': 'pandoc',
+        'created_at': str(time.time() - 60),
+        'completed_at': str(time.time() - 5),
+        'progress': '100',
+        'quality_grade': 'poor',
+        'quality_score': '10',
+        'quality_reasons': 'low_word_density,no_headings',
+    })
+
+    import web.app as _app
+    _app.storage.save_file(job_id, 'scan.md', b'garbled ocr text', folder='output')
+
+    response = client.get(f'/api/v1/status/{job_id}')
+
+    assert response.status_code == 200
+    json_data = response.get_json()
+    assert json_data['status'] == 'completed-with-warnings'
+    assert json_data['quality']['grade'] == 'poor'
+    assert json_data['quality']['reasons'] == ['low_word_density', 'no_headings']
+    # Download is still available — degraded isn't the same as failed.
+    assert 'download_url' in json_data
+
+
 def test_api_v1_status_failed(client, mock_redis):
     """Test status for failed job"""
     job_id = '550e8400-e29b-41d4-a716-446655440000'

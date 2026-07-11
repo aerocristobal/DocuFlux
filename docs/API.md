@@ -162,7 +162,26 @@ Additional fields appear based on status:
 - **success**: `completed_at`, `download_url`, `is_multifile`, `file_count`, `metadata` (pages, images_extracted, tables_detected)
 - **failure**: `completed_at`, `error`
 
-**Status Values**: `pending`, `processing`, `success`, `failure`
+**Status Values**: `pending`, `processing`, `success`, `failure`, `completed-with-warnings`
+
+`completed-with-warnings` (Story 1.3) means the job converted successfully
+but the output scored `poor` on the quality report — `download_url` is
+still present, this is not a failure. Whenever a `quality` report exists
+for the job (Markdown/GFM output via Pandoc, hybrid's accepted Pandoc
+path, or OCR), it's included regardless of grade:
+
+```json
+"quality": {
+  "grade": "poor",
+  "score": 22,
+  "reasons": ["low_word_density", "no_headings"],
+  "metrics": {
+    "total_words": 340, "page_count": 12, "words_per_page": 28.3,
+    "garbage_ratio": 0.01, "has_headings": 0, "malformed_tables": 0,
+    "empty_page_ratio": 0.4
+  }
+}
+```
 
 **Error Responses**: 400 (invalid UUID), 404 (not found)
 
