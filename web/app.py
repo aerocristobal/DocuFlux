@@ -325,6 +325,7 @@ def get_job_metadata(job_id):
 # ============================================================================
 
 import secrets
+import hashlib
 from functools import wraps
 
 APIKEY_PREFIX = 'apikey:'
@@ -335,8 +336,22 @@ def _generate_api_key():
     return 'dk_' + secrets.token_urlsafe(32)
 
 
+def _key_id(key):
+    """Non-reversible identifier for audit logs (Story 4.3).
+
+    The raw key itself must never appear in logs, so audit events log this
+    hash prefix instead — stable enough to correlate events for the same
+    key, but useless for reconstructing the secret.
+    """
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
 def _validate_api_key(key):
-    """Return key metadata dict if valid, None otherwise."""
+    """Return key metadata dict if the key exists, None if not found/revoked.
+
+    Does not check expiry — callers needing expiry enforcement should also
+    call _is_key_expired() on the returned metadata (see require_api_key).
+    """
     if not key or not key.startswith('dk_'):
         return None
     try:
@@ -348,15 +363,48 @@ def _validate_api_key(key):
         return None
 
 
+def _is_key_expired(metadata):
+    """True if metadata carries an expires_at timestamp in the past.
+
+    Keys created without an expires_at (legacy keys predating Story 4.3)
+    never expire.
+    """
+    expires_at = metadata.get('expires_at')
+    if not expires_at:
+        return False
+    try:
+        return float(expires_at) < time.time()
+    except (TypeError, ValueError):
+        return False
+
+
 def require_api_key(f):
-    """Decorator: require valid X-API-Key header, return 401/403 otherwise."""
+    """Decorator: require a valid, unexpired X-API-Key header, 401/403 otherwise.
+
+    Story 4.3: every attempt is audit-logged with the key's hashed ID (never
+    the raw key value), and a valid key's last-used timestamp is updated.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         key = request.headers.get('X-API-Key', '').strip()
         if not key:
             return jsonify({'error': 'API key required. Provide X-API-Key header.'}), 401
-        if not _validate_api_key(key):
+
+        metadata = _validate_api_key(key)
+        if metadata is None:
+            logging.info(f"api_key_audit event=rejected reason=invalid_or_revoked key_id={_key_id(key)}")
             return jsonify({'error': 'Invalid or revoked API key'}), 403
+
+        if _is_key_expired(metadata):
+            logging.info(f"api_key_audit event=rejected reason=key_expired key_id={_key_id(key)}")
+            return jsonify({'error': 'API key has expired', 'code': 'key_expired'}), 401
+
+        try:
+            redis_client.hset(f"{APIKEY_PREFIX}{key}", 'last_used_at', str(time.time()))
+        except Exception:
+            pass  # audit/bookkeeping failure must never block an otherwise-valid request
+
+        logging.info(f"api_key_audit event=authorized key_id={_key_id(key)}")
         return f(*args, **kwargs)
     return decorated
 

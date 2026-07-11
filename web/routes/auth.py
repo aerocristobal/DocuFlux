@@ -39,16 +39,34 @@ def _check_admin_secret():
 @_app_mod.csrf.exempt
 @_app_mod.limiter.limit("10 per hour")
 def api_v1_create_key():
-    """Generate a new API key."""
+    """Generate a new API key.
+
+    Story 4.3: keys carry an expires_at, defaulting to
+    API_KEY_DEFAULT_TTL_DAYS and overridable per-key via expires_in_days.
+    """
     err = _check_admin_secret()
     if err[0] is not None:
         return err
     data = request.get_json(silent=True) or {}
     label = sanitize_string(data.get('label', ''), max_length=100)
+
+    ttl_days = data.get('expires_in_days', _app_mod.app_settings.api_key_default_ttl_days)
+    try:
+        ttl_days = float(ttl_days)
+        if ttl_days <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({'error': 'expires_in_days must be a positive number'}), 400
+
     key = _app_mod._generate_api_key()
-    now = str(time.time())
-    _app_mod.redis_client.hset(f"{_app_mod.APIKEY_PREFIX}{key}", mapping={'created_at': now, 'label': label})
-    return jsonify({'api_key': key, 'created_at': now, 'label': label}), 201
+    now = time.time()
+    expires_at = now + ttl_days * 86400
+    _app_mod.redis_client.hset(f"{_app_mod.APIKEY_PREFIX}{key}", mapping={
+        'created_at': str(now), 'label': label, 'expires_at': str(expires_at),
+    })
+    return jsonify({
+        'api_key': key, 'created_at': str(now), 'label': label, 'expires_at': str(expires_at),
+    }), 201
 
 
 @auth_bp.route('/api/v1/auth/keys/<key>', methods=['DELETE'])

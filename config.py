@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # worker startup.
     eager_marker_warmup: bool = Field(False, validation_alias="EAGER_MARKER_WARMUP")
 
+    # Story 4.3: default lifetime for newly-created API keys. Overridable
+    # per-key via POST /api/v1/auth/keys's expires_in_days.
+    api_key_default_ttl_days: int = Field(90, validation_alias="API_KEY_DEFAULT_TTL_DAYS")
+
     @validator('build_gpu', pre=True)
     def build_gpu_auto(cls, v):
         if isinstance(v, str) and v.lower() == 'auto':
