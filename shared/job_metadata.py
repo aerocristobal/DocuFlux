@@ -3,6 +3,29 @@ import logging
 import requests
 
 
+def build_job_metadata(filename, from_format, to_format, status='PENDING',
+                        created_at=None, progress=None, **extra):
+    """Build the metadata dict for a newly-created job (Story 6.4b).
+
+    Consolidates the job-creation shape duplicated across
+    web/routes/conversion.py (convert, retry_job, api_v1_convert) and
+    web/routes/capture.py. Extra fields specific to a call site
+    (force_ocr, use_llm, engine, session_id, ...) pass through via
+    **extra so each caller's existing field set is preserved exactly.
+    """
+    metadata = {
+        'status': status,
+        'created_at': created_at if created_at is not None else str(time.time()),
+        'filename': filename,
+        'from': from_format,
+        'to': to_format,
+    }
+    if progress is not None:
+        metadata['progress'] = progress
+    metadata.update(extra)
+    return metadata
+
+
 def update_job_metadata(redis_client, socketio, job_id, updates):
     """Write updates to Redis hash and emit WebSocket event."""
     redis_client.hset(f"job:{job_id}", mapping=updates)

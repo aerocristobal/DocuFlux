@@ -11,6 +11,7 @@ from flask import Blueprint, request, jsonify
 import web.app as _app_mod
 from formats import FORMATS
 from web.validation import require_valid_uuid, sanitize_string
+from job_metadata import build_job_metadata
 
 capture_bp = Blueprint('capture', __name__)
 
@@ -36,15 +37,11 @@ def capture_create_session():
 
     _app_mod.storage.makedirs(job_id, 'batches', folder='output')
 
-    _app_mod.update_job_metadata(job_id, {
-        'status': 'CAPTURING',
-        'created_at': now,
-        'filename': title,
-        'from': 'capture',
-        'to': to_format,
-        'session_id': session_id,
-        'progress': '0',
-    })
+    _app_mod.update_job_metadata(job_id, build_job_metadata(
+        title, 'capture', to_format,
+        status='CAPTURING', created_at=now, progress='0',
+        session_id=session_id,
+    ))
 
     captures_list_key = 'capture:all_jobs'
     _app_mod.redis_client.lpush(captures_list_key, job_id)

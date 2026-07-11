@@ -16,6 +16,7 @@ import web.app as _app_mod
 from formats import FORMATS, detect_format_from_extension
 from pandoc_options import validate_pandoc_options
 from web.validation import require_valid_uuid, validate_file_content_type
+from job_metadata import build_job_metadata
 
 conversion_bp = Blueprint('conversion', __name__)
 
@@ -87,12 +88,11 @@ def convert():
         base_name = os.path.splitext(input_filename)[0]
         output_filename = f"{base_name}.{to_info['extension'].lstrip('.')}"
 
-        _app_mod.update_job_metadata(job_id, {
-            'status': 'PENDING', 'created_at': str(time.time()), 'filename': file.filename,
-            'from': from_format, 'to': to_format,
-            'force_ocr': str(request.form.get('force_ocr') == 'on'),
-            'use_llm': str(request.form.get('use_llm') == 'on')
-        })
+        _app_mod.update_job_metadata(job_id, build_job_metadata(
+            file.filename, from_format, to_format,
+            force_ocr=str(request.form.get('force_ocr') == 'on'),
+            use_llm=str(request.form.get('use_llm') == 'on'),
+        ))
         _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
 
         file_size = _app_mod.storage.get_file_size(job_id, input_filename, folder='upload')
@@ -278,12 +278,11 @@ def retry_job(job_id):
     to_info = next((f for f in FORMATS if f['key'] == job_data.get('to')), None)
     output_filename = f"{os.path.splitext(input_filename)[0]}.{to_info['extension'].lstrip('.')}"
 
-    _app_mod.update_job_metadata(new_job_id, {
-        'status': 'PENDING', 'created_at': str(time.time()), 'filename': input_filename,
-        'from': job_data.get('from'), 'to': job_data.get('to'),
-        'force_ocr': job_data.get('force_ocr'),
-        'use_llm': job_data.get('use_llm')
-    })
+    _app_mod.update_job_metadata(new_job_id, build_job_metadata(
+        input_filename, job_data.get('from'), job_data.get('to'),
+        force_ocr=job_data.get('force_ocr'),
+        use_llm=job_data.get('use_llm'),
+    ))
     _app_mod.redis_client.zadd('jobs:active', {new_job_id: time.time()})
 
     original_from = job_data.get('from')
@@ -522,15 +521,10 @@ def api_v1_convert():
     if format_info:
         output_filename += format_info['extension']
 
-    metadata = {
-        'status': 'PENDING',
-        'filename': safe_filename,
-        'from': internal_from_format,
-        'to': to_format,
-        'engine': engine,
-        'created_at': timestamp,
-        'progress': '0'
-    }
+    metadata = build_job_metadata(
+        safe_filename, internal_from_format, to_format,
+        created_at=timestamp, progress='0', engine=engine,
+    )
 
     if engine == 'marker':
         metadata['force_ocr'] = str(force_ocr)
