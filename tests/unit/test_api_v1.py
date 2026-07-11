@@ -9,6 +9,14 @@ import io
 from unittest.mock import Mock, patch
 import time
 
+# Story 4.4 deepened validate_file_content_type() to require a real PDF
+# structure (trailer/%%EOF), not just the %PDF header — fixtures that go
+# through the actual upload-validation path need genuinely valid bytes.
+VALID_PDF_BYTES = (
+    b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+    b"trailer\n<< /Root 1 0 R >>\nstartxref\n0\n%%EOF\n"
+)
+
 
 @pytest.fixture
 def client():
@@ -114,7 +122,7 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
 
     # Create test PDF file
     data = {
-        'file': (io.BytesIO(b"%PDF-1.4 test content"), 'test.pdf'),
+        'file': (io.BytesIO(VALID_PDF_BYTES), 'test.pdf'),
         'to_format': 'markdown',
         'engine': 'marker',
         'force_ocr': 'true',
@@ -149,7 +157,7 @@ def test_api_v1_convert_include_images_false_reaches_task_options(
     mock_celery.send_task = Mock()
 
     data = {
-        'file': (io.BytesIO(b"%PDF-1.4 test content"), 'test.pdf'),
+        'file': (io.BytesIO(VALID_PDF_BYTES), 'test.pdf'),
         'to_format': 'markdown',
         'engine': 'marker',
         'include_images': 'false',
@@ -170,7 +178,7 @@ def test_api_v1_convert_success_ocr(client, mock_redis, mock_celery, mock_disk_s
     mock_celery.send_task = Mock()
 
     data = {
-        'file': (io.BytesIO(b"%PDF-1.4 scanned content"), 'scan.pdf'),
+        'file': (io.BytesIO(VALID_PDF_BYTES), 'scan.pdf'),
         'to_format': 'markdown',
         'engine': 'ocr',
     }
@@ -955,7 +963,7 @@ class TestApiV1PandocOptions:
         mock_redis.hgetall = Mock(return_value={})
 
         data = {
-            'file': (io.BytesIO(b"%PDF-1.4 test content"), 'test.pdf'),
+            'file': (io.BytesIO(VALID_PDF_BYTES), 'test.pdf'),
             'to_format': 'markdown',
             'engine': 'marker',
             'pandoc_options': json.dumps({'toc': True}),

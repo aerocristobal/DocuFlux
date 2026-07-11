@@ -7,15 +7,22 @@ data integrity throughout the application.
 Epic 21.9: Input Validation and Sanitization
 """
 
+import io
 import ipaddress
 import os
 import re
 import socket
+import zipfile
 from functools import wraps
 from urllib.parse import urlparse
 
 from flask import request, jsonify
 import logging
+
+try:
+    import magic as _magic
+except ImportError:  # pragma: no cover - python-magic/libmagic1 optional at runtime
+    _magic = None
 
 
 from uuid_validation import validate_uuid  # noqa: F811 — canonical impl in shared/
@@ -242,11 +249,55 @@ TEXT_EXTENSIONS = {
 }
 
 
+# libmagic MIME types expected per declared extension (Story 4.4). Generic
+# 'application/zip' is accepted alongside the specific type since libmagic
+# DB versions vary in how eagerly they recognize the OOXML/ODF subtypes.
+_EXPECTED_MIME_TYPES = {
+    '.pdf': {'application/pdf'},
+    '.docx': {'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'},
+    '.odt': {'application/vnd.oasis.opendocument.text', 'application/zip'},
+    '.epub': {'application/epub+zip', 'application/zip'},
+}
+
+# A canonical entry that must exist inside the ZIP archive for each declared
+# sub-format, so a generic/wrong-flavor zip — or another ZIP-based Office
+# format — can't pass as e.g. a .docx. Chosen to be mutually exclusive:
+# 'mimetype' alone isn't used since both ODT and EPUB have a file by that
+# name, just with different content.
+_ZIP_FORMAT_MARKERS = {
+    '.docx': ('word/document.xml',),
+    '.odt': ('content.xml',),
+    '.epub': ('META-INF/container.xml',),
+}
+
+_ZIP_EOCD_SIGNATURE = b'PK\x05\x06'  # End Of Central Directory record
+
+
+def _sniff_mime(content):
+    """Best-effort libmagic MIME sniff. Returns None if unavailable/fails —
+    callers must treat that as 'skip this check', not a rejection."""
+    if _magic is None:
+        return None
+    try:
+        return _magic.from_buffer(content, mime=True)
+    except Exception:
+        return None
+
+
 def validate_file_content_type(file, declared_extension):
     """
-    Validate that file content matches its declared format using magic bytes.
+    Validate that file content matches its declared format (Story 4.4).
 
-    Lightweight check: reads only the first 8 bytes.
+    Goes beyond the original 8-byte magic-header check:
+      * Cross-checks libmagic's sniffed MIME type against the declared
+        extension, when python-magic/libmagic1 is available.
+      * PDF: rejects files that also carry a valid ZIP End-Of-Central-
+        Directory record — the classic PDF/ZIP polyglot, which a header-only
+        check can't see since the %PDF signature still leads the file. Also
+        requires a %%EOF marker, so truncated/unparseable PDFs are rejected.
+      * ZIP-based formats (docx/odt/epub): actually opens the archive with
+        zipfile (rejecting corrupt archives) and requires the declared
+        sub-format's canonical marker entry to be present.
 
     Args:
         file: Werkzeug FileStorage object (stream position is preserved)
@@ -257,24 +308,45 @@ def validate_file_content_type(file, declared_extension):
     """
     ext = declared_extension.lower()
 
-    # Read first 8 bytes, then reset
     pos = file.tell()
-    header = file.read(8)
+    file.seek(0)
+    content = file.read()
     file.seek(pos)
 
-    if not header:
+    if not content:
         return False, "File is empty"
+
+    header = content[:8]
 
     # Check PDF magic bytes
     if ext == '.pdf':
         if not header.startswith(b'%PDF'):
             return False, "File does not appear to be a valid PDF (missing %PDF header)"
+        if _ZIP_EOCD_SIGNATURE in content:
+            return False, "File content mismatch: PDF also contains a ZIP archive structure (polyglot)"
+        if b'%%EOF' not in content[-2048:]:
+            return False, "File does not appear to be a valid PDF (missing %%EOF — corrupt or truncated structure)"
+        detected = _sniff_mime(content)
+        if detected is not None and detected not in _EXPECTED_MIME_TYPES['.pdf']:
+            return False, f"File content mismatch: detected {detected}, expected a PDF"
         return True, None
 
     # Check ZIP-based formats (DOCX, ODT, EPUB)
     if ext in ('.docx', '.odt', '.epub'):
         if not header.startswith(b'PK'):
             return False, f"File does not appear to be a valid {ext} file (missing ZIP/PK header)"
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                bad_entry = zf.testzip()
+                if bad_entry is not None:
+                    return False, f"File does not appear to be a valid {ext} file (corrupt ZIP entry: {bad_entry})"
+                names = set(zf.namelist())
+        except zipfile.BadZipFile:
+            return False, f"File does not appear to be a valid {ext} file (corrupt or unparseable ZIP structure)"
+
+        markers = _ZIP_FORMAT_MARKERS.get(ext, ())
+        if markers and not any(marker in names for marker in markers):
+            return False, f"File content mismatch: ZIP archive does not contain the expected {ext} structure"
         return True, None
 
     # Text format: basic encoding validation
