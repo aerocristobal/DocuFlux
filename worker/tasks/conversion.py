@@ -215,128 +215,134 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
         worker_tasks_active.dec()
         raise
 
-    if not _pkg.storage.file_exists(safe_job_id, safe_input_filename, folder='upload'):
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
-    _pkg.storage.makedirs(safe_job_id, folder='output')
-    _pkg.update_job_metadata(job_id, {'progress': '20', 'stage': 'Converting document'})
-
-    cmd = build_pandoc_cmd(from_format, to_format, input_path, output_path, pandoc_options)
-
     try:
-        process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
-        logging.info(f"Conversion successful: {output_path}")
+        if not _pkg.storage.file_exists(safe_job_id, safe_input_filename, folder='upload'):
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+            raise FileNotFoundError(f"Input file not found: {input_path}")
 
-        # Story 3.1: Pandoc can exit 0 yet write an empty / near-empty file
-        # (e.g. a malformed source). Detect that and fail loudly rather than
-        # shipping a half-converted document as success.
+        _pkg.storage.makedirs(safe_job_id, folder='output')
+        _pkg.update_job_metadata(job_id, {'progress': '20', 'stage': 'Converting document'})
+
+        cmd = build_pandoc_cmd(from_format, to_format, input_path, output_path, pandoc_options)
+
         try:
-            output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-        except OSError:
-            output_size = 0
-        if output_size == 0:
-            error_msg = "Conversion produced empty output"
-            logging.error(f"Empty output for job {job_id}: {error_msg}")
+            process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
+            logging.info(f"Conversion successful: {output_path}")
+
+            # Story 3.1: Pandoc can exit 0 yet write an empty / near-empty file
+            # (e.g. a malformed source). Detect that and fail loudly rather than
+            # shipping a half-converted document as success.
+            try:
+                output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+            except OSError:
+                output_size = 0
+            if output_size == 0:
+                error_msg = "Conversion produced empty output"
+                logging.error(f"Empty output for job {job_id}: {error_msg}")
+                _pkg.update_job_metadata(job_id, {
+                    'status': 'FAILURE', 'completed_at': str(time.time()),
+                    'error': error_msg, 'reason_code': 'empty_output',
+                    'progress': '0', 'stage': 'Failed',
+                })
+                _pkg.redis_client.expire(f"job:{job_id}", 600)
+                _pkg.fire_webhook(job_id, 'FAILURE', {'error': error_msg, 'reason_code': 'empty_output'})
+
+                duration = time.time() - start_time
+                conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+                conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='empty_output').inc()
+                conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+                worker_tasks_active.dec()
+                raise Exception(error_msg)
+
+            # Story 1.1: Score Markdown output quality and persist the report so
+            # degraded conversions are detectable before users see them. Scoring is
+            # best-effort — a scorer error must never fail an otherwise-good job.
+            quality_meta = {}
+            if to_format in _MARKDOWN_OUTPUT_FORMATS:
+                try:
+                    with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
+                        md_text = fh.read()
+                    page_count_raw = _pkg.redis_client.hget(f"job:{job_id}", 'page_count')
+                    try:
+                        page_count = int(page_count_raw) if page_count_raw else None
+                    except (TypeError, ValueError):
+                        page_count = None
+                    report = score_markdown(md_text, page_count=page_count)
+                    quality_meta = report.to_metadata()
+                    logging.info(
+                        f"Quality for job {job_id}: grade={report.grade} "
+                        f"score={report.score} reasons={report.reason_codes}"
+                    )
+                except Exception as qe:  # pragma: no cover - defensive
+                    logging.warning(f"Quality scoring failed for job {job_id}: {qe}")
+
             _pkg.update_job_metadata(job_id, {
-                'status': 'FAILURE', 'completed_at': str(time.time()),
-                'error': error_msg, 'reason_code': 'empty_output',
-                'progress': '0', 'stage': 'Failed',
+                'status': 'SUCCESS',
+                'completed_at': str(time.time()),
+                'progress': '100',
+                'encrypted': 'false',
+                'file_count': '1',
+                'stage': 'Complete',
+                **quality_meta,
             })
+            _pkg.redis_client.expire(f"job:{job_id}", 7200)
+            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+
+            import gc
+            gc.collect()
+
+            return {"status": "success", "output_file": os.path.basename(output_path)}
+        except subprocess.TimeoutExpired:
+            error_msg = "Conversion timed out after 500 seconds"
+            logging.error(f"Timeout for job {job_id}: {error_msg}")
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg, 'progress': '0', 'stage': 'Failed'})
             _pkg.redis_client.expire(f"job:{job_id}", 600)
-            _pkg.fire_webhook(job_id, 'FAILURE', {'error': error_msg, 'reason_code': 'empty_output'})
+            _pkg.fire_webhook(job_id, 'FAILURE', {'error': error_msg})
 
             duration = time.time() - start_time
             conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='empty_output').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='timeout').inc()
             conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
             worker_tasks_active.dec()
+
             raise Exception(error_msg)
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr or e.stdout or "Unknown error"
+            logging.error(f"Pandoc error for job {job_id}: {error_msg}")
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500], 'progress': '0', 'stage': 'Failed'})
+            _pkg.redis_client.expire(f"job:{job_id}", 600)
+            _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(error_msg)[:500]})
 
-        # Story 1.1: Score Markdown output quality and persist the report so
-        # degraded conversions are detectable before users see them. Scoring is
-        # best-effort — a scorer error must never fail an otherwise-good job.
-        quality_meta = {}
-        if to_format in _MARKDOWN_OUTPUT_FORMATS:
-            try:
-                with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
-                    md_text = fh.read()
-                page_count_raw = _pkg.redis_client.hget(f"job:{job_id}", 'page_count')
-                try:
-                    page_count = int(page_count_raw) if page_count_raw else None
-                except (TypeError, ValueError):
-                    page_count = None
-                report = score_markdown(md_text, page_count=page_count)
-                quality_meta = report.to_metadata()
-                logging.info(
-                    f"Quality for job {job_id}: grade={report.grade} "
-                    f"score={report.score} reasons={report.reason_codes}"
-                )
-            except Exception as qe:  # pragma: no cover - defensive
-                logging.warning(f"Quality scoring failed for job {job_id}: {qe}")
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='pandoc_error').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
 
-        _pkg.update_job_metadata(job_id, {
-            'status': 'SUCCESS',
-            'completed_at': str(time.time()),
-            'progress': '100',
-            'encrypted': 'false',
-            'file_count': '1',
-            'stage': 'Complete',
-            **quality_meta,
-        })
-        _pkg.redis_client.expire(f"job:{job_id}", 7200)
-        _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            raise Exception(f"Pandoc failed: {error_msg}")
+        except Exception as e:
+            logging.error(f"Unexpected error for job {job_id}: {str(e)}")
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
+            _pkg.redis_client.expire(f"job:{job_id}", 600)
+            _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='unknown').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
 
-        import gc
-        gc.collect()
-
-        return {"status": "success", "output_file": os.path.basename(output_path)}
-    except subprocess.TimeoutExpired:
-        error_msg = "Conversion timed out after 500 seconds"
-        logging.error(f"Timeout for job {job_id}: {error_msg}")
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': error_msg, 'progress': '0', 'stage': 'Failed'})
-        _pkg.redis_client.expire(f"job:{job_id}", 600)
-        _pkg.fire_webhook(job_id, 'FAILURE', {'error': error_msg})
-
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='timeout').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
-
-        raise Exception(error_msg)
-    except subprocess.CalledProcessError as e:
-        error_msg = e.stderr or e.stdout or "Unknown error"
-        logging.error(f"Pandoc error for job {job_id}: {error_msg}")
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(error_msg)[:500], 'progress': '0', 'stage': 'Failed'})
-        _pkg.redis_client.expire(f"job:{job_id}", 600)
-        _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(error_msg)[:500]})
-
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='pandoc_error').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
-
-        raise Exception(f"Pandoc failed: {error_msg}")
-    except Exception as e:
-        logging.error(f"Unexpected error for job {job_id}: {str(e)}")
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
-        _pkg.redis_client.expire(f"job:{job_id}", 600)
-        _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
-
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='unknown').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
-
-        raise
+            raise
+    finally:
+        # Story 3.3: always release the locally-staged input/output copies
+        # (no-op for LocalStorageBackend; frees S3StorageBackend's temp
+        # staging dir even on soft-timeout or any exception above).
+        _pkg.storage.cleanup_local_stage(safe_job_id)
 
 
 @_pkg.celery.task(
@@ -375,61 +381,64 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
     logging.info(f"Starting Marker conversion for job {job_id} (Attempt {self.request.retries + 1}) with options: {options}")
     _pkg.update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
-    if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
     try:
-        _pkg._check_pdf_page_limit(job_id, input_path, _pkg.app_settings.max_marker_pages)
-    except PageLimitExceeded:
-        worker_tasks_active.dec()
-        raise
+        if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+            raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    _pkg.storage.makedirs(safe_job_id, folder='output')
-    images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
-    _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
+        try:
+            _pkg._check_pdf_page_limit(job_id, input_path, _pkg.app_settings.max_marker_pages)
+        except PageLimitExceeded:
+            worker_tasks_active.dec()
+            raise
 
-    converter = rendered = text = images = None
-    try:
-        _pkg.update_job_metadata(job_id, {'progress': '15', 'stage': 'Converting PDF with AI'})
-        converter, rendered = _pkg._run_marker(input_path, options or {})
+        _pkg.storage.makedirs(safe_job_id, folder='output')
+        images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
+        _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
 
-        _pkg.update_job_metadata(job_id, {'progress': '80', 'stage': 'Saving extracted content'})
-        text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+        converter = rendered = text = images = None
+        try:
+            _pkg.update_job_metadata(job_id, {'progress': '15', 'stage': 'Converting PDF with AI'})
+            converter, rendered = _pkg._run_marker(input_path, options or {})
 
-        _pkg.update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count), 'stage': 'Finalizing output'})
-        logging.info(f"Marker conversion successful: {output_path}")
+            _pkg.update_job_metadata(job_id, {'progress': '80', 'stage': 'Saving extracted content'})
+            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
 
-        _pkg.update_job_metadata(job_id, {
-            'status': 'SUCCESS', 'completed_at': str(time.time()),
-            'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
-        })
-        _pkg.redis_client.expire(f"job:{job_id}", 7200)
-        _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
-        _pkg.extract_slm_metadata.delay(job_id, output_path)
+            _pkg.update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count), 'stage': 'Finalizing output'})
+            logging.info(f"Marker conversion successful: {output_path}")
 
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
+            _pkg.update_job_metadata(job_id, {
+                'status': 'SUCCESS', 'completed_at': str(time.time()),
+                'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
+            })
+            _pkg.redis_client.expire(f"job:{job_id}", 7200)
+            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            _pkg.extract_slm_metadata.delay(job_id, output_path)
 
-        _pkg._cleanup_marker_memory(converter, rendered, text, images)
-        return {"status": "success", "output_file": os.path.basename(output_path)}
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
 
-    except Exception as e:
-        logging.error(f"Marker error for job {job_id}: {e}")
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
-        _pkg.redis_client.expire(f"job:{job_id}", 600)
-        _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
+            _pkg._cleanup_marker_memory(converter, rendered, text, images)
+            return {"status": "success", "output_file": os.path.basename(output_path)}
 
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='marker_error').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
+        except Exception as e:
+            logging.error(f"Marker error for job {job_id}: {e}")
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
+            _pkg.redis_client.expire(f"job:{job_id}", 600)
+            _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
-        _pkg._cleanup_marker_memory(converter, rendered, text, images)
-        raise
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='marker_error').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+
+            _pkg._cleanup_marker_memory(converter, rendered, text, images)
+            raise
+    finally:
+        _pkg.storage.cleanup_local_stage(safe_job_id)
 
 
 @_pkg.celery.task(
@@ -469,69 +478,72 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
     logging.info(f"Starting Marker+SLM conversion for job {job_id} with options: {options}")
     _pkg.update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
-    if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
     try:
-        _pkg._check_pdf_page_limit(job_id, input_path, _pkg.app_settings.max_marker_pages)
-    except PageLimitExceeded:
-        worker_tasks_active.dec()
-        raise
+        if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+            raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    _pkg.storage.makedirs(safe_job_id, folder='output')
-    images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
-    _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
+        try:
+            _pkg._check_pdf_page_limit(job_id, input_path, _pkg.app_settings.max_marker_pages)
+        except PageLimitExceeded:
+            worker_tasks_active.dec()
+            raise
 
-    converter = rendered = text = images = None
-    try:
-        _pkg.update_job_metadata(job_id, {'progress': '15', 'stage': 'Converting PDF with AI'})
-        converter, rendered = _pkg._run_marker(input_path, options or {})
+        _pkg.storage.makedirs(safe_job_id, folder='output')
+        images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
+        _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
 
-        _pkg.update_job_metadata(job_id, {'progress': '50', 'stage': 'Saving AI conversion output'})
-        text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+        converter = rendered = text = images = None
+        try:
+            _pkg.update_job_metadata(job_id, {'progress': '15', 'stage': 'Converting PDF with AI'})
+            converter, rendered = _pkg._run_marker(input_path, options or {})
 
-        _pkg._cleanup_marker_memory(converter, rendered)
-        converter = rendered = None
+            _pkg.update_job_metadata(job_id, {'progress': '50', 'stage': 'Saving AI conversion output'})
+            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
 
-        logging.info(f"[{job_id}] Starting SLM refinement pass")
-        refined_text = _pkg._slm_refine_markdown(text, job_id)
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(refined_text)
+            _pkg._cleanup_marker_memory(converter, rendered)
+            converter = rendered = None
 
-        _pkg.update_job_metadata(job_id, {'progress': '95', 'file_count': str(file_count), 'stage': 'Finalizing output'})
-        logging.info(f"Marker+SLM conversion successful: {output_path}")
+            logging.info(f"[{job_id}] Starting SLM refinement pass")
+            refined_text = _pkg._slm_refine_markdown(text, job_id)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(refined_text)
 
-        _pkg.update_job_metadata(job_id, {
-            'status': 'SUCCESS', 'completed_at': str(time.time()),
-            'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
-        })
-        _pkg.redis_client.expire(f"job:{job_id}", 7200)
-        _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
-        _pkg.extract_slm_metadata.delay(job_id, output_path)
+            _pkg.update_job_metadata(job_id, {'progress': '95', 'file_count': str(file_count), 'stage': 'Finalizing output'})
+            logging.info(f"Marker+SLM conversion successful: {output_path}")
 
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
+            _pkg.update_job_metadata(job_id, {
+                'status': 'SUCCESS', 'completed_at': str(time.time()),
+                'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
+            })
+            _pkg.redis_client.expire(f"job:{job_id}", 7200)
+            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            _pkg.extract_slm_metadata.delay(job_id, output_path)
 
-        _pkg._cleanup_marker_memory(text, images)
-        return {"status": "success", "output_file": os.path.basename(output_path)}
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
 
-    except Exception as e:
-        logging.error(f"Marker+SLM error for job {job_id}: {e}")
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
-        _pkg.redis_client.expire(f"job:{job_id}", 600)
-        _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
+            _pkg._cleanup_marker_memory(text, images)
+            return {"status": "success", "output_file": os.path.basename(output_path)}
 
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='marker_slm_error').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
+        except Exception as e:
+            logging.error(f"Marker+SLM error for job {job_id}: {e}")
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
+            _pkg.redis_client.expire(f"job:{job_id}", 600)
+            _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
-        _pkg._cleanup_marker_memory(converter, rendered, text, images)
-        raise
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='marker_slm_error').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+
+            _pkg._cleanup_marker_memory(converter, rendered, text, images)
+            raise
+    finally:
+        _pkg.storage.cleanup_local_stage(safe_job_id)
 
 
 @_pkg.celery.task(
@@ -570,98 +582,101 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
     logging.info(f"Starting hybrid conversion for job {job_id}")
     _pkg.update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing conversion'})
 
-    if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
-        worker_tasks_active.dec()
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
-    _pkg.storage.makedirs(safe_job_id, folder='output')
-
-    # Get PDF page count
-    page_count = 1
     try:
-        import pypdfium2 as pdfium
-        pdf_doc = pdfium.PdfDocument(input_path)
-        page_count = len(pdf_doc)
-        pdf_doc.close()
-        _pkg.update_job_metadata(job_id, {'page_count': str(page_count)})
-    except Exception as e:
-        logging.warning(f"Could not get page count: {e}")
+        if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+            worker_tasks_active.dec()
+            raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    # Try Pandoc fast path
-    _pkg.update_job_metadata(job_id, {'progress': '15', 'hybrid_engine_used': 'pandoc', 'stage': 'Trying fast conversion'})
-    pandoc_ok = False
-    try:
-        cmd = ['pandoc', '-f', 'pdf', '-t', 'markdown', input_path, '-o', output_path]
-        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
-        pandoc_ok = _pkg._assess_pandoc_quality(output_path, page_count)
+        _pkg.storage.makedirs(safe_job_id, folder='output')
+
+        # Get PDF page count
+        page_count = 1
+        try:
+            import pypdfium2 as pdfium
+            pdf_doc = pdfium.PdfDocument(input_path)
+            page_count = len(pdf_doc)
+            pdf_doc.close()
+            _pkg.update_job_metadata(job_id, {'page_count': str(page_count)})
+        except Exception as e:
+            logging.warning(f"Could not get page count: {e}")
+
+        # Try Pandoc fast path
+        _pkg.update_job_metadata(job_id, {'progress': '15', 'hybrid_engine_used': 'pandoc', 'stage': 'Trying fast conversion'})
+        pandoc_ok = False
+        try:
+            cmd = ['pandoc', '-f', 'pdf', '-t', 'markdown', input_path, '-o', output_path]
+            subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
+            pandoc_ok = _pkg._assess_pandoc_quality(output_path, page_count)
+            if pandoc_ok:
+                logging.info(f"Hybrid job {job_id}: Pandoc output is high quality, done.")
+        except Exception as e:
+            logging.info(f"Hybrid job {job_id}: Pandoc attempt failed ({e}), trying Marker.")
+
+        _pkg.update_job_metadata(job_id, {'progress': '40', 'stage': 'Checking conversion quality'})
+
         if pandoc_ok:
-            logging.info(f"Hybrid job {job_id}: Pandoc output is high quality, done.")
-    except Exception as e:
-        logging.info(f"Hybrid job {job_id}: Pandoc attempt failed ({e}), trying Marker.")
+            _pkg.update_job_metadata(job_id, {
+                'status': 'SUCCESS', 'completed_at': str(time.time()),
+                'progress': '100', 'encrypted': 'false', 'file_count': '1',
+                'hybrid_engine_used': 'pandoc', 'stage': 'Complete'
+            })
+            _pkg.redis_client.expire(f"job:{job_id}", 7200)
+            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            _pkg.extract_slm_metadata.delay(job_id, output_path)
 
-    _pkg.update_job_metadata(job_id, {'progress': '40', 'stage': 'Checking conversion quality'})
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+            import gc; gc.collect()
+            return {"status": "success", "output_file": os.path.basename(output_path), "engine": "pandoc"}
 
-    if pandoc_ok:
-        _pkg.update_job_metadata(job_id, {
-            'status': 'SUCCESS', 'completed_at': str(time.time()),
-            'progress': '100', 'encrypted': 'false', 'file_count': '1',
-            'hybrid_engine_used': 'pandoc', 'stage': 'Complete'
-        })
-        _pkg.redis_client.expire(f"job:{job_id}", 7200)
-        _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
-        _pkg.extract_slm_metadata.delay(job_id, output_path)
+        # Fall back to Marker AI
+        try:
+            _pkg._check_pdf_page_limit(job_id, input_path, _pkg.app_settings.max_marker_pages)
+        except PageLimitExceeded:
+            worker_tasks_active.dec()
+            raise
 
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
-        import gc; gc.collect()
-        return {"status": "success", "output_file": os.path.basename(output_path), "engine": "pandoc"}
+        images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
+        _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
 
-    # Fall back to Marker AI
-    try:
-        _pkg._check_pdf_page_limit(job_id, input_path, _pkg.app_settings.max_marker_pages)
-    except PageLimitExceeded:
-        worker_tasks_active.dec()
-        raise
+        _pkg.update_job_metadata(job_id, {'progress': '50', 'hybrid_engine_used': 'marker', 'stage': 'Converting PDF with AI'})
+        converter = rendered = text = images = None
+        try:
+            converter, rendered = _pkg._run_marker(input_path, options or {})
+            _pkg.update_job_metadata(job_id, {'progress': '85', 'stage': 'Saving extracted content'})
+            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
 
-    images_dir = _pkg.storage.get_local_path(safe_job_id, 'images', folder='output')
-    _pkg.storage.makedirs(safe_job_id, 'images', folder='output')
+            _pkg.update_job_metadata(job_id, {
+                'status': 'SUCCESS', 'completed_at': str(time.time()),
+                'progress': '100', 'encrypted': 'false', 'file_count': str(file_count),
+                'hybrid_engine_used': 'marker', 'stage': 'Complete'
+            })
+            _pkg.redis_client.expire(f"job:{job_id}", 7200)
+            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            _pkg.extract_slm_metadata.delay(job_id, output_path)
 
-    _pkg.update_job_metadata(job_id, {'progress': '50', 'hybrid_engine_used': 'marker', 'stage': 'Converting PDF with AI'})
-    converter = rendered = text = images = None
-    try:
-        converter, rendered = _pkg._run_marker(input_path, options or {})
-        _pkg.update_job_metadata(job_id, {'progress': '85', 'stage': 'Saving extracted content'})
-        text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+            _pkg._cleanup_marker_memory(converter, rendered, text, images)
+            return {"status": "success", "output_file": os.path.basename(output_path), "engine": "marker"}
 
-        _pkg.update_job_metadata(job_id, {
-            'status': 'SUCCESS', 'completed_at': str(time.time()),
-            'progress': '100', 'encrypted': 'false', 'file_count': str(file_count),
-            'hybrid_engine_used': 'marker', 'stage': 'Complete'
-        })
-        _pkg.redis_client.expire(f"job:{job_id}", 7200)
-        _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
-        _pkg.extract_slm_metadata.delay(job_id, output_path)
+        except Exception as e:
+            logging.error(f"Hybrid Marker fallback error for job {job_id}: {e}")
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
+            _pkg.redis_client.expire(f"job:{job_id}", 600)
+            _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
 
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
-        _pkg._cleanup_marker_memory(converter, rendered, text, images)
-        return {"status": "success", "output_file": os.path.basename(output_path), "engine": "marker"}
-
-    except Exception as e:
-        logging.error(f"Hybrid Marker fallback error for job {job_id}: {e}")
-        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
-        _pkg.redis_client.expire(f"job:{job_id}", 600)
-        _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
-
-        duration = time.time() - start_time
-        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
-        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='hybrid_error').inc()
-        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
-        worker_tasks_active.dec()
-        _pkg._cleanup_marker_memory(converter, rendered, text, images)
-        raise
+            duration = time.time() - start_time
+            conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+            conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='hybrid_error').inc()
+            conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+            worker_tasks_active.dec()
+            _pkg._cleanup_marker_memory(converter, rendered, text, images)
+            raise
+    finally:
+        _pkg.storage.cleanup_local_stage(safe_job_id)

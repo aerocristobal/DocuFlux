@@ -68,6 +68,22 @@ jobs:
         name: coverage-report
         path: coverage.xml
 
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install Bandit
+      run: pip install bandit
+
+    - name: Run Bandit (fail on high severity)
+      run: bandit -r web worker shared -lll
+
   extension-deps:
     runs-on: ubuntu-latest
     steps:

@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -177,6 +178,13 @@ class TestLocalStorageBackend:
     def test_implements_protocol(self, storage):
         assert isinstance(storage, StorageBackend)
 
+    def test_cleanup_local_stage_is_noop(self, storage):
+        # Local backend's "local path" is the real output file — cleanup_local_stage
+        # must never delete it (only S3StorageBackend stages a separate local copy).
+        storage.save_file("job1", "keep.txt", b"real output", folder="output")
+        storage.cleanup_local_stage("job1")
+        assert storage.file_exists("job1", "keep.txt", folder="output") is True
+
 
 # ── Factory Tests ─────────────────────────────────────────────────────────
 
@@ -337,6 +345,65 @@ class TestS3StorageBackend:
         s3_storage.delete_subpath("job1", "batches", folder="output")
         assert s3_storage.file_exists("job1", "keep.txt", folder="output") is True
         assert s3_storage.file_exists("job1", "batches/batch_0/data.txt", folder="output") is False
+
+    # ── Story 3.3: local-stage cleanup + orphan sweep ───────────────────────
+
+    def test_cleanup_local_stage_removes_local_copy(self, s3_storage):
+        # get_local_path stages a local copy under self._temp_dir for processing.
+        local_path = s3_storage.get_local_path("job1", "file.txt", folder="upload")
+        assert os.path.exists(os.path.dirname(local_path))
+
+        s3_storage.cleanup_local_stage("job1")
+
+        assert not os.path.exists(os.path.dirname(local_path))
+        # The S3 object itself (if any) is untouched — cleanup is local-only.
+
+    def test_cleanup_local_stage_nonexistent_job_is_noop(self, s3_storage):
+        # Should not raise even if nothing was ever staged for this job_id.
+        s3_storage.cleanup_local_stage("never-staged-job")
+
+    def test_cleanup_local_stage_does_not_touch_other_jobs(self, s3_storage):
+        path_a = s3_storage.get_local_path("job-a", "a.txt", folder="upload")
+        path_b = s3_storage.get_local_path("job-b", "b.txt", folder="upload")
+
+        s3_storage.cleanup_local_stage("job-a")
+
+        assert not os.path.exists(os.path.dirname(path_a))
+        assert os.path.exists(os.path.dirname(path_b))
+
+    def test_sweep_orphaned_local_stage_removes_stale_dirs(self, s3_storage):
+        path = s3_storage.get_local_path("stale-job", "f.txt", folder="upload")
+        stage_dir = os.path.dirname(path)
+        old_time = time.time() - 7200  # 2h ago
+        os.utime(stage_dir, (old_time, old_time))
+
+        removed = s3_storage.sweep_orphaned_local_stage(max_age_seconds=3600)
+
+        assert removed == 1
+        assert not os.path.exists(stage_dir)
+
+    def test_sweep_orphaned_local_stage_keeps_recent_dirs(self, s3_storage):
+        path = s3_storage.get_local_path("fresh-job", "f.txt", folder="upload")
+        stage_dir = os.path.dirname(path)
+
+        removed = s3_storage.sweep_orphaned_local_stage(max_age_seconds=3600)
+
+        assert removed == 0
+        assert os.path.exists(stage_dir)
+
+    def test_sweep_orphaned_local_stage_empty_temp_dir(self, s3_storage):
+        assert s3_storage.sweep_orphaned_local_stage(max_age_seconds=3600) == 0
+
+    def test_stage_path_containment_guard_blocks_traversal(self, s3_storage):
+        # A crafted job_id trying to escape the temp root must be refused,
+        # not resolved to a path outside self._temp_dir.
+        outside = s3_storage._stage_path_for("../../etc")
+        assert outside is None
+
+        # cleanup_local_stage must not raise or touch anything outside temp_dir
+        # when handed a traversal-shaped job_id.
+        s3_storage.cleanup_local_stage("../../etc")
+        assert os.path.isdir("/etc")  # sanity: real /etc still exists untouched
 
     def test_job_dir_exists(self, s3_storage):
         assert s3_storage.job_dir_exists("job1", folder="output") is False

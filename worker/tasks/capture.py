@@ -85,6 +85,7 @@ def analyze_screenshot_layout(job_id, url, storage_state_json=None):
         if temp_screenshot_path and os.path.exists(temp_screenshot_path):
             os.remove(temp_screenshot_path)
             logging.info(f"Cleaned up temporary screenshot: {temp_screenshot_path}")
+        _pkg.storage.cleanup_local_stage(job_id)
 
 
 @_pkg.celery.task(
@@ -556,3 +557,5 @@ def assemble_capture_session(session_id, job_id):
         })
         _pkg.redis_client.expire(f"job:{job_id}", 600)
         raise
+    finally:
+        _pkg.storage.cleanup_local_stage(job_id)

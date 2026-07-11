@@ -2,6 +2,7 @@ const { chromium } = require('playwright');
 const http = require('http');
 
 let browser; // Global browser instance
+let ready = false; // True once the browser has finished launching
 
 const MCP_SECRET = process.env.MCP_SECRET;
 if (!MCP_SECRET) {
@@ -35,10 +36,23 @@ function isAllowedUrl(urlStr) {
 async function startBrowser() {
     // Launch browser once and reuse it across requests
     browser = await chromium.launch();
+    ready = true;
     console.log('Playwright browser launched.');
 }
 
 async function handleRequest(req, res) {
+    if (req.method === 'GET' && req.url === '/health') {
+        // Unauthenticated liveness/readiness probe for HEALTHCHECK/orchestrators.
+        if (ready) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'ok' }));
+        } else {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'starting' }));
+        }
+        return;
+    }
+
     if (req.method === 'POST' && req.url === '/execute') {
         // Authenticate request
         const authHeader = req.headers['authorization'] || '';

@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: "docker"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/worker"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/mcp_server"
+    schedule:
+      interval: "weekly"

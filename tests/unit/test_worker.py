@@ -266,6 +266,83 @@ class TestConvertDocument:
 
         mock_redis.hset.assert_called()
 
+    @patch('tasks.storage.cleanup_local_stage')
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('subprocess.run')
+    @patch('os.makedirs')
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_cleanup_local_stage_called_on_success(
+        self, mock_exists, mock_getsize, mock_makedirs, mock_run, mock_socketio,
+        mock_redis, mock_cleanup, sample_job_id
+    ):
+        """Story 3.3: local stage is always released, even on the happy path."""
+        mock_exists.return_value = True
+        mock_getsize.return_value = 1234  # non-empty output (Story 3.1)
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_redis.hset = MagicMock()
+        mock_redis.hgetall = MagicMock(return_value={})
+
+        tasks.convert_document(
+            job_id=sample_job_id,
+            input_filename='test.md',
+            output_filename='test.html',
+            from_format='markdown',
+            to_format='html'
+        )
+
+        mock_cleanup.assert_called_once()
+
+    @patch('tasks.storage.cleanup_local_stage')
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('subprocess.run')
+    @patch('os.makedirs')
+    @patch('os.path.exists')
+    def test_cleanup_local_stage_called_on_failure(
+        self, mock_exists, mock_makedirs, mock_run, mock_socketio,
+        mock_redis, mock_cleanup, sample_job_id
+    ):
+        """Story 3.3: local stage is released via finally even when Pandoc fails."""
+        import subprocess
+        mock_exists.return_value = True
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1, ['pandoc'], stderr="pandoc: unknown format")
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
+
+        with pytest.raises(Exception, match="Pandoc failed"):
+            tasks.convert_document(
+                job_id=sample_job_id,
+                input_filename='test.md',
+                output_filename='test.html',
+                from_format='markdown',
+                to_format='html'
+            )
+
+        mock_cleanup.assert_called_once()
+
+    @patch('tasks.storage.cleanup_local_stage')
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('os.path.exists')
+    def test_cleanup_local_stage_not_called_before_job_id_resolved(
+        self, mock_exists, mock_socketio, mock_redis, mock_cleanup
+    ):
+        """Invalid job_id returns before any local stage exists — nothing to clean up."""
+        result = tasks.convert_document(
+            job_id='not-a-uuid',
+            input_filename='test.md',
+            output_filename='test.html',
+            from_format='markdown',
+            to_format='html'
+        )
+
+        assert result['status'] == 'error'
+        mock_cleanup.assert_not_called()
+
 
 class TestEmptyOutputDetection:
     """Story 3.1: Pandoc exiting 0 with empty output must FAIL, not COMPLETE."""
@@ -664,6 +741,31 @@ class TestCleanupOldFiles:
             tasks.cleanup_old_files()
 
         mock_rmtree.assert_not_called()
+
+
+# ============================================================
+# Story 3.3: orphaned local-stage sweep tests
+# ============================================================
+
+class TestSweepOrphanedTempFiles:
+
+    def test_delegates_to_storage_sweep_method(self):
+        """When the backend exposes sweep_orphaned_local_stage, it's called
+        with the 1h age threshold and its return value is passed through."""
+        mock_sweep = MagicMock(return_value=3)
+        with patch.object(tasks.storage, 'sweep_orphaned_local_stage', mock_sweep, create=True):
+            result = tasks.sweep_orphaned_temp_files()
+
+        mock_sweep.assert_called_once_with(3600)
+        assert result == 3
+
+    def test_noop_when_backend_has_no_sweep_method(self):
+        """LocalStorageBackend has no sweep_orphaned_local_stage — must not raise."""
+        # tasks.storage in this test module is a real LocalStorageBackend,
+        # which intentionally does not define sweep_orphaned_local_stage.
+        assert not hasattr(tasks.storage, 'sweep_orphaned_local_stage')
+        result = tasks.sweep_orphaned_temp_files()
+        assert result == 0
 
 
 # ============================================================
