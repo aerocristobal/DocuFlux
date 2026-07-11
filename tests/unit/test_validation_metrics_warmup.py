@@ -236,3 +236,25 @@ class TestWarmup:
         except Exception:
             val = None
         assert val is None or val is not None
+
+    def test_redis_client_created_via_tls_aware_factory(self):
+        """Story 4.1b: warmup.py must route through create_redis_client (which
+        wires ssl_cert_reqs/ca_certs/certfile/keyfile for rediss:// URLs)
+        rather than a raw redis.StrictRedis.from_url() that skips them."""
+        if "llama_cpp" not in sys.modules:
+            stub = types.ModuleType("llama_cpp")
+            stub.Llama = MagicMock()
+            sys.modules["llama_cpp"] = stub
+
+        with patch.dict(os.environ, {"REDIS_METADATA_URL": "rediss://redis:6380/1"}), \
+                patch("redis_client.create_redis_client") as mock_create:
+            mock_create.return_value = MagicMock()
+            spec = importlib.util.spec_from_file_location(
+                "_real_warmup_tls_check", os.path.join(_WORKER, "warmup.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+
+        mock_create.assert_called_once()
+        args, kwargs = mock_create.call_args
+        assert args[0] == "rediss://redis:6380/1"
+        assert kwargs.get("decode_responses") is True

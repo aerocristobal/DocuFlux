@@ -1,10 +1,13 @@
 import os
 import time
-import redis
 import threading
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from llama_cpp import Llama
+
+from config import settings
+from settings_loader import load_settings
+from redis_client import create_redis_client
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -17,9 +20,12 @@ VRAM_KEY = "service:marker:gpu_vram_free"
 slm_model = None
 
 
-# Connect to Redis
+# Story 4.1b: route through the same TLS-aware factory as every other Redis
+# consumer, instead of a raw redis.StrictRedis.from_url() that skips the
+# ssl_cert_reqs/ca_certs/certfile/keyfile kwargs the rest of the app requires.
+_app_settings = load_settings(settings)
 redis_url = os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1')
-r = redis.StrictRedis.from_url(redis_url, decode_responses=True)
+r = create_redis_client(redis_url, _app_settings, decode_responses=True)
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
