@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     mcp_server_url: str = Field("http://mcp-server:8080/execute", validation_alias="MCP_SERVER_URL")
 
     # --- Marker/SLM Specific ---
+    # Story 1.2: minimum shared/quality.py score (0-100) Pandoc output must
+    # meet for the hybrid engine to accept it; below this, falls back to Marker.
+    hybrid_quality_threshold: int = Field(60, validation_alias="HYBRID_QUALITY_THRESHOLD")
     max_marker_pages: int = Field(600, validation_alias="MAX_MARKER_PAGES")
     max_slm_context: int = Field(2000, validation_alias="MAX_SLM_CONTEXT")  # Example token limit
     slm_model_path: Optional[str] = Field(None, validation_alias="SLM_MODEL_PATH")  # No default, as it might be dynamically loaded

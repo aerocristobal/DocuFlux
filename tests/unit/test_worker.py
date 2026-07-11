@@ -1408,6 +1408,147 @@ class TestConvertWithHybrid:
         assert result['engine'] == 'marker'
         mock_run_marker.assert_called_once()
 
+    # ── Story 1.2: engine routing driven by the real quality scorer ────────
+    # Unlike the two tests above (which mock _assess_pandoc_quality directly),
+    # these exercise the real scorer against real files so the routing
+    # decision itself — not just a mocked bool — is what's under test.
+
+    def _pandoc_writes(self, content):
+        """subprocess.run side_effect that writes `content` to the pandoc
+        command's -o output path, simulating what real pandoc would produce."""
+        def _run(cmd, **kwargs):
+            output_path = cmd[-1]
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return MagicMock(returncode=0)
+        return _run
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks.subprocess.run')
+    def test_text_based_pdf_routes_to_pandoc(
+        self, mock_run, mock_run_marker, mock_slm, mock_socketio, mock_redis
+    ):
+        """Scenario Outline: text-based PDF -> pandoc (real scorer, real file)."""
+        import tasks
+        import tempfile
+        import os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+
+        good_text = (
+            "# Chapter One\n\n" + ("This is a well-formed paragraph of real prose. " * 40) +
+            "\n\n## Section\n\n" + ("More readable body text follows here. " * 40)
+        )
+        mock_run.side_effect = self._pandoc_writes(good_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake pdf content')
+            result = tasks.convert_with_hybrid(job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown')
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'pandoc'
+        mock_run_marker.assert_not_called()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks._save_marker_output')
+    @patch('tasks._check_pdf_page_limit', return_value=None)
+    @patch('tasks.subprocess.run')
+    def test_scanned_pdf_routes_to_marker(
+        self, mock_run, mock_page_limit, mock_save, mock_run_marker,
+        mock_slm, mock_socketio, mock_redis
+    ):
+        """Scenario Outline: scanned PDF (near-empty text layer) -> marker."""
+        import tasks
+        import tempfile
+        import os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+        mock_run_marker.return_value = (MagicMock(), MagicMock())
+        mock_save.return_value = ('text', {}, 0, 1)
+
+        # A scanned PDF with no text layer: Pandoc extracts almost nothing.
+        scanned_text = "\n\n\n"
+        mock_run.side_effect = self._pandoc_writes(scanned_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake pdf content')
+            result = tasks.convert_with_hybrid(job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown')
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'marker'
+        mock_run_marker.assert_called_once()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks._save_marker_output')
+    @patch('tasks._check_pdf_page_limit', return_value=None)
+    @patch('tasks.subprocess.run')
+    def test_table_heavy_pdf_routes_to_marker(
+        self, mock_run, mock_page_limit, mock_save, mock_run_marker,
+        mock_slm, mock_socketio, mock_redis
+    ):
+        """Scenario Outline: table-heavy PDF (sparse prose, malformed tables) -> marker."""
+        import tasks
+        import tempfile
+        import os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+        mock_run_marker.return_value = (MagicMock(), MagicMock())
+        mock_save.return_value = ('text', {}, 0, 1)
+
+        # A table-heavy PDF poorly handled by Pandoc: sparse prose, a
+        # malformed table (header/separator/body column counts disagree),
+        # no heading structure — realistic worst case, not a contrived one.
+        table_heavy_text = (
+            "a | b | c\n"
+            "---|---\n"
+            "1 | 2 | 3 | 4\n"
+        )
+        mock_run.side_effect = self._pandoc_writes(table_heavy_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake pdf content')
+            result = tasks.convert_with_hybrid(job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown')
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'marker'
+        mock_run_marker.assert_called_once()
+
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
     def test_invalid_uuid_returns_error(self, mock_socketio, mock_redis):

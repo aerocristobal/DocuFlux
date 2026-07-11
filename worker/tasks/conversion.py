@@ -157,14 +157,26 @@ def _slm_refine_markdown(text, job_id):
 
 
 def _assess_pandoc_quality(output_path, page_count):
-    """Return True if Pandoc's PDF->markdown output meets a minimum quality threshold."""
+    """Return True if Pandoc's PDF->markdown output meets the configured
+    hybrid quality threshold.
+
+    Story 1.2: routing is driven by the Story 1.1 quality scorer (word
+    density, headings, table well-formedness, garbage ratio, empty-page
+    ratio) instead of a fixed 50-words/page check, so the same signal used
+    to grade every conversion also decides the hybrid engine fallback.
+    """
     try:
         with open(output_path, encoding='utf-8', errors='replace') as f:
             text = f.read()
-        word_count = len(text.split())
-        words_per_page = word_count / max(page_count, 1)
-        logging.info(f"Pandoc quality: {word_count} words / {page_count} pages = {words_per_page:.1f} words/page")
-        return words_per_page >= 50
+        report = score_markdown(text, page_count=page_count)
+        threshold = _pkg.app_settings.hybrid_quality_threshold
+        passed = report.score >= threshold
+        logging.info(
+            f"Pandoc quality: score={report.score} grade={report.grade} "
+            f"threshold={threshold} reasons={report.reason_codes} -> "
+            f"{'pass' if passed else 'fallback to Marker'}"
+        )
+        return passed
     except Exception as e:
         logging.warning(f"Quality assessment failed: {e}")
         return False
@@ -616,10 +628,20 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         _pkg.update_job_metadata(job_id, {'progress': '40', 'stage': 'Checking conversion quality'})
 
         if pandoc_ok:
+            # Story 1.1/1.2: persist the same quality report that decided the
+            # routing, so the accepted engine's grade/reasons are visible too.
+            quality_meta = {}
+            try:
+                with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
+                    quality_meta = score_markdown(fh.read(), page_count=page_count).to_metadata()
+            except Exception as qe:  # pragma: no cover - defensive
+                logging.warning(f"Quality metadata persistence failed for job {job_id}: {qe}")
+
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),
                 'progress': '100', 'encrypted': 'false', 'file_count': '1',
-                'hybrid_engine_used': 'pandoc', 'stage': 'Complete'
+                'hybrid_engine_used': 'pandoc', 'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
             _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
