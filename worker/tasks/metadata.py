@@ -32,6 +32,28 @@ def _parse_slm_json(generated_text):
     return metadata
 
 
+def _sample_for_slm_context(markdown_content, max_words, head_ratio=0.6):
+    """Select representative content for SLM inference, bounded to max_words.
+
+    Documents at or under max_words pass through unchanged. Longer documents
+    are sampled from both the head and the tail (rather than naive
+    head-only truncation) so a title or key fact that only appears late in
+    a long document — past the old fixed 2000-word cutoff — still reaches
+    the SLM. The total sampled size stays fixed at max_words regardless of
+    document length, so SLM call latency doesn't grow with document size.
+    """
+    words = markdown_content.split()
+    if len(words) <= max_words:
+        return markdown_content, False
+
+    head_words = int(max_words * head_ratio)
+    tail_words = max_words - head_words
+    head = " ".join(words[:head_words])
+    tail = " ".join(words[-tail_words:]) if tail_words > 0 else ""
+    sampled = f"{head}\n\n[... content omitted ...]\n\n{tail}" if tail else head
+    return sampled, True
+
+
 @_pkg.celery.task(
     name='tasks.extract_slm_metadata',
     time_limit=300,
@@ -62,9 +84,13 @@ def extract_slm_metadata(job_id, markdown_file_path):
             markdown_content = f.read()
 
         MAX_SLM_CONTEXT = _pkg.app_settings.max_slm_context
-        if len(markdown_content.split()) > MAX_SLM_CONTEXT:
-            markdown_content = " ".join(markdown_content.split()[:MAX_SLM_CONTEXT])
-            logging.warning(f"Truncated markdown content for SLM inference for job {job_id}")
+        original_word_count = len(markdown_content.split())
+        markdown_content, was_sampled = _pkg._sample_for_slm_context(markdown_content, MAX_SLM_CONTEXT)
+        if was_sampled:
+            logging.info(
+                f"Sampled head+tail content for SLM inference for job {job_id} "
+                f"({original_word_count} words -> ~{MAX_SLM_CONTEXT})"
+            )
 
         prompt = (
             "You are a helpful assistant that extracts structured information from documents. "
