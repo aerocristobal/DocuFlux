@@ -1,0 +1,343 @@
+:root {
+    /* === SEPIA / PARCHMENT LIGHT THEME === */
+    --md-sys-color-primary: #7B1D1D;
+    --md-sys-color-on-primary: #ffffff;
+    --md-sys-color-primary-container: #ffdad6;
+    --md-sys-color-on-primary-container: #410002;
+    --md-sys-color-secondary: #7A4F4A;
+    --md-sys-color-on-secondary: #ffffff;
+    --md-sys-color-secondary-container: #ffdad6;
+    --md-sys-color-on-secondary-container: #2c1510;
+    --md-sys-color-tertiary: #6B4C00;
+    --md-sys-color-on-tertiary: #ffffff;
+    --md-sys-color-tertiary-container: #ffdea6;
+    --md-sys-color-on-tertiary-container: #221400;
+    --md-sys-color-error: #ba1a1a;
+    --md-sys-color-on-error: #ffffff;
+    --md-sys-color-error-container: #ffdad6;
+    --md-sys-color-on-error-container: #410002;
+    --md-sys-color-outline: #5C5044;
+    --md-sys-color-outline-variant: #8A7B69;
+    --md-sys-color-background: #D4B896;
+    --md-sys-color-on-background: #1c0a00;
+    --md-sys-color-surface: #F8F0E0;
+    --md-sys-color-on-surface: #1c1410;
+    --md-sys-color-surface-variant: #C4A882;
+    --md-sys-color-on-surface-variant: #3A3028;
+    --md-sys-color-surface-container-lowest: #E2C9A6;
+    --md-sys-color-surface-container-low: #D4B896;
+    --md-sys-color-surface-container: #C9AC87;
+    --md-sys-color-surface-container-high: #BCA07A;
+    --md-sys-color-surface-container-highest: #B0946E;
+    --md-sys-color-inverse-surface: #352f2c;
+    --md-sys-color-inverse-on-surface: #f6edea;
+    font-family: 'IBM Plex Sans', sans-serif;
+}
+.dark-theme {
+    /* === MIDNIGHT BLUE DARK THEME === */
+    --md-sys-color-primary: #FFB74D;
+    --md-sys-color-on-primary: #3e1c00;
+    --md-sys-color-primary-container: #5A2D00;
+    --md-sys-color-on-primary-container: #ffdcb5;
+    --md-sys-color-secondary: #80CBC4;
+    --md-sys-color-on-secondary: #003e3a;
+    --md-sys-color-secondary-container: #005048;
+    --md-sys-color-on-secondary-container: #9ef2eb;
+    --md-sys-color-tertiary: #CF94D8;
+    --md-sys-color-on-tertiary: #40004d;
+    --md-sys-color-tertiary-container: #5c006c;
+    --md-sys-color-on-tertiary-container: #f9b2ff;
+    --md-sys-color-error: #ffb4ab;
+    --md-sys-color-on-error: #690005;
+    --md-sys-color-error-container: #93000a;
+    --md-sys-color-on-error-container: #ffdad6;
+    --md-sys-color-outline: #7A7F9E;
+    --md-sys-color-outline-variant: #2C305A;
+    --md-sys-color-background: #080C26;
+    --md-sys-color-on-background: #e4e6f8;
+    --md-sys-color-surface: #1E2868;
+    --md-sys-color-on-surface: #e4e6f8;
+    --md-sys-color-surface-variant: #263278;
+    --md-sys-color-on-surface-variant: #c5c8e8;
+    --md-sys-color-surface-container-lowest: #080C26;
+    --md-sys-color-surface-container-low: #1E2868;
+    --md-sys-color-surface-container: #263278;
+    --md-sys-color-surface-container-high: #2E3A88;
+    --md-sys-color-surface-container-highest: #364298;
+    --md-sys-color-inverse-surface: #e4e6f8;
+    --md-sys-color-inverse-on-surface: #2d3154;
+}
+
+/* Ensure md-dialog uses themed surface colors in both modes */
+md-dialog {
+    --md-dialog-container-color: var(--md-sys-color-surface-container-high);
+    --md-dialog-headline-color: var(--md-sys-color-on-surface);
+    --md-dialog-supporting-text-color: var(--md-sys-color-on-surface-variant);
+}
+
+html, body {
+    background-color: var(--md-sys-color-background);
+    color: var(--md-sys-color-on-background);
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    transition: background-color 0.3s;
+}
+
+/* Header */
+header {
+    background-color: var(--md-sys-color-surface-container);
+    height: 64px;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+    color: inherit;
+}
+.logo-icon {
+    color: var(--md-sys-color-primary);
+    font-size: 1.5rem;
+}
+.logo-text {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 1.0625rem;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* Layout */
+main { flex: 1; padding: 16px; max-width: 1200px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+@media (min-width: 600px) { main { padding: 24px; } }
+.grid-layout { display: grid; grid-template-columns: 1fr; gap: 24px; }
+@media (min-width: 900px) { .grid-layout { grid-template-columns: 360px 1fr; } }
+
+/* Cards */
+.surface-card {
+    background-color: var(--md-sys-color-surface);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07), 0 0 1px rgba(0,0,0,0.05);
+    display: flex;
+    flex-direction: column;
+}
+.dark-theme .surface-card {
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.07);
+}
+
+/* Drop Zone */
+.drop-zone {
+    border: 2px dashed var(--md-sys-color-outline-variant);
+    border-radius: 12px;
+    padding: 40px 16px;
+    text-align: center;
+    position: relative;
+    background-color: var(--md-sys-color-surface-container);
+    color: var(--md-sys-color-on-surface-variant);
+    margin-bottom: 24px;
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s;
+}
+.drop-zone:hover {
+    border-color: var(--md-sys-color-outline);
+    background-color: var(--md-sys-color-surface-container-highest);
+}
+.drop-zone--dragover {
+    border-color: var(--md-sys-color-primary);
+    border-style: solid;
+    background-color: color-mix(in srgb, var(--md-sys-color-primary-container) 25%, var(--md-sys-color-surface-container));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-sys-color-primary) 15%, transparent);
+}
+.drop-icon {
+    font-size: 48px;
+    color: var(--md-sys-color-primary);
+    transition: transform 0.2s;
+    display: block;
+}
+.drop-zone:hover .drop-icon, .drop-zone--dragover .drop-icon { transform: translateY(-3px); }
+.drop-zone input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+
+/* Form elements */
+md-filled-select, md-filled-button { width: 100%; margin-bottom: 16px; }
+md-filled-select {
+    --md-filled-select-container-color: var(--md-sys-color-surface-container-highest);
+    --md-filled-select-text-color: var(--md-sys-color-on-surface);
+}
+
+/* Alerts */
+.alert-card {
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    font-size: 0.875rem;
+    animation: fadeIn 0.3s;
+}
+.alert-error { background-color: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+.alert-success { background-color: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
+.alert-warning {
+    background-color: var(--md-sys-color-tertiary-container);
+    color: var(--md-sys-color-on-tertiary-container);
+    border-left: 3px solid var(--md-sys-color-tertiary);
+}
+
+/* Job list */
+.status-chip { height: 28px; }
+.job-item[data-status="SUCCESS"] { border-left: 3px solid #22c55e; }
+.job-item[data-status="FAILURE"] { border-left: 3px solid var(--md-sys-color-error); }
+.job-item[data-status="PROCESSING"],
+.job-item[data-status="STARTED"] { border-left: 3px solid var(--md-sys-color-primary); }
+.job-item[data-status="PENDING"] { border-left: 3px solid var(--md-sys-color-outline-variant); }
+.job-time {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    opacity: 0.75;
+}
+
+/* GPU Status Chip */
+.gpu-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface-container-highest);
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    transition: all 0.2s ease;
+    margin-right: 12px;
+    outline: none;
+    white-space: nowrap;
+}
+.gpu-chip:hover {
+    background: var(--md-sys-color-surface-variant);
+    border-color: var(--md-sys-color-outline);
+}
+.gpu-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background-color 0.4s;
+}
+.gpu-chip.gpu-available { border-color: color-mix(in srgb, #22c55e 35%, var(--md-sys-color-outline-variant)); }
+.gpu-chip.gpu-available .gpu-dot { background-color: #22c55e; }
+.gpu-chip.gpu-unavailable { border-color: color-mix(in srgb, #f59e0b 35%, var(--md-sys-color-outline-variant)); }
+.gpu-chip.gpu-unavailable .gpu-dot { background-color: #f59e0b; }
+.gpu-chip.gpu-initializing .gpu-dot {
+    background-color: var(--md-sys-color-outline);
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+    0%, 100% { opacity: 0.35; transform: scale(0.75); }
+    50% { opacity: 1; transform: scale(1.15); }
+}
+
+/* Status badges (modal) */
+.status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+/* Section 508 compliant status badge text — verified >= 4.5:1 contrast */
+.status-available { background: rgba(34, 197, 94, 0.15); color: #1B5E20; }   /* 7.1:1 on light */
+.status-unavailable { background: rgba(245, 158, 11, 0.15); color: #92400E; } /* 6.4:1 on light */
+.status-unknown { background: var(--md-sys-color-surface-variant); color: var(--md-sys-color-on-surface-variant); }
+.dark-theme .status-available { background: rgba(34, 197, 94, 0.12); color: #4ade80; }   /* 11.6:1 on dark */
+.dark-theme .status-unavailable { background: rgba(245, 158, 11, 0.12); color: #fbbf24; } /* 12.1:1 on dark */
+
+/* GPU Modal Table */
+#gpu-modal-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+#gpu-modal-table td {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    vertical-align: middle;
+}
+#gpu-modal-table td:first-child {
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface-variant);
+    width: 42%;
+    font-size: 0.875rem;
+}
+.modal-row-icon {
+    font-size: 16px;
+    vertical-align: middle;
+    margin-right: 6px;
+    color: var(--md-sys-color-primary);
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+}
+.vram-bar-container {
+    height: 4px;
+    background: var(--md-sys-color-outline-variant);
+    border-radius: 2px;
+    margin-top: 6px;
+    overflow: hidden;
+}
+.vram-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.6s ease;
+}
+
+/* Misc */
+.hidden { display: none !important; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Epic 4.6: classes replacing what were inline style="" attributes ── */
+.header-spacer { flex: 1; }
+.theme-menu-anchor { position: relative; }
+.status-banner-body { flex: 1; }
+#status-progress { margin-top: 6px; }
+#drop-zone-prompt { margin-top: 8px; }
+#marker-options { margin-bottom: 16px; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.checkbox-row-last { display: flex; align-items: center; gap: 8px; }
+#submit-progress { margin-bottom: 16px; }
+.jobs-card { min-height: 500px; }
+#no-jobs-msg { text-align: center; padding: 48px; }
+.no-jobs-icon { font-size: 64px; opacity: 0.3; }
+.captures-heading { display: flex; align-items: center; gap: 8px; }
+#no-captures-msg { text-align: center; padding: 32px; }
+.no-captures-text { opacity: 0.6; }
+.gpu-modal-content { min-width: 380px; max-width: 480px; }
+
+/* Job/capture list rows rendered client-side in main.js */
+.job-progress { width: 100px; margin-top: 8px; }
+.job-stage { font-size: 0.75rem; color: var(--md-sys-color-on-surface-variant); margin-top: 4px; }
+.job-elapsed { font-size: 0.7rem; color: var(--md-sys-color-outline); margin-top: 2px; }
+.job-slm-block { margin-top: 6px; padding: 6px 0; border-top: 1px solid var(--md-sys-color-outline-variant); font-size: 0.8rem; }
+.job-slm-label { color: var(--md-sys-color-tertiary); font-weight: 500; }
+.job-slm-summary { color: var(--md-sys-color-on-surface-variant); margin-top: 2px; }
+.job-slm-tags { margin-top: 4px; }
+.job-slm-chip { font-size: 0.7rem; margin: 2px; }
+.job-status-icon[data-color="primary"] { color: var(--md-sys-color-primary); }
+.job-status-icon[data-color="secondary"] { color: var(--md-sys-color-secondary); }
+.job-status-icon[data-color="error"] { color: var(--md-sys-color-error); }
+.job-status-icon[data-color="outline"] { color: var(--md-sys-color-outline); }

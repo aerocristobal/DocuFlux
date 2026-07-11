@@ -4,6 +4,7 @@ eventlet.monkey_patch()
 
 import os
 import uuid
+import secrets
 import time
 import shutil
 import logging
@@ -118,6 +119,10 @@ def _assign_request_id():
     """Generate or propagate a correlation ID for structured log tracing."""
     g.request_id = request.headers.get('X-Request-ID') or str(uuid.uuid4())[:8]
     set_request_id(g.request_id)
+    # Per-request CSP nonce (Epic 4.6) — covers the one inline <script> that
+    # can't be externalized (the import map; external importmap src isn't
+    # supported across all target browsers yet).
+    g.csp_nonce = secrets.token_urlsafe(16)
 
 
 @app.after_request
@@ -131,10 +136,14 @@ def _echo_request_id(response):
 def add_security_headers(response):
     # Epic 22.3: Updated CSP to support both ws:// and wss:// WebSocket connections
     # When behind proxy (HTTPS), Socket.IO auto-upgrades to wss://
+    # Epic 4.6: script-src/style-src no longer need 'unsafe-inline' — the page's
+    # JS/CSS live in static files now; the one remaining inline <script> (the
+    # import map) is allow-listed per-request via nonce instead.
+    nonce = getattr(g, 'csp_nonce', '')
     csp = (
         "default-src 'self' https://esm.run https://fonts.googleapis.com https://fonts.gstatic.com; "
-        "script-src 'self' 'unsafe-inline' https://esm.run https://cdn.jsdelivr.net https://cdn.socket.io; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        f"script-src 'self' 'nonce-{nonce}' https://esm.run https://cdn.jsdelivr.net https://cdn.socket.io; "
+        "style-src 'self' https://fonts.googleapis.com; "
         "img-src 'self' data:; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         "connect-src 'self' https://esm.run https://cdn.jsdelivr.net;"
