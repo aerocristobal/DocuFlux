@@ -9,6 +9,7 @@ import zipfile
 import logging
 
 from flask import Blueprint, render_template, request, jsonify, session, Response
+from markupsafe import escape
 from werkzeug.utils import secure_filename
 from datetime import datetime
 
@@ -42,6 +43,96 @@ def index():
     return render_template('index.html', formats=FORMATS)
 
 
+def _validate_convert_request(files, from_format, to_format):
+    """Validate the /convert (Web UI) request's top-level fields.
+
+    Returns (error_response, from_info, to_info). error_response is None on
+    success; otherwise a (jsonify(...), status_code) tuple to return as-is.
+    """
+    if not files or all(f.filename == '' for f in files):
+        return (jsonify({'error': 'No selected file'}), 400), None, None
+    if not from_format or not to_format:
+        return (jsonify({'error': "Missing format selection"}), 400), None, None
+    from_info = next((f for f in FORMATS if f['key'] == from_format), None)
+    to_info = next((f for f in FORMATS if f['key'] == to_format), None)
+    if not from_info or not to_info:
+        return (jsonify({'error': "Invalid format selection"}), 400), None, None
+    return None, from_info, to_info
+
+
+def _validate_convert_file(file, from_info):
+    """Validate a single uploaded file's extension and content against from_info.
+
+    Returns error_response, or None on success.
+    """
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext != from_info['extension']:
+        if not (from_info['key'] == 'markdown' and file_ext in ['.md', '.markdown']):
+            return jsonify({'error': f"Extension {escape(file_ext)} mismatch."}), 400
+
+    is_valid_content, content_error = validate_file_content_type(file, file_ext)
+    if not is_valid_content:
+        return jsonify({'error': content_error}), 400
+    return None
+
+
+def _enqueue_convert_job(file, from_format, to_format, to_info, form):
+    """Save an uploaded file, record job metadata, and dispatch its Celery task.
+
+    Returns the new job_id.
+    """
+    job_id = str(uuid.uuid4())
+    _app_mod.storage.makedirs(job_id, folder='upload')
+    input_filename = secure_filename(file.filename) or f"file_{job_id}"
+    input_path = _app_mod.storage.get_local_path(job_id, input_filename, folder='upload')
+    file.save(input_path)
+
+    _app_mod.storage.makedirs(job_id, folder='output')
+    base_name = os.path.splitext(input_filename)[0]
+    output_filename = f"{base_name}.{to_info['extension'].lstrip('.')}"
+
+    _app_mod.update_job_metadata(job_id, build_job_metadata(
+        file.filename, from_format, to_format,
+        force_ocr=str(form.get('force_ocr') == 'on'),
+        use_llm=str(form.get('use_llm') == 'on'),
+    ))
+    _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
+
+    file_size = _app_mod.storage.get_file_size(job_id, input_filename, folder='upload')
+
+    if from_format == 'pdf_marker':
+        task_name = 'tasks.convert_with_marker'
+    elif from_format == 'pdf_hybrid':
+        task_name = 'tasks.convert_with_hybrid'
+    elif from_format == 'pdf_marker_slm':
+        task_name = 'tasks.convert_with_marker_slm'
+    elif from_format == 'pdf_ocr':
+        task_name = 'tasks.convert_with_ocr'
+    else:
+        task_name = 'tasks.convert_document'
+    task_args = [job_id, input_filename, output_filename, from_format, to_format]
+
+    if from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
+        options = {
+            'force_ocr': form.get('force_ocr') == 'on',
+            'use_llm': form.get('use_llm') == 'on'
+        }
+        task_args.append(options)
+
+    # GPU tasks go to gpu queue; CPU tasks use size-based routing
+    if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
+        target_queue = 'gpu'
+    else:
+        target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
+
+    _app_mod.celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
+    return job_id
+
+
+def _respond_convert_success(job_ids):
+    return jsonify({'job_ids': job_ids, 'status': 'queued'})
+
+
 @conversion_bp.route('/convert', methods=['POST'])
 def convert():
     """Handle multi-file document conversion submissions from the Web UI."""
@@ -50,86 +141,35 @@ def convert():
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
     files = request.files.getlist('file')
-    if not files or all(f.filename == '' for f in files):
-        return jsonify({'error': 'No selected file'}), 400
     from_format = request.form.get('from_format')
     to_format = request.form.get('to_format')
-    if not from_format or not to_format:
-        return jsonify({'error': "Missing format selection"}), 400
-    from_info = next((f for f in FORMATS if f['key'] == from_format), None)
-    to_info = next((f for f in FORMATS if f['key'] == to_format), None)
-    if not from_info or not to_info:
-        return jsonify({'error': "Invalid format selection"}), 400
+
+    error, from_info, to_info = _validate_convert_request(files, from_format, to_format)
+    if error:
+        return error
 
     session_id = session.get('session_id')
     if not session_id:
         session_id = str(uuid.uuid4())
         session['session_id'] = session_id
         session.permanent = True
+
     job_ids = []
     for file in files:
         if file.filename == '': continue
-        file_ext = os.path.splitext(file.filename)[1].lower()
-        if file_ext != from_info['extension']:
-            if not (from_info['key'] == 'markdown' and file_ext in ['.md', '.markdown']):
-                 return jsonify({'error': f"Extension {file_ext} mismatch."}), 400
 
-        is_valid_content, content_error = validate_file_content_type(file, file_ext)
-        if not is_valid_content:
-            return jsonify({'error': content_error}), 400
+        error = _validate_convert_file(file, from_info)
+        if error:
+            return error
 
-        job_id = str(uuid.uuid4())
-        _app_mod.storage.makedirs(job_id, folder='upload')
-        input_filename = secure_filename(file.filename) or f"file_{job_id}"
-        input_path = _app_mod.storage.get_local_path(job_id, input_filename, folder='upload')
-        file.save(input_path)
-
-        _app_mod.storage.makedirs(job_id, folder='output')
-        base_name = os.path.splitext(input_filename)[0]
-        output_filename = f"{base_name}.{to_info['extension'].lstrip('.')}"
-
-        _app_mod.update_job_metadata(job_id, build_job_metadata(
-            file.filename, from_format, to_format,
-            force_ocr=str(request.form.get('force_ocr') == 'on'),
-            use_llm=str(request.form.get('use_llm') == 'on'),
-        ))
-        _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
-
-        file_size = _app_mod.storage.get_file_size(job_id, input_filename, folder='upload')
-
-        if from_format == 'pdf_marker':
-            task_name = 'tasks.convert_with_marker'
-        elif from_format == 'pdf_hybrid':
-            task_name = 'tasks.convert_with_hybrid'
-        elif from_format == 'pdf_marker_slm':
-            task_name = 'tasks.convert_with_marker_slm'
-        elif from_format == 'pdf_ocr':
-            task_name = 'tasks.convert_with_ocr'
-        else:
-            task_name = 'tasks.convert_document'
-        task_args = [job_id, input_filename, output_filename, from_format, to_format]
-
-        if from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
-            options = {
-                'force_ocr': request.form.get('force_ocr') == 'on',
-                'use_llm': request.form.get('use_llm') == 'on'
-            }
-            task_args.append(options)
-
-        # GPU tasks go to gpu queue; CPU tasks use size-based routing
-        if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
-            target_queue = 'gpu'
-        else:
-            target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
-
-        _app_mod.celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
+        job_id = _enqueue_convert_job(file, from_format, to_format, to_info, request.form)
 
         history_key = f"history:{session_id}"
         _app_mod.redis_client.lpush(history_key, job_id)
         _app_mod.redis_client.expire(history_key, 86400)
         job_ids.append(job_id)
 
-    return jsonify({'job_ids': job_ids, 'status': 'queued'})
+    return _respond_convert_success(job_ids)
 
 
 @conversion_bp.route('/api/jobs')
@@ -432,62 +472,50 @@ def download_zip(job_id):
 
 # ── REST API v1 ─────────────────────────────────────────────────────────────
 
-@conversion_bp.route('/api/v1/convert', methods=['POST'])
-@_app_mod.csrf.exempt
-@_app_mod.require_api_key
-# Story 4.2: Rate limit is configurable via CONVERT_RATE_LIMIT (config.py),
-# not hardcoded. The callable is evaluated per-request so env overrides apply.
-@_app_mod.limiter.limit(lambda: _app_mod.app_settings.convert_rate_limit)
-def api_v1_convert():
-    """REST API endpoint for document conversion submission."""
-    if not _app_mod.check_disk_space():
-        return jsonify({'error': 'Server storage full'}), 507
+def _validate_v1_convert_params(to_format, engine, raw_pandoc_options):
+    """Validate to_format, engine, and pandoc_options for /api/v1/convert.
 
-    if 'file' not in request.files:
-        return jsonify({'error': 'Missing required field: file'}), 400
-
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-
-    to_format = request.form.get('to_format')
+    Returns (error_response, cleaned_pandoc_options). error_response is None
+    on success.
+    """
     if not to_format:
-        return jsonify({'error': 'Missing required field: to_format'}), 400
+        return (jsonify({'error': 'Missing required field: to_format'}), 400), None
 
     if to_format not in [f['key'] for f in FORMATS if f['direction'] in ['Both', 'Output Only']]:
-        return jsonify({'error': f'Unsupported output format: {to_format}'}), 422
-
-    from_format = request.form.get('from_format')
-    engine = request.form.get('engine', 'pandoc')
-    force_ocr = request.form.get('force_ocr', 'false').lower() == 'true'
-    use_llm = request.form.get('use_llm', 'false').lower() == 'true'
-    # Story 1.5: text-only consumers can skip extracted images entirely.
-    include_images = request.form.get('include_images', 'true').lower() == 'true'
+        return (jsonify({'error': f'Unsupported output format: {escape(to_format)}'}), 422), None
 
     if engine not in ['pandoc', 'marker', 'hybrid', 'marker_slm', 'ocr']:
-        return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc", "marker", "hybrid", "marker_slm", or "ocr"'}), 422
+        return (jsonify({'error': f'Invalid engine: {escape(engine)}. Must be "pandoc", "marker", "hybrid", "marker_slm", or "ocr"'}), 422), None
 
     pandoc_options = None
-    raw_pandoc = request.form.get('pandoc_options')
-    if raw_pandoc:
+    if raw_pandoc_options:
         try:
-            pandoc_options = json.loads(raw_pandoc)
+            pandoc_options = json.loads(raw_pandoc_options)
         except (json.JSONDecodeError, ValueError):
-            return jsonify({'error': 'pandoc_options must be valid JSON'}), 400
+            return (jsonify({'error': 'pandoc_options must be valid JSON'}), 400), None
         if not isinstance(pandoc_options, dict):
-            return jsonify({'error': 'pandoc_options must be a JSON object'}), 400
+            return (jsonify({'error': 'pandoc_options must be a JSON object'}), 400), None
         if engine != 'pandoc':
-            return jsonify({'error': 'pandoc_options only valid with engine=pandoc'}), 422
+            return (jsonify({'error': 'pandoc_options only valid with engine=pandoc'}), 422), None
         cleaned, errors = validate_pandoc_options(pandoc_options)
         if errors:
-            return jsonify({'error': 'Invalid pandoc_options', 'details': errors}), 422
+            return (jsonify({'error': 'Invalid pandoc_options', 'details': errors}), 422), None
         pandoc_options = cleaned if cleaned else None
 
+    return None, pandoc_options
+
+
+def _resolve_v1_convert_format(filename, from_format, engine):
+    """Auto-detect from_format if omitted, and resolve engine+format to the
+    internal from_format key used for task routing (e.g. pdf -> pdf_marker).
+
+    Returns (error_response, from_format, internal_from_format).
+    """
     if not from_format:
-        ext = os.path.splitext(file.filename)[1].lower()
+        ext = os.path.splitext(filename)[1].lower()
         from_format = detect_format_from_extension(ext)
         if not from_format:
-            return jsonify({'error': f'Cannot auto-detect format from extension: {ext}'}), 422
+            return (jsonify({'error': f'Cannot auto-detect format from extension: {escape(ext)}'}), 422), None, None
 
     if engine == 'marker' and from_format == 'pdf':
         internal_from_format = 'pdf_marker'
@@ -501,8 +529,19 @@ def api_v1_convert():
     else:
         internal_from_format = from_format
 
+    return None, from_format, internal_from_format
+
+
+def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
+                             force_ocr, use_llm, include_images, pandoc_options,
+                             timestamp):
+    """Create the job, save the upload, record metadata, and dispatch the
+    Celery task for /api/v1/convert.
+
+    Returns (error_response, job_id). error_response is None on success (a
+    422 from content-type validation on failure).
+    """
     job_id = str(uuid.uuid4())
-    timestamp = str(time.time())
 
     _app_mod.storage.makedirs(job_id, folder='upload')
     _app_mod.storage.makedirs(job_id, folder='output')
@@ -511,7 +550,7 @@ def api_v1_convert():
     file_ext = os.path.splitext(safe_filename)[1].lower()
     is_valid_content, content_error = validate_file_content_type(file, file_ext)
     if not is_valid_content:
-        return jsonify({'error': content_error}), 422
+        return (jsonify({'error': content_error}), 422), None
 
     input_path = _app_mod.storage.get_local_path(job_id, safe_filename, folder='upload')
     file.save(input_path)
@@ -577,12 +616,62 @@ def api_v1_convert():
             queue=queue_name
         )
 
+    return None, job_id
+
+
+def _respond_v1_convert_success(job_id, timestamp):
     return jsonify({
         'job_id': job_id,
         'status': 'queued',
         'status_url': f'/api/v1/status/{job_id}',
         'created_at': datetime.fromtimestamp(float(timestamp)).isoformat() + 'Z'
     }), 202
+
+
+@conversion_bp.route('/api/v1/convert', methods=['POST'])
+@_app_mod.csrf.exempt
+@_app_mod.require_api_key
+# Story 4.2: Rate limit is configurable via CONVERT_RATE_LIMIT (config.py),
+# not hardcoded. The callable is evaluated per-request so env overrides apply.
+@_app_mod.limiter.limit(lambda: _app_mod.app_settings.convert_rate_limit)
+def api_v1_convert():
+    """REST API endpoint for document conversion submission."""
+    if not _app_mod.check_disk_space():
+        return jsonify({'error': 'Server storage full'}), 507
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'Missing required field: file'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    to_format = request.form.get('to_format')
+    from_format = request.form.get('from_format')
+    engine = request.form.get('engine', 'pandoc')
+    force_ocr = request.form.get('force_ocr', 'false').lower() == 'true'
+    use_llm = request.form.get('use_llm', 'false').lower() == 'true'
+    # Story 1.5: text-only consumers can skip extracted images entirely.
+    include_images = request.form.get('include_images', 'true').lower() == 'true'
+    raw_pandoc = request.form.get('pandoc_options')
+
+    error, pandoc_options = _validate_v1_convert_params(to_format, engine, raw_pandoc)
+    if error:
+        return error
+
+    error, from_format, internal_from_format = _resolve_v1_convert_format(file.filename, from_format, engine)
+    if error:
+        return error
+
+    timestamp = str(time.time())
+    error, job_id = _enqueue_v1_convert_job(
+        file, internal_from_format, to_format, engine, force_ocr, use_llm,
+        include_images, pandoc_options, timestamp
+    )
+    if error:
+        return error
+
+    return _respond_v1_convert_success(job_id, timestamp)
 
 
 @conversion_bp.route('/api/v1/status/<job_id>', methods=['GET'])
