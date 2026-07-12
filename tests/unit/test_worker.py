@@ -1580,6 +1580,56 @@ class TestAssessPandocQuality:
         assert result is False
 
 
+class TestSampleForSlmContext:
+    """Tests for the _sample_for_slm_context helper (Story 1.6)."""
+
+    def test_short_document_passes_through_unchanged(self):
+        """Alternative path: content within the limit is used directly, no sampling."""
+        content = " ".join(["word"] * 500)
+        sampled, was_sampled = tasks._sample_for_slm_context(content, max_words=2000)
+        assert sampled == content
+        assert was_sampled is False
+
+    def test_document_at_exact_limit_passes_through_unchanged(self):
+        content = " ".join(["word"] * 2000)
+        sampled, was_sampled = tasks._sample_for_slm_context(content, max_words=2000)
+        assert sampled == content
+        assert was_sampled is False
+
+    def test_long_document_samples_head_and_tail(self):
+        """Happy path: both the start and the end of the document inform the sample."""
+        words = [f"w{i}" for i in range(5000)]
+        content = " ".join(words)
+        sampled, was_sampled = tasks._sample_for_slm_context(content, max_words=2000)
+
+        assert was_sampled is True
+        assert "w0" in sampled  # head present
+        assert "w4999" in sampled  # tail present
+        assert "w2500" not in sampled  # omitted middle is actually omitted
+
+    def test_sampled_output_is_bounded_regardless_of_input_size(self):
+        """Boundary: sample size stays ~max_words even for a very long document,
+        so a single SLM call's latency doesn't grow with document length."""
+        short_sample, _ = tasks._sample_for_slm_context(" ".join(["w"] * 5000), max_words=2000)
+        long_sample, _ = tasks._sample_for_slm_context(" ".join(["w"] * 500000), max_words=2000)
+
+        # Both samples are drawn from the same fixed word budget (+ a short
+        # separator), independent of how much longer the second document is.
+        assert abs(len(short_sample.split()) - len(long_sample.split())) <= 5
+
+    def test_title_only_in_tail_is_reachable(self):
+        """Business rule: a title-bearing sentence past the old fixed 2000-word
+        cutoff is present in the sample, unlike naive head-only truncation."""
+        filler = " ".join(["filler"] * 2500)
+        content = f"{filler} The Real Title Is Here At The End"
+        sampled, _ = tasks._sample_for_slm_context(content, max_words=2000)
+
+        assert "The Real Title Is Here At The End" in sampled
+        # Naive head-only truncation to 2000 words would have missed it entirely.
+        naive_truncation = " ".join(content.split()[:2000])
+        assert "The Real Title Is Here At The End" not in naive_truncation
+
+
 class TestConvertWithHybrid:
     """Tests for the convert_with_hybrid Celery task."""
 
