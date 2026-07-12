@@ -4,7 +4,7 @@
   "private": true,
   "description": "DocuFlux browser extension for capturing authenticated web content",
   "dependencies": {
-    "dompurify": "3.4.9",
+    "dompurify": "3.4.11",
     "socket.io-client": "4.8.3"
   },
   "devDependencies": {
