@@ -95,7 +95,11 @@ function updateToOptions(key) {
     formats.forEach(f => {
         if (f.key !== key && f.direction !== 'Input Only') {
             const opt = document.createElement('md-select-option');
-            opt.value = f.key; opt.innerHTML = `<div slot="headline">${f.name}</div>`;
+            opt.value = f.key;
+            const headline = document.createElement('div');
+            headline.slot = 'headline';
+            headline.textContent = f.name;
+            opt.appendChild(headline);
             toSelect.appendChild(opt);
         }
     });
