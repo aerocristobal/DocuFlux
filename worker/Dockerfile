@@ -7,7 +7,7 @@
 ARG BUILD_GPU=true
 
 # Stage 1: Base image selection (GPU with CUDA or CPU-only Ubuntu)
-FROM nvcr.io/nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04@sha256:8f9dd0d09d3ad3900357a1cf7f887888b5b74056636cd6ef03c160c3cd4b1d95 AS base-true
+FROM nvcr.io/nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04@sha256:217134b60289ced62b47463be32584329baf35cb55a9ccda6626b91bd59803be AS base-true
 FROM ubuntu:26.04@sha256:b7f48194d4d8b763a478a621cdc81c27be222ba2206ca3ca6bc42b49685f3d9e AS base-false
 
 # Select base based on BUILD_GPU argument
