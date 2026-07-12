@@ -38,7 +38,6 @@ def _parse_slm_json(generated_text):
     soft_time_limit=240,
     acks_late=True,
     reject_on_worker_lost=True,
-    max_retries=1
 )
 def extract_slm_metadata(job_id, markdown_file_path):
     """Extracts semantic metadata (title, tags, summary) from Markdown content using a local SLM."""
@@ -99,7 +98,7 @@ def extract_slm_metadata(job_id, markdown_file_path):
         logging.info(f"SLM generated raw text for job {job_id}:\n{generated_text}")
 
         try:
-            metadata = _pkg._parse_slm_json(generated_text)
+            metadata = _parse_slm_json(generated_text)
         except (ValueError, json.JSONDecodeError) as parse_err:
             logging.warning(
                 f"SLM JSON parse failed for job {job_id}: {parse_err}. "
@@ -125,7 +124,7 @@ def extract_slm_metadata(job_id, markdown_file_path):
                     stop=["```"],
                 )
                 retry_text = retry_output['choices'][0]['text'].strip()
-                metadata = _pkg._parse_slm_json(retry_text)
+                metadata = _parse_slm_json(retry_text)
                 logging.info(f"SLM JSON repair retry succeeded for job {job_id}")
             except (ValueError, json.JSONDecodeError) as retry_err:
                 error_msg = (
