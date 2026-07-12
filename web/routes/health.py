@@ -173,6 +173,6 @@ def service_status():
     except Exception as e:
         logging.error(f"Error checking GPU status: {e}")
         status['gpu_status'] = 'unavailable'
-        status['gpu_info'] = {"status": "unavailable", "error": str(e)}
+        status['gpu_info'] = {"status": "unavailable", "error": "GPU status unavailable"}
 
     return jsonify(status)

@@ -7,341 +7,19 @@
     <title>DocuFlux | Document Converter</title>
 
     <!-- Theme Initialization (Head) -->
-    <script>
-        (function() {
-            const apply = (t) => {
-                let dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-                document.documentElement.classList.toggle('dark-theme', dark);
-            };
-            apply(localStorage.getItem('theme') || 'system');
-            window.applyTheme = apply;
-        })();
-    </script>
+    <script src="{{ url_for('static', filename='js/theme-init.js') }}"></script>
 
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
 
-    <script type="importmap">{"imports": {"@material/web/": "https://esm.run/@material/web/"}}</script>
+    <!-- Import maps must stay inline (browser support for external importmap
+         src is inconsistent); allow-listed per-request via nonce instead of
+         a blanket script-src 'unsafe-inline'. -->
+    <script type="importmap" nonce="{{ g.csp_nonce }}">{"imports": {"@material/web/": "https://esm.run/@material/web/"}}</script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <script type="module">
-        import '@material/web/all.js';
-        import { styles as typescaleStyles } from '@material/web/typography/md-typescale-styles.js';
-        document.adoptedStyleSheets.push(typescaleStyles.styleSheet);
-    </script>
+    <script type="module" src="{{ url_for('static', filename='js/typescale-init.js') }}"></script>
 
-    <style>
-        :root {
-            /* === SEPIA / PARCHMENT LIGHT THEME === */
-            --md-sys-color-primary: #7B1D1D;
-            --md-sys-color-on-primary: #ffffff;
-            --md-sys-color-primary-container: #ffdad6;
-            --md-sys-color-on-primary-container: #410002;
-            --md-sys-color-secondary: #7A4F4A;
-            --md-sys-color-on-secondary: #ffffff;
-            --md-sys-color-secondary-container: #ffdad6;
-            --md-sys-color-on-secondary-container: #2c1510;
-            --md-sys-color-tertiary: #6B4C00;
-            --md-sys-color-on-tertiary: #ffffff;
-            --md-sys-color-tertiary-container: #ffdea6;
-            --md-sys-color-on-tertiary-container: #221400;
-            --md-sys-color-error: #ba1a1a;
-            --md-sys-color-on-error: #ffffff;
-            --md-sys-color-error-container: #ffdad6;
-            --md-sys-color-on-error-container: #410002;
-            --md-sys-color-outline: #5C5044;
-            --md-sys-color-outline-variant: #8A7B69;
-            --md-sys-color-background: #D4B896;
-            --md-sys-color-on-background: #1c0a00;
-            --md-sys-color-surface: #F8F0E0;
-            --md-sys-color-on-surface: #1c1410;
-            --md-sys-color-surface-variant: #C4A882;
-            --md-sys-color-on-surface-variant: #3A3028;
-            --md-sys-color-surface-container-lowest: #E2C9A6;
-            --md-sys-color-surface-container-low: #D4B896;
-            --md-sys-color-surface-container: #C9AC87;
-            --md-sys-color-surface-container-high: #BCA07A;
-            --md-sys-color-surface-container-highest: #B0946E;
-            --md-sys-color-inverse-surface: #352f2c;
-            --md-sys-color-inverse-on-surface: #f6edea;
-            font-family: 'IBM Plex Sans', sans-serif;
-        }
-        .dark-theme {
-            /* === MIDNIGHT BLUE DARK THEME === */
-            --md-sys-color-primary: #FFB74D;
-            --md-sys-color-on-primary: #3e1c00;
-            --md-sys-color-primary-container: #5A2D00;
-            --md-sys-color-on-primary-container: #ffdcb5;
-            --md-sys-color-secondary: #80CBC4;
-            --md-sys-color-on-secondary: #003e3a;
-            --md-sys-color-secondary-container: #005048;
-            --md-sys-color-on-secondary-container: #9ef2eb;
-            --md-sys-color-tertiary: #CF94D8;
-            --md-sys-color-on-tertiary: #40004d;
-            --md-sys-color-tertiary-container: #5c006c;
-            --md-sys-color-on-tertiary-container: #f9b2ff;
-            --md-sys-color-error: #ffb4ab;
-            --md-sys-color-on-error: #690005;
-            --md-sys-color-error-container: #93000a;
-            --md-sys-color-on-error-container: #ffdad6;
-            --md-sys-color-outline: #7A7F9E;
-            --md-sys-color-outline-variant: #2C305A;
-            --md-sys-color-background: #080C26;
-            --md-sys-color-on-background: #e4e6f8;
-            --md-sys-color-surface: #1E2868;
-            --md-sys-color-on-surface: #e4e6f8;
-            --md-sys-color-surface-variant: #263278;
-            --md-sys-color-on-surface-variant: #c5c8e8;
-            --md-sys-color-surface-container-lowest: #080C26;
-            --md-sys-color-surface-container-low: #1E2868;
-            --md-sys-color-surface-container: #263278;
-            --md-sys-color-surface-container-high: #2E3A88;
-            --md-sys-color-surface-container-highest: #364298;
-            --md-sys-color-inverse-surface: #e4e6f8;
-            --md-sys-color-inverse-on-surface: #2d3154;
-        }
-
-        /* Ensure md-dialog uses themed surface colors in both modes */
-        md-dialog {
-            --md-dialog-container-color: var(--md-sys-color-surface-container-high);
-            --md-dialog-headline-color: var(--md-sys-color-on-surface);
-            --md-dialog-supporting-text-color: var(--md-sys-color-on-surface-variant);
-        }
-
-        html, body {
-            background-color: var(--md-sys-color-background);
-            color: var(--md-sys-color-on-background);
-            margin: 0;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            transition: background-color 0.3s;
-        }
-
-        /* Header */
-        header {
-            background-color: var(--md-sys-color-surface-container);
-            height: 64px;
-            display: flex;
-            align-items: center;
-            padding: 0 20px;
-            border-bottom: 1px solid var(--md-sys-color-outline-variant);
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-        }
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            text-decoration: none;
-            color: inherit;
-        }
-        .logo-icon {
-            color: var(--md-sys-color-primary);
-            font-size: 1.5rem;
-        }
-        .logo-text {
-            font-family: 'IBM Plex Mono', monospace;
-            font-weight: 600;
-            font-size: 1.0625rem;
-            letter-spacing: -0.02em;
-            background: linear-gradient(135deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        /* Layout */
-        main { flex: 1; padding: 16px; max-width: 1200px; margin: 0 auto; width: 100%; box-sizing: border-box; }
-        @media (min-width: 600px) { main { padding: 24px; } }
-        .grid-layout { display: grid; grid-template-columns: 1fr; gap: 24px; }
-        @media (min-width: 900px) { .grid-layout { grid-template-columns: 360px 1fr; } }
-
-        /* Cards */
-        .surface-card {
-            background-color: var(--md-sys-color-surface);
-            border-radius: 16px;
-            padding: 24px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.07), 0 0 1px rgba(0,0,0,0.05);
-            display: flex;
-            flex-direction: column;
-        }
-        .dark-theme .surface-card {
-            box-shadow: 0 4px 24px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.07);
-        }
-
-        /* Drop Zone */
-        .drop-zone {
-            border: 2px dashed var(--md-sys-color-outline-variant);
-            border-radius: 12px;
-            padding: 40px 16px;
-            text-align: center;
-            position: relative;
-            background-color: var(--md-sys-color-surface-container);
-            color: var(--md-sys-color-on-surface-variant);
-            margin-bottom: 24px;
-            cursor: pointer;
-            transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s;
-        }
-        .drop-zone:hover {
-            border-color: var(--md-sys-color-outline);
-            background-color: var(--md-sys-color-surface-container-highest);
-        }
-        .drop-zone--dragover {
-            border-color: var(--md-sys-color-primary);
-            border-style: solid;
-            background-color: color-mix(in srgb, var(--md-sys-color-primary-container) 25%, var(--md-sys-color-surface-container));
-            box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-sys-color-primary) 15%, transparent);
-        }
-        .drop-icon {
-            font-size: 48px;
-            color: var(--md-sys-color-primary);
-            transition: transform 0.2s;
-            display: block;
-        }
-        .drop-zone:hover .drop-icon, .drop-zone--dragover .drop-icon { transform: translateY(-3px); }
-        .drop-zone input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
-
-        /* Form elements */
-        md-filled-select, md-filled-button { width: 100%; margin-bottom: 16px; }
-        md-filled-select {
-            --md-filled-select-container-color: var(--md-sys-color-surface-container-highest);
-            --md-filled-select-text-color: var(--md-sys-color-on-surface);
-        }
-
-        /* Alerts */
-        .alert-card {
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-bottom: 12px;
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            font-size: 0.875rem;
-            animation: fadeIn 0.3s;
-        }
-        .alert-error { background-color: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
-        .alert-success { background-color: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
-        .alert-warning {
-            background-color: var(--md-sys-color-tertiary-container);
-            color: var(--md-sys-color-on-tertiary-container);
-            border-left: 3px solid var(--md-sys-color-tertiary);
-        }
-
-        /* Job list */
-        .status-chip { height: 28px; }
-        .job-item[data-status="SUCCESS"] { border-left: 3px solid #22c55e; }
-        .job-item[data-status="FAILURE"] { border-left: 3px solid var(--md-sys-color-error); }
-        .job-item[data-status="PROCESSING"],
-        .job-item[data-status="STARTED"] { border-left: 3px solid var(--md-sys-color-primary); }
-        .job-item[data-status="PENDING"] { border-left: 3px solid var(--md-sys-color-outline-variant); }
-        .job-time {
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.8rem;
-            opacity: 0.75;
-        }
-
-        /* GPU Status Chip */
-        .gpu-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-            padding: 5px 12px;
-            border-radius: 8px;
-            border: 1px solid var(--md-sys-color-outline-variant);
-            background: var(--md-sys-color-surface-container-highest);
-            color: var(--md-sys-color-on-surface-variant);
-            cursor: pointer;
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.8rem;
-            font-weight: 500;
-            letter-spacing: 0.01em;
-            transition: all 0.2s ease;
-            margin-right: 12px;
-            outline: none;
-            white-space: nowrap;
-        }
-        .gpu-chip:hover {
-            background: var(--md-sys-color-surface-variant);
-            border-color: var(--md-sys-color-outline);
-        }
-        .gpu-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            flex-shrink: 0;
-            transition: background-color 0.4s;
-        }
-        .gpu-chip.gpu-available { border-color: color-mix(in srgb, #22c55e 35%, var(--md-sys-color-outline-variant)); }
-        .gpu-chip.gpu-available .gpu-dot { background-color: #22c55e; }
-        .gpu-chip.gpu-unavailable { border-color: color-mix(in srgb, #f59e0b 35%, var(--md-sys-color-outline-variant)); }
-        .gpu-chip.gpu-unavailable .gpu-dot { background-color: #f59e0b; }
-        .gpu-chip.gpu-initializing .gpu-dot {
-            background-color: var(--md-sys-color-outline);
-            animation: pulse-dot 1.5s ease-in-out infinite;
-        }
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 0.35; transform: scale(0.75); }
-            50% { opacity: 1; transform: scale(1.15); }
-        }
-
-        /* Status badges (modal) */
-        .status-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        /* Section 508 compliant status badge text — verified >= 4.5:1 contrast */
-        .status-available { background: rgba(34, 197, 94, 0.15); color: #1B5E20; }   /* 7.1:1 on light */
-        .status-unavailable { background: rgba(245, 158, 11, 0.15); color: #92400E; } /* 6.4:1 on light */
-        .status-unknown { background: var(--md-sys-color-surface-variant); color: var(--md-sys-color-on-surface-variant); }
-        .dark-theme .status-available { background: rgba(34, 197, 94, 0.12); color: #4ade80; }   /* 11.6:1 on dark */
-        .dark-theme .status-unavailable { background: rgba(245, 158, 11, 0.12); color: #fbbf24; } /* 12.1:1 on dark */
-
-        /* GPU Modal Table */
-        #gpu-modal-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-        #gpu-modal-table td {
-            padding: 10px 8px;
-            border-bottom: 1px solid var(--md-sys-color-outline-variant);
-            vertical-align: middle;
-        }
-        #gpu-modal-table td:first-child {
-            font-weight: 500;
-            color: var(--md-sys-color-on-surface-variant);
-            width: 42%;
-            font-size: 0.875rem;
-        }
-        .modal-row-icon {
-            font-size: 16px;
-            vertical-align: middle;
-            margin-right: 6px;
-            color: var(--md-sys-color-primary);
-            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
-        }
-        .vram-bar-container {
-            height: 4px;
-            background: var(--md-sys-color-outline-variant);
-            border-radius: 2px;
-            margin-top: 6px;
-            overflow: hidden;
-        }
-        .vram-bar {
-            height: 100%;
-            background: linear-gradient(90deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
-            border-radius: 2px;
-            width: 0%;
-            transition: width 0.6s ease;
-        }
-
-        /* Misc */
-        .hidden { display: none !important; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
 <body>
     <header>
@@ -349,7 +27,7 @@
             <md-icon class="logo-icon">description</md-icon>
             <span class="logo-text">DocuFlux</span>
         </a>
-        <div style="flex: 1;"></div>
+        <div class="header-spacer"></div>
 
         <!-- GPU Status Indicator -->
         <button id="gpu-status-chip" class="gpu-chip gpu-initializing" title="Click for system status" aria-label="GPU Status">
@@ -357,7 +35,7 @@
             <span class="gpu-label">Detecting...</span>
         </button>
 
-        <span style="position: relative;">
+        <span class="theme-menu-anchor">
             <md-icon-button id="theme-toggle"><md-icon>brightness_auto</md-icon></md-icon-button>
             <md-menu id="theme-menu" anchor="theme-toggle">
                 <md-menu-item data-theme="system"><div slot="headline">Sync with System</div><md-icon slot="start">brightness_auto</md-icon></md-menu-item>
@@ -375,9 +53,9 @@
 
                     <div id="status-banner" class="alert-card alert-warning hidden">
                         <md-icon>hourglass_empty</md-icon>
-                        <div style="flex: 1;">
+                        <div class="status-banner-body">
                             <span id="status-text">Marker initializing...</span>
-                            <md-linear-progress id="status-progress" indeterminate style="margin-top: 6px;"></md-linear-progress>
+                            <md-linear-progress id="status-progress" indeterminate></md-linear-progress>
                         </div>
                     </div>
 
@@ -385,7 +63,7 @@
                     <form id="convert-form">
                         <div class="drop-zone" id="drop-zone">
                             <md-icon class="drop-icon">cloud_upload</md-icon>
-                            <div id="drop-zone-prompt" class="md-typescale-body-large" style="margin-top: 8px;">Drag files here or click</div>
+                            <div id="drop-zone-prompt" class="md-typescale-body-large">Drag files here or click</div>
                             <div class="md-typescale-body-small">Multiple files supported · Max 100MB</div>
                             <input type="file" id="file" name="file" multiple required>
                         </div>
@@ -397,40 +75,40 @@
                             <md-select-option value="" disabled selected><div slot="headline">Select source first</div></md-select-option>
                         </md-filled-select>
 
-                        <div id="marker-options" class="hidden" style="margin-bottom: 16px;">
-                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <div id="marker-options" class="hidden">
+                            <div class="checkbox-row">
                                 <md-checkbox id="force_ocr" name="force_ocr" value="on"></md-checkbox>
                                 <label for="force_ocr">Force OCR (Slower, better for scanned)</label>
                             </div>
-                            <div style="display: flex; align-items: center; gap: 8px;">
+                            <div class="checkbox-row-last">
                                 <md-checkbox id="use_llm" name="use_llm" value="on"></md-checkbox>
                                 <label for="use_llm">Use LLM (High Accuracy, requires GPU)</label>
                             </div>
                         </div>
 
-                        <md-linear-progress id="submit-progress" indeterminate class="hidden" style="margin-bottom: 16px;"></md-linear-progress>
+                        <md-linear-progress id="submit-progress" indeterminate class="hidden"></md-linear-progress>
                         <md-filled-button type="submit" id="convert-btn">Convert Now<md-icon slot="icon">transform</md-icon></md-filled-button>
                     </form>
                 </div>
             </section>
             <section>
-                <div class="surface-card" style="min-height: 500px;">
+                <div class="surface-card jobs-card">
                     <h2 class="md-typescale-title-medium">My Conversions</h2>
                     <md-list id="jobs-list"></md-list>
-                    <div id="no-jobs-msg" style="text-align: center; padding: 48px;" class="hidden">
-                        <md-icon style="font-size: 64px; opacity: 0.3;">inbox_customize</md-icon>
+                    <div id="no-jobs-msg" class="hidden">
+                        <md-icon class="no-jobs-icon">inbox_customize</md-icon>
                         <div class="md-typescale-body-large">No conversions found</div>
                     </div>
                 </div>
             </section>
             <section id="captures-section" class="hidden">
                 <div class="surface-card">
-                    <h2 class="md-typescale-title-medium" style="display:flex;align-items:center;gap:8px;">
+                    <h2 class="md-typescale-title-medium captures-heading">
                         <md-icon>extension</md-icon> Recent Captures
                     </h2>
                     <md-list id="captures-list"></md-list>
-                    <div id="no-captures-msg" style="text-align: center; padding: 32px;">
-                        <div class="md-typescale-body-medium" style="opacity:0.6;">No extension captures yet</div>
+                    <div id="no-captures-msg">
+                        <div class="md-typescale-body-medium no-captures-text">No extension captures yet</div>
                     </div>
                 </div>
             </section>
@@ -446,392 +124,15 @@
         </div>
     </md-dialog>
 
-    <script>
-        const formats = {{ formats|tojson }};
-        const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
-        let localJobs = [];
-
-        // --- Theme Logic ---
-        function updateToggleIcon() {
-            const i = document.querySelector('#theme-toggle md-icon');
-            if (!i) return;
-            const saved = localStorage.getItem('theme') || 'system';
-            i.textContent = saved === 'system' ? 'brightness_auto' : (saved === 'dark' ? 'dark_mode' : 'light_mode');
-        }
-        document.getElementById('theme-toggle').addEventListener('click', () => { document.getElementById('theme-menu').open = true; });
-        // md-menu does not emit 'action' — attach click to each item instead
-        document.querySelectorAll('#theme-menu md-menu-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const t = item.dataset.theme;
-                if (!t) return;
-                localStorage.setItem('theme', t);
-                window.applyTheme(t);
-                updateToggleIcon();
-            });
-        });
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (localStorage.getItem('theme') === 'system') window.applyTheme('system'); });
-        updateToggleIcon();
-
-        // --- Utils ---
-        function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
-        function showAlert(type, msg) {
-            const area = document.getElementById('alert-area');
-            area.innerHTML = `<div class="alert-card alert-${type}"><md-icon>${type==='error'?'error':'check_circle'}</md-icon><span>${escapeHtml(msg)}</span></div>`;
-            setTimeout(() => area.innerHTML = '', 5000);
-        }
-
-        // --- Dialog ---
-        const diag = document.getElementById('action-dialog');
-        function confirmAction(title, body) {
-            document.getElementById('dialog-headline').textContent = title;
-            document.getElementById('dialog-body').textContent = body;
-            diag.show();
-            return new Promise(res => {
-                const close = (v) => { diag.close(); res(v); };
-                const ok = () => close(true); const no = () => close(false);
-                document.getElementById('dialog-confirm').onclick = ok;
-                document.getElementById('dialog-cancel').onclick = no;
-            });
-        }
-
-        // --- Form ---
-        const fromSelect = document.getElementById('from_format');
-        const toSelect = document.getElementById('to_format');
-        const fileInput = document.getElementById('file');
-        const dropZone = document.getElementById('drop-zone');
-
-        fileInput.addEventListener('change', () => {
-            if (!fileInput.files.length) return;
-            document.getElementById('drop-zone-prompt').textContent = fileInput.files.length === 1 ? fileInput.files[0].name : `${fileInput.files.length} files selected`;
-            const ext = '.' + fileInput.files[0].name.toLowerCase().split('.').pop();
-            const m = formats.find(f => (f.extension === ext || (f.key === 'markdown' && (ext === '.md' || ext === '.markdown'))) && f.direction !== 'Output Only');
-            if (m) { fromSelect.value = m.key; updateToOptions(m.key); }
-        });
-
-        // Prevent browser from opening dropped files as a new tab anywhere on the page
-        document.addEventListener('dragover', (e) => e.preventDefault());
-        document.addEventListener('drop', (e) => e.preventDefault());
-
-        // Drag-and-drop visual feedback
-        ['dragover', 'dragenter'].forEach(ev => {
-            dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drop-zone--dragover'); });
-            fileInput.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drop-zone--dragover'); });
-        });
-        ['dragleave'].forEach(ev => {
-            dropZone.addEventListener(ev, () => dropZone.classList.remove('drop-zone--dragover'));
-            fileInput.addEventListener(ev, () => dropZone.classList.remove('drop-zone--dragover'));
-        });
-        // Handle drop: prevent navigation, read files from dataTransfer
-        function handleFileDrop(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.classList.remove('drop-zone--dragover');
-            const files = e.dataTransfer && e.dataTransfer.files;
-            if (files && files.length) {
-                const dt = new DataTransfer();
-                for (const f of files) dt.items.add(f);
-                fileInput.files = dt.files;
-                fileInput.dispatchEvent(new Event('change'));
-            }
-        }
-        dropZone.addEventListener('drop', handleFileDrop);
-        fileInput.addEventListener('drop', handleFileDrop);
-
-        fromSelect.addEventListener('change', () => updateToOptions(fromSelect.value));
-        function updateToOptions(key) {
-            toSelect.disabled = false;
-            toSelect.innerHTML = '<md-select-option value="" disabled selected><div slot="headline">Select target</div></md-select-option>';
-            formats.forEach(f => {
-                if (f.key !== key && f.direction !== 'Input Only') {
-                    const opt = document.createElement('md-select-option');
-                    opt.value = f.key; opt.innerHTML = `<div slot="headline">${f.name}</div>`;
-                    toSelect.appendChild(opt);
-                }
-            });
-            const opts = document.getElementById('marker-options');
-            if (key === 'pdf_marker') opts.classList.remove('hidden'); else opts.classList.add('hidden');
-        }
-
-        document.getElementById('convert-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const fd = new FormData();
-            for(let f of fileInput.files) fd.append('file', f);
-            fd.append('from_format', fromSelect.value);
-            fd.append('to_format', toSelect.value);
-            document.getElementById('convert-btn').disabled = true;
-            document.getElementById('submit-progress').classList.remove('hidden');
-            try {
-                const r = await fetch('/convert', { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body: fd });
-                if (r.ok) {
-                    showAlert('success', 'Submitted!');
-                    fileInput.value = ''; fromSelect.value = ''; toSelect.value = '';
-                    document.getElementById('drop-zone-prompt').textContent = "Drag files here or click";
-                    fetchJobs();
-                } else { const d = await r.json(); showAlert('error', d.error || 'Failed'); }
-            } catch (e) { showAlert('error', 'Network error'); }
-            finally { document.getElementById('convert-btn').disabled = false; document.getElementById('submit-progress').classList.add('hidden'); }
-        });
-
-        // --- Rendering ---
-        const socket = io();
-        socket.on('connect', () => fetchJobs());
-        socket.on('job_update', (u) => {
-            const i = localJobs.findIndex(j => j.id === u.id);
-            if (i !== -1) localJobs[i] = { ...localJobs[i], ...u }; else localJobs.unshift(u);
-            renderJobs();
-        });
-
-        // Re-render every 5s to tick elapsed time while any job is active
-        let elapsedTimer = null;
-        function startElapsedTimer() {
-            if (elapsedTimer) return;
-            elapsedTimer = setInterval(() => {
-                const hasActive = localJobs.some(j => ['PENDING','PROCESSING','STARTED'].includes(j.status));
-                if (hasActive) { renderJobs(); } else { clearInterval(elapsedTimer); elapsedTimer = null; }
-            }, 5000);
-        }
-
-        // Poll for job list changes (picks up server-side retention cleanup)
-        setInterval(() => {
-            if (!document.hidden) fetchJobs();
-        }, 30000);
-
-        async function fetchJobs() {
-            try {
-                const r = await fetch('/api/jobs');
-                localJobs = await r.json();
-                renderJobs();
-            } catch (e) {}
-        }
-
-        function renderJobs() {
-            const list = document.getElementById('jobs-list');
-            const msg = document.getElementById('no-jobs-msg');
-            if (!localJobs.length) { list.innerHTML = ''; msg.classList.remove('hidden'); return; }
-            msg.classList.add('hidden');
-            list.innerHTML = localJobs.map(j => {
-                const ts = parseFloat(j.created_at);
-                const time = new Date(ts * (ts < 10000000000 ? 1000 : 1)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const active = ['PENDING', 'PROCESSING', 'STARTED'].includes(j.status);
-                let icon = 'pending', color = 'secondary', label = 'Waiting', actions = '';
-                if (j.status === 'SUCCESS') {
-                    icon = 'check_circle'; color = 'primary'; label = 'Done';
-                    const isZip = parseInt(j.file_count) > 1 || j.is_zip;
-                    const dlUrl = isZip ? `/download_zip/${j.id}` : `/download/${j.id}`;
-                    const dlIcon = isZip ? 'folder_zip' : 'download';
-                    const dlTitle = isZip ? 'Download ZIP' : 'Download File';
-                    actions = `<a href="${dlUrl}" download slot="end" title="${dlTitle}"><md-icon-button><md-icon>${dlIcon}</md-icon></md-icon-button></a>`;
-                }
-                else if (j.status === 'FAILURE') { icon = 'error'; color = 'error'; label = 'Failed'; actions = `<md-icon-button slot="end" onclick="window.retryJob('${j.id}')"><md-icon>replay</md-icon></md-icon-button>`; }
-                else if (j.status === 'REVOKED') { icon = 'cancel'; color = 'outline'; label = 'Cancelled'; actions = `<md-icon-button slot="end" onclick="window.retryJob('${j.id}')"><md-icon>replay</md-icon></md-icon-button>`; }
-                else actions = `<md-icon-button slot="end" onclick="window.cancelJob('${j.id}')"><md-icon>close</md-icon></md-icon-button>`;
-
-                const prog = active && parseInt(j.progress) > 0
-                    ? `<md-linear-progress value="${j.progress/100}" style="width:100px;margin-top:8px;"></md-linear-progress>`
-                    : active ? `<md-linear-progress indeterminate style="width:100px;margin-top:8px;"></md-linear-progress>` : '';
-
-                let stageHtml = '';
-                if (j.stage && active) {
-                    const pageCtx = j.page_count ? ` · ${j.page_count} pages` : '';
-                    stageHtml = `<div style="font-size:0.75rem;color:var(--md-sys-color-on-surface-variant);margin-top:4px;">${escapeHtml(j.stage)}${pageCtx}</div>`;
-                }
-                let elapsedHtml = '';
-                if (active && j.started_at) {
-                    const secs = Math.floor(Date.now() / 1000 - parseFloat(j.started_at));
-                    if (secs > 0) {
-                        const m = Math.floor(secs / 60), s = secs % 60;
-                        elapsedHtml = `<div style="font-size:0.7rem;color:var(--md-sys-color-outline);margin-top:2px;">${m}m ${s.toString().padStart(2,'0')}s</div>`;
-                    }
-                }
-
-                let slmHtml = '';
-                if (j.slm) {
-                    const slmTags = (j.slm.tags || []).map(t => `<md-assist-chip label="${escapeHtml(t)}" style="font-size:0.7rem;margin:2px;"></md-assist-chip>`).join('');
-                    slmHtml = `<div style="margin-top:6px;padding:6px 0;border-top:1px solid var(--md-sys-color-outline-variant);font-size:0.8rem;">
-                        <span style="color:var(--md-sys-color-tertiary);font-weight:500;">AI: </span>${escapeHtml(j.slm.title || '')}
-                        ${j.slm.summary ? `<div style="color:var(--md-sys-color-on-surface-variant);margin-top:2px;">${escapeHtml(j.slm.summary)}</div>` : ''}
-                        ${slmTags ? `<div style="margin-top:4px;">${slmTags}</div>` : ''}
-                    </div>`;
-                }
-                return `<md-list-item class="job-item" data-status="${escapeHtml(j.status)}">
-                    <md-icon slot="start" style="color:var(--md-sys-color-${color})">${icon}</md-icon>
-                    <div slot="headline">${escapeHtml(j.filename)}</div>
-                    <div slot="supporting-text">${escapeHtml(j.from)} &rarr; ${escapeHtml(j.to)} · <span class="job-time">${time}</span>${prog}${stageHtml}${elapsedHtml}${slmHtml}</div>
-                    <div slot="trailing-supporting-text"><md-assist-chip label="${label}" class="status-chip"></md-assist-chip></div>
-                    ${actions}${!active ? `<md-icon-button slot="end" onclick="window.deleteJob('${j.id}')"><md-icon>delete</md-icon></md-icon-button>` : ''}
-                </md-list-item><md-divider></md-divider>`;
-            }).join('');
-            if (localJobs.some(j => ['PENDING','PROCESSING','STARTED'].includes(j.status))) startElapsedTimer();
-        }
-
-        window.cancelJob = async (id) => { if (await confirmAction('Cancel?', 'Stop?')) { await fetch(`/api/cancel/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); } };
-        window.deleteJob = async (id) => { if (await confirmAction('Delete?', 'Remove?')) { await fetch(`/api/delete/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); } };
-        window.retryJob = async (id) => { await fetch(`/api/retry/${id}`, { method: 'POST', headers: { 'X-CSRFToken': csrfToken } }); fetchJobs(); showAlert('success', 'Retried.'); };
-
-        // --- Captures Section ---
-        let captureJobs = [];
-
-        async function fetchCaptures() {
-            try {
-                const r = await fetch('/api/captures');
-                captureJobs = await r.json();
-                renderCaptures();
-            } catch (e) {}
-        }
-
-        function renderCaptures() {
-            const section = document.getElementById('captures-section');
-            const list = document.getElementById('captures-list');
-            const msg = document.getElementById('no-captures-msg');
-            if (!captureJobs.length) {
-                section.classList.add('hidden');
-                return;
-            }
-            section.classList.remove('hidden');
-            msg.classList.add('hidden');
-            list.innerHTML = captureJobs.map(j => {
-                const ts = parseFloat(j.created_at);
-                const time = new Date(ts * (ts < 10000000000 ? 1000 : 1)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const active = ['PENDING', 'PROCESSING', 'STARTED'].includes(j.status);
-                let icon = 'pending', color = 'secondary', label = 'Waiting', actions = '';
-                if (j.status === 'SUCCESS') {
-                    icon = 'check_circle'; color = 'primary'; label = 'Done';
-                    const dlUrl = j.download_url || `/download/${j.id}`;
-                    actions = `<a href="${dlUrl}" download slot="end" title="Download"><md-icon-button><md-icon>download</md-icon></md-icon-button></a>`;
-                } else if (j.status === 'FAILURE') {
-                    icon = 'error'; color = 'error'; label = 'Failed';
-                }
-                const prog = active
-                    ? (j.progress ? `<md-linear-progress value="${j.progress/100}" style="width:100px;margin-top:8px;"></md-linear-progress>`
-                                  : `<md-linear-progress indeterminate style="width:100px;margin-top:8px;"></md-linear-progress>`)
-                    : '';
-                return `<md-list-item class="job-item">
-                    <md-icon slot="start" style="color:var(--md-sys-color-${color})">${icon}</md-icon>
-                    <div slot="headline">${escapeHtml(j.filename || 'Captured Document')}</div>
-                    <div slot="supporting-text">capture &rarr; ${escapeHtml(j.to || 'markdown')} · <span class="job-time">${time}</span>${prog}</div>
-                    <div slot="trailing-supporting-text"><md-assist-chip label="${label}" class="status-chip"></md-assist-chip></div>
-                    ${actions}
-                </md-list-item><md-divider></md-divider>`;
-            }).join('');
-        }
-
-        // Merge capture job_updates into captureJobs
-        socket.on('job_update', (u) => {
-            if (u.from === 'capture') {
-                const i = captureJobs.findIndex(j => j.id === u.id);
-                if (i !== -1) captureJobs[i] = { ...captureJobs[i], ...u }; else captureJobs.unshift(u);
-                renderCaptures();
-            }
-        });
-
-        fetchCaptures();
-        setInterval(fetchCaptures, 30000);
-
-        // --- Service Status (single fetch per 10s interval) ---
-        async function checkServices() {
-            try {
-                const r = await fetch('/api/status/services');
-                const d = await r.json();
-
-                // Marker service banner
-                const banner = document.getElementById('status-banner');
-                const txt = document.getElementById('status-text');
-                const statusProgress = document.getElementById('status-progress');
-                const pdfOpt = document.querySelector('md-select-option[value="pdf_marker"]');
-
-                if (d.marker && d.marker !== 'ready') {
-                    banner.classList.remove('hidden');
-                    const isError = d.marker === 'error';
-                    banner.className = `alert-card alert-${isError ? 'error' : 'warning'}`;
-                    const icon = banner.querySelector('md-icon');
-                    if (icon) icon.textContent = isError ? 'error' : 'hourglass_empty';
-                    txt.textContent = `Marker: ${d.marker.toUpperCase()}${d.llm_download_eta ? ` · ETA ${d.llm_download_eta}` : ''}`;
-                    if (statusProgress) statusProgress.classList.toggle('hidden', isError);
-                    if (pdfOpt) { pdfOpt.disabled = true; if (fromSelect.value === 'pdf_marker') fromSelect.value = ''; }
-                } else {
-                    banner.classList.add('hidden');
-                    if (pdfOpt) pdfOpt.disabled = false;
-                }
-
-                // GPU status — reuse same response, no second fetch
-                updateGPUStatus(d);
-            } catch(e) { console.error('checkServices error:', e); }
-        }
-        setInterval(checkServices, 10000);
-        checkServices();
-
-        // --- GPU Status ---
-        function updateGPUStatus(data) {
-            const chip = document.getElementById('gpu-status-chip');
-            const label = chip && chip.querySelector('.gpu-label');
-            if (!chip || !label) return;
-
-            const gpu_status = data.gpu_status || 'initializing';
-            const gpu_info = data.gpu_info || {};
-
-            chip.classList.remove('gpu-available', 'gpu-unavailable', 'gpu-initializing');
-
-            if (gpu_status === 'available') {
-                chip.classList.add('gpu-available');
-                const model = gpu_info.model || 'GPU';
-                label.textContent = model.replace('NVIDIA GeForce ', '').replace('NVIDIA ', '');
-            } else if (gpu_status === 'unavailable') {
-                chip.classList.add('gpu-unavailable');
-                label.textContent = 'CPU Mode';
-                const pdfMarkerOpt = document.querySelector('md-select-option[value="pdf_marker"]');
-                if (pdfMarkerOpt) pdfMarkerOpt.disabled = true;
-            } else {
-                chip.classList.add('gpu-initializing');
-                label.textContent = 'Detecting...';
-            }
-        }
-
-        async function refreshGPUDetails() {
-            try {
-                const r = await fetch('/api/status/services');
-                const data = await r.json();
-                const gpu_info = data.gpu_info || {};
-
-                const statusEl = document.getElementById('modal-gpu-status');
-                statusEl.textContent = gpu_info.status || 'unknown';
-                statusEl.className = 'status-badge status-' + (gpu_info.status || 'unknown');
-
-                document.getElementById('modal-gpu-model').textContent = gpu_info.model || 'N/A';
-                document.getElementById('modal-gpu-cuda').textContent = gpu_info.cuda_version || 'N/A';
-                document.getElementById('modal-gpu-driver').textContent = gpu_info.driver_version || 'N/A';
-                document.getElementById('modal-gpu-util').textContent = gpu_info.utilization !== undefined ? `${gpu_info.utilization}%` : 'N/A';
-
-                if (gpu_info.vram_total) {
-                    const used = gpu_info.vram_total - (gpu_info.vram_available || 0);
-                    const pct = Math.round((used / gpu_info.vram_total) * 100);
-                    document.getElementById('modal-gpu-vram').textContent = `${(gpu_info.vram_available || 0).toFixed(1)} / ${gpu_info.vram_total} GB free`;
-                    const bar = document.getElementById('vram-bar');
-                    if (bar) bar.style.width = `${pct}%`;
-                } else {
-                    document.getElementById('modal-gpu-vram').textContent = 'N/A';
-                }
-            } catch(e) { console.error('Error refreshing GPU details:', e); }
-        }
-
-        // GPU chip click — open modal and refresh details
-        const gpuChip = document.getElementById('gpu-status-chip');
-        if (gpuChip) {
-            gpuChip.addEventListener('click', () => {
-                refreshGPUDetails();
-                document.getElementById('gpu-details-modal').show();
-            });
-        }
-
-        // WebSocket listener for real-time GPU status updates from warmup
-        socket.on('gpu_status_update', (data) => {
-            updateGPUStatus(data);
-        });
-    </script>
+    <!-- Server-rendered data for main.js (inert JSON, not executable script —
+         not subject to script-src, so no nonce needed to pass this safely). -->
+    <script type="application/json" id="formats-data">{{ formats|tojson }}</script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 
     <!-- GPU Details Modal -->
     <md-dialog id="gpu-details-modal">
         <div slot="headline">System Status</div>
-        <div slot="content" style="min-width: 380px; max-width: 480px;">
+        <div slot="content" class="gpu-modal-content">
             <table id="gpu-modal-table">
                 <tr>
                     <td><span class="material-symbols-outlined modal-row-icon">memory</span>Status</td>
@@ -863,7 +164,7 @@
             </table>
         </div>
         <div slot="actions">
-            <md-text-button onclick="document.getElementById('gpu-details-modal').close()">Close</md-text-button>
+            <md-text-button id="gpu-modal-close-btn">Close</md-text-button>
         </div>
     </md-dialog>
 

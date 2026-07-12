@@ -13,6 +13,38 @@ def test_index(client):
     assert response.status_code == 200
     assert b"DocuFlux" in response.data or b"format" in response.data
 
+def test_csp_header_has_no_unsafe_inline(client):
+    """Story 4.6: unsafe-inline must be gone from both script-src and style-src."""
+    response = client.get('/')
+    csp = response.headers.get('Content-Security-Policy', '')
+    assert csp, "Content-Security-Policy header missing"
+    assert "unsafe-inline" not in csp
+
+def test_csp_script_src_uses_a_nonce(client):
+    """The one remaining inline <script> (the import map) is nonce-gated."""
+    response = client.get('/')
+    csp = response.headers.get('Content-Security-Policy', '')
+    assert "'nonce-" in csp
+
+def test_csp_nonce_matches_rendered_page(client):
+    """The nonce in the CSP header must match the nonce on the inline script tag,
+    or the browser will block it."""
+    response = client.get('/')
+    csp = response.headers.get('Content-Security-Policy', '')
+    import re
+    m = re.search(r"'nonce-([^']+)'", csp)
+    assert m, "no nonce found in CSP header"
+    nonce = m.group(1)
+    assert f'nonce="{nonce}"'.encode() in response.data
+
+def test_csp_nonce_changes_per_request(client):
+    """A fresh nonce per request is required for the header to be meaningful."""
+    r1 = client.get('/')
+    r2 = client.get('/')
+    csp1 = r1.headers.get('Content-Security-Policy', '')
+    csp2 = r2.headers.get('Content-Security-Policy', '')
+    assert csp1 != csp2
+
 @patch('app.redis_client')
 def test_service_status(mock_redis, client):
     # Return bytes strings as real Redis would
