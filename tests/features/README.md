@@ -8,7 +8,7 @@ and **P2** priority bands. Blocked cards (status `todo`) are not yet exported â€
 already carry BDD scenarios on the board and will be exported as their dependencies
 complete and they move to `ready`.
 
-Each feature corresponds to one user story in [`docs/BACKLOG.md`](../../docs/BACKLOG.md)
+Each feature corresponds to one user story in [`docs/user-stories/BACKLOG.md`](../../docs/user-stories/BACKLOG.md)
 and follows the BDD structure from the team's
 `TDD-BDD-User-Story-Template.md` reference (one scenario â†’ one behavior; declarative,
 business-language steps; present-tense `Then`; happy / alternative / boundary / error

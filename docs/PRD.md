@@ -1,7 +1,7 @@
 # DocuFlux — Product Requirements Document
 
 **Status:** Living document · **Last updated:** 2026-06-11
-**Related docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BACKLOG.md](BACKLOG.md) · [API.md](API.md) · [FORMATS.md](FORMATS.md) · [CONFIGURATION.md](CONFIGURATION.md) · [AI_INTEGRATION.md](AI_INTEGRATION.md)
+**Related docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BACKLOG.md](user-stories/BACKLOG.md) · [API.md](API.md) · [FORMATS.md](FORMATS.md) · [CONFIGURATION.md](CONFIGURATION.md) · [AI_INTEGRATION.md](AI_INTEGRATION.md)
 
 ---
 
@@ -185,7 +185,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 - No outbound calls during conversion (model weights fetched at build/startup only).
 - Non-root containers, dropped capabilities, `no-new-privileges`, noexec tmpfs.
 - CSRF protection, rate limiting (1000/day, 200/hour defaults), SSRF guards on webhooks.
-- **Known gaps** (tracked in [BACKLOG.md](BACKLOG.md) Epic 4): Redis TLS disabled, no API key expiration/audit, 8-byte magic validation, MCP container runs as root.
+- **Known gaps** (tracked in [BACKLOG.md](user-stories/BACKLOG.md) Epic 4): Redis TLS disabled, no API key expiration/audit, 8-byte magic validation, MCP container runs as root.
 
 ### 6.3 Deployability
 
@@ -253,7 +253,7 @@ A conversion is *good* when the output preserves: readable body text (no garbage
 
 ### 9.3 Roadmap
 
-The prioritized improvement backlog — 6 epics, 31 stories across conversion quality, OCR capability, reliability, hardening, supply-chain, and performance — lives in **[BACKLOG.md](BACKLOG.md)**.
+The prioritized improvement backlog — 6 epics, 31 stories across conversion quality, OCR capability, reliability, hardening, supply-chain, and performance — lives in **[BACKLOG.md](user-stories/BACKLOG.md)**.
 
 ---
 

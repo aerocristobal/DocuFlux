@@ -1,7 +1,7 @@
 # DocuFlux — Improvement Epic Backlog
 
 **Status:** Proposed · **Last updated:** 2026-06-11
-**Related docs:** [PRD.md](PRD.md) · [ARCHITECTURE.md](ARCHITECTURE.md)
+**Related docs:** [PRD.md](../PRD.md) · [ARCHITECTURE.md](../ARCHITECTURE.md)
 
 Six epics covering the four improvement themes: **capability** (Epic 2), **PDF→Markdown conversion quality** (Epic 1), **hardening** (Epics 4–5), and **code optimization** (Epics 3, 6). Stories use BDD framing per the project's BDD conventions; each names the files it touches.
 
