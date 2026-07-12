@@ -1356,6 +1356,79 @@ class TestAssembleCaptureSession:
         tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
         tasks.storage = old_storage
 
+# ─── extract_slm_metadata Tests (Story 3.4) ───────────────────────────────────
+
+class TestExtractSlmMetadata:
+    """SLM JSON parse failures get one constrained re-prompt, then a
+    metadata_degraded flag — never a silent fallback masquerading as success."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_warmup_mock(self):
+        yield
+        sys.modules['warmup'].get_slm_model = MagicMock(return_value=None)
+
+    def _mock_slm(self, *completions):
+        """A fake SLM whose create_completion() returns each completion in turn."""
+        slm = MagicMock()
+        slm.create_completion.side_effect = [
+            {'choices': [{'text': text}]} for text in completions
+        ]
+        sys.modules['warmup'].get_slm_model = MagicMock(return_value=slm)
+        return slm
+
+    @patch('tasks.update_job_metadata')
+    @patch('os.path.exists', return_value=True)
+    @patch('builtins.open', new_callable=mock_open, read_data="# Some document\n\ncontent here")
+    def test_valid_json_parses_without_retry(self, mock_file, mock_exists, mock_update, sample_job_id):
+        slm = self._mock_slm('{"title": "T", "tags": ["a"], "summary": "S"}')
+
+        result = tasks.extract_slm_metadata(sample_job_id, "test.md")
+
+        assert result['status'] == 'success'
+        assert slm.create_completion.call_count == 1  # no repair retry needed
+        success_calls = [c for c in mock_update.call_args_list if c.args[1].get('slm_status') == 'SUCCESS']
+        assert len(success_calls) == 1
+        assert 'metadata_degraded' not in success_calls[0].args[1]
+
+    @patch('tasks.update_job_metadata')
+    @patch('os.path.exists', return_value=True)
+    @patch('builtins.open', new_callable=mock_open, read_data="# Some document\n\ncontent here")
+    def test_malformed_json_triggers_one_repair_retry_then_succeeds(self, mock_file, mock_exists, mock_update, sample_job_id):
+        slm = self._mock_slm(
+            'this is not JSON at all',
+            '{"title": "Fixed", "tags": ["b"], "summary": "Repaired"}',
+        )
+
+        result = tasks.extract_slm_metadata(sample_job_id, "test.md")
+
+        assert result['status'] == 'success'
+        assert result['metadata']['title'] == 'Fixed'
+        assert slm.create_completion.call_count == 2  # original + exactly one repair retry
+        success_calls = [c for c in mock_update.call_args_list if c.args[1].get('slm_status') == 'SUCCESS']
+        assert len(success_calls) == 1
+
+    @patch('tasks.update_job_metadata')
+    @patch('os.path.exists', return_value=True)
+    @patch('builtins.open', new_callable=mock_open, read_data="# Some document\n\ncontent here")
+    def test_repair_retry_also_fails_sets_degraded_flag(self, mock_file, mock_exists, mock_update, sample_job_id):
+        slm = self._mock_slm(
+            'still not JSON',
+            'nope, also not JSON',
+        )
+
+        result = tasks.extract_slm_metadata(sample_job_id, "test.md")
+
+        assert result['status'] == 'failure'
+        assert result['metadata_degraded'] is True
+        assert slm.create_completion.call_count == 2  # exactly one retry, not an unbounded loop
+
+        degraded_calls = [c for c in mock_update.call_args_list if c.args[1].get('metadata_degraded') == 'true']
+        assert len(degraded_calls) == 1
+        assert degraded_calls[0].args[1]['slm_status'] == 'FAILURE'
+        # Never silently claim success with a fabricated/default metadata payload.
+        assert not any(c.args[1].get('slm_status') == 'SUCCESS' for c in mock_update.call_args_list)
+
+
 # ─── fire_webhook Tests ───────────────────────────────────────────────────────
 
 class TestFireWebhook:
