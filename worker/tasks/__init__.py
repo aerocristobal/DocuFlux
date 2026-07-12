@@ -81,6 +81,7 @@ celery.conf.task_routes = {
     'tasks.convert_with_marker': {'queue': 'gpu'},
     'tasks.convert_with_marker_slm': {'queue': 'gpu'},
     'tasks.convert_with_hybrid': {'queue': 'gpu'},
+    'tasks.convert_with_ocr': {'queue': 'default'},
 }
 
 # Epic 7.3: Dead letter queue — capture permanently failed tasks

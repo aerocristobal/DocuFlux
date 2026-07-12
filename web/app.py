@@ -220,6 +220,7 @@ celery.conf.task_routes = {
     'tasks.convert_with_marker': {'queue': 'gpu'},
     'tasks.convert_with_marker_slm': {'queue': 'gpu'},
     'tasks.convert_with_hybrid': {'queue': 'gpu'},
+    'tasks.convert_with_ocr': {'queue': 'default'},
     'tasks.assemble_capture_session': {'queue': 'default'},
 }
 
@@ -326,6 +327,7 @@ def get_job_metadata(job_id):
 
 import secrets
 import hashlib
+import hmac
 from functools import wraps
 
 APIKEY_PREFIX = 'apikey:'
@@ -340,10 +342,12 @@ def _key_id(key):
     """Non-reversible identifier for audit logs (Story 4.3).
 
     The raw key itself must never appear in logs, so audit events log this
-    hash prefix instead — stable enough to correlate events for the same
-    key, but useless for reconstructing the secret.
+    HMAC prefix instead — stable enough to correlate events for the same
+    key, but useless for reconstructing the secret. Keyed with the app's
+    SECRET_KEY (rather than plain SHA256) so the ID can't be matched
+    against a precomputed table of API key hashes.
     """
-    return hashlib.sha256(key.encode()).hexdigest()[:16]
+    return hmac.new(app.secret_key.encode(), key.encode(), hashlib.sha256).hexdigest()[:16]
 
 
 def _validate_api_key(key):

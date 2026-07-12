@@ -397,6 +397,7 @@ class TestConvertDocument:
 class TestEmptyOutputDetection:
     """Story 3.1: Pandoc exiting 0 with empty output must FAIL, not COMPLETE."""
 
+    @patch('tasks.fire_webhook')
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
     @patch('subprocess.run')
@@ -405,7 +406,7 @@ class TestEmptyOutputDetection:
     @patch('os.path.exists')
     def test_empty_output_marks_failure_with_reason(
             self, mock_exists, mock_getsize, mock_makedirs, mock_run,
-            mock_socketio, mock_redis, sample_job_id):
+            mock_socketio, mock_redis, mock_webhook, sample_job_id):
         """Pandoc writes a 0-byte file but exits 0 -> job FAILED, reason empty_output."""
         import subprocess as _sp
         mock_exists.return_value = True
@@ -431,6 +432,13 @@ class TestEmptyOutputDetection:
             for c in mock_redis.hset.call_args_list
         )
         assert wrote_reason, "expected a FAILURE write with reason_code=empty_output"
+
+        # Regression: the empty-output raise must not also be caught by the
+        # generic `except Exception` handler and re-accounted a second time
+        # (double webhook fire, double metric increments, double gauge decrement).
+        assert mock_webhook.call_count == 1, (
+            f"expected exactly one FAILURE webhook, got {mock_webhook.call_count}"
+        )
 
 
 class TestQualityScoringPersistence:
@@ -547,6 +555,44 @@ class TestConvertWithMarker:
         )
 
         assert result['status'] == 'success'
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks.get_model_dict')
+    @patch('os.makedirs')
+    @patch('os.path.exists')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_success_persists_quality_metadata(self, mock_file, mock_exists, mock_makedirs,
+                                                 mock_get_models, mock_slm,
+                                                 mock_socketio, mock_redis, sample_job_id):
+        """Story 1.1/1.3: Marker's SUCCESS path scores and persists quality,
+        same as the Pandoc path (previously only convert_document did this)."""
+        mock_exists.return_value = True
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
+        mock_redis.hset = MagicMock()
+        mock_redis.hget = MagicMock(return_value="10")
+        mock_get_models.return_value = {}
+        mock_slm.delay = MagicMock()
+
+        # Sparse text -> grade "poor", matching convert_document's quality test.
+        sparse_md = "foo bar baz\n" * 10
+        _make_pdf_converter_mock(text=sparse_md, images={})
+
+        result = tasks.convert_with_marker.run(
+            sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+        )
+
+        assert result['status'] == 'success'
+        success_write = None
+        for c in mock_redis.hset.call_args_list:
+            d = c.kwargs.get('mapping')
+            if isinstance(d, dict) and d.get('status') == 'SUCCESS':
+                success_write = d
+        assert success_write is not None, "no SUCCESS metadata write captured"
+        assert success_write.get('quality_grade') == 'poor'
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -1665,6 +1711,61 @@ class TestConvertWithHybrid:
         assert result['status'] == 'success'
         assert result['engine'] == 'marker'
         mock_run_marker.assert_called_once()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks._save_marker_output')
+    @patch('tasks._check_pdf_page_limit', return_value=None)
+    @patch('tasks.subprocess.run')
+    def test_marker_fallback_persists_quality_metadata(
+        self, mock_run, mock_page_limit, mock_save, mock_run_marker,
+        mock_slm, mock_socketio, mock_redis
+    ):
+        """Story 1.1/1.3: the Marker-fallback SUCCESS path also scores and
+        persists quality (previously only the Pandoc fast path did this)."""
+        import tasks
+        import tempfile
+        import os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+        mock_redis.hset = MagicMock()
+        mock_run_marker.return_value = (MagicMock(), MagicMock())
+        # Sparse text -> grade "poor", matching convert_document's quality test.
+        sparse_md = "foo bar baz\n" * 10
+        mock_save.return_value = (sparse_md, {}, 0, 1)
+
+        # A scanned PDF with no text layer: Pandoc extracts almost nothing,
+        # forcing the Marker fallback whose output is scored above.
+        mock_run.side_effect = self._pandoc_writes("\n\n\n")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake pdf content')
+            result = tasks.convert_with_hybrid(job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown')
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'marker'
+        success_write = None
+        for c in mock_redis.hset.call_args_list:
+            d = c.kwargs.get('mapping')
+            if isinstance(d, dict) and d.get('status') == 'SUCCESS':
+                success_write = d
+        assert success_write is not None, "no SUCCESS metadata write captured"
+        # Previously the marker-fallback SUCCESS path wrote no quality fields
+        # at all; confirm scoring now ran (exact grade depends on the scorer's
+        # word-density heuristic without a known page_count in this test).
+        assert success_write.get('quality_grade') in ('poor', 'fair')
+        assert success_write.get('quality_score') is not None
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')

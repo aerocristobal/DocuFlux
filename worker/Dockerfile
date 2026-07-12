@@ -79,7 +79,7 @@ ENV TRANSFORMERS_CACHE=/app/.cache/huggingface
 ENV HF_DATASETS_CACHE=/app/.cache/huggingface/datasets
 
 # Copy appropriate requirements file based on build mode
-COPY worker/requirements-true.txt requirements-build.txt
+COPY worker/requirements-${BUILD_GPU}.txt requirements-build.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --upgrade pip setuptools
 RUN --mount=type=cache,target=/root/.cache/pip \

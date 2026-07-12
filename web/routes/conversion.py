@@ -464,8 +464,8 @@ def api_v1_convert():
     # Story 1.5: text-only consumers can skip extracted images entirely.
     include_images = request.form.get('include_images', 'true').lower() == 'true'
 
-    if engine not in ['pandoc', 'marker', 'ocr']:
-        return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc", "marker", or "ocr"'}), 422
+    if engine not in ['pandoc', 'marker', 'hybrid', 'marker_slm', 'ocr']:
+        return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc", "marker", "hybrid", "marker_slm", or "ocr"'}), 422
 
     pandoc_options = None
     raw_pandoc = request.form.get('pandoc_options')

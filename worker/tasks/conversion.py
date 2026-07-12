@@ -20,6 +20,39 @@ from table_postprocess import normalize_tables
 _MARKDOWN_OUTPUT_FORMATS = {"markdown", "gfm"}
 
 
+class _AlreadyHandledFailure(Exception):
+    """Marks a failure whose metadata/webhook/metrics accounting has already
+    run, so the outer generic `except Exception` must re-raise it as-is
+    rather than repeating that accounting a second time."""
+
+
+def _score_quality(job_id, markdown_text):
+    """Score Markdown output quality and return (quality_meta, report).
+
+    Shared by every engine's SUCCESS path (Story 1.1/1.3) so quality is
+    visible in job metadata, /api/v1/status, and SUCCESS webhooks regardless
+    of which engine produced the Markdown. Best-effort — a scorer error must
+    never fail an otherwise-good job.
+    """
+    quality_meta = {}
+    report = None
+    try:
+        page_count_raw = _pkg.redis_client.hget(f"job:{job_id}", 'page_count')
+        try:
+            page_count = int(page_count_raw) if page_count_raw else None
+        except (TypeError, ValueError):
+            page_count = None
+        report = score_markdown(markdown_text, page_count=page_count)
+        quality_meta = report.to_metadata()
+        logging.info(
+            f"Quality for job {job_id}: grade={report.grade} "
+            f"score={report.score} reasons={report.reason_codes}"
+        )
+    except Exception as qe:  # pragma: no cover - defensive
+        logging.warning(f"Quality scoring failed for job {job_id}: {qe}")
+    return quality_meta, report
+
+
 # ── Marker helpers (shared by marker, marker_slm, hybrid) ──────────────────
 
 model_dict = None
@@ -300,7 +333,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
                 conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='empty_output').inc()
                 conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
                 worker_tasks_active.dec()
-                raise Exception(error_msg)
+                raise _AlreadyHandledFailure(error_msg)
 
             # Story 1.1: Score Markdown output quality and persist the report so
             # degraded conversions are detectable before users see them. Scoring is
@@ -314,17 +347,7 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
                     md_text = _pkg._postprocess_tables(md_text, job_id)
                     with open(output_path, 'w', encoding='utf-8') as fh:
                         fh.write(md_text)
-                    page_count_raw = _pkg.redis_client.hget(f"job:{job_id}", 'page_count')
-                    try:
-                        page_count = int(page_count_raw) if page_count_raw else None
-                    except (TypeError, ValueError):
-                        page_count = None
-                    report = score_markdown(md_text, page_count=page_count)
-                    quality_meta = report.to_metadata()
-                    logging.info(
-                        f"Quality for job {job_id}: grade={report.grade} "
-                        f"score={report.score} reasons={report.reason_codes}"
-                    )
+                    quality_meta, report = _score_quality(job_id, md_text)
                 except Exception as qe:  # pragma: no cover - defensive
                     logging.warning(f"Quality scoring failed for job {job_id}: {qe}")
 
@@ -382,6 +405,10 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
             worker_tasks_active.dec()
 
             raise Exception(f"Pandoc failed: {error_msg}")
+        except _AlreadyHandledFailure:
+            # Metadata/webhook/metrics accounting already ran at the raise
+            # site (e.g. the empty-output check above) — don't repeat it.
+            raise
         except Exception as e:
             logging.error(f"Unexpected error for job {job_id}: {str(e)}")
             _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
@@ -468,12 +495,21 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
             _pkg.update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count), 'stage': 'Finalizing output'})
             logging.info(f"Marker conversion successful: {output_path}")
 
+            quality_meta = {}
+            report = None
+            if to_format in _MARKDOWN_OUTPUT_FORMATS:
+                quality_meta, report = _score_quality(job_id, text)
+
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),
-                'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
+                'progress': '100', 'encrypted': 'false', 'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
             _pkg.extract_slm_metadata.delay(job_id, output_path)
 
             duration = time.time() - start_time
@@ -581,12 +617,21 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
             _pkg.update_job_metadata(job_id, {'progress': '95', 'file_count': str(file_count), 'stage': 'Finalizing output'})
             logging.info(f"Marker+SLM conversion successful: {output_path}")
 
+            quality_meta = {}
+            report = None
+            if to_format in _MARKDOWN_OUTPUT_FORMATS:
+                quality_meta, report = _score_quality(job_id, refined_text)
+
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),
-                'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
+                'progress': '100', 'encrypted': 'false', 'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
             _pkg.extract_slm_metadata.delay(job_id, output_path)
 
             duration = time.time() - start_time
@@ -695,8 +740,7 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
                 pandoc_text = _pkg._postprocess_tables(pandoc_text, job_id)
                 with open(output_path, 'w', encoding='utf-8') as fh:
                     fh.write(pandoc_text)
-                report = score_markdown(pandoc_text, page_count=page_count)
-                quality_meta = report.to_metadata()
+                quality_meta, report = _score_quality(job_id, pandoc_text)
             except Exception as qe:  # pragma: no cover - defensive
                 logging.warning(f"Quality metadata persistence failed for job {job_id}: {qe}")
 
@@ -743,13 +787,22 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
                 job_id=job_id,
             )
 
+            quality_meta = {}
+            report = None
+            if to_format in _MARKDOWN_OUTPUT_FORMATS:
+                quality_meta, report = _score_quality(job_id, text)
+
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),
                 'progress': '100', 'encrypted': 'false', 'file_count': str(file_count),
-                'hybrid_engine_used': 'marker', 'stage': 'Complete'
+                'hybrid_engine_used': 'marker', 'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
             _pkg.extract_slm_metadata.delay(job_id, output_path)
 
             duration = time.time() - start_time

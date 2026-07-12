@@ -150,7 +150,7 @@ def _malformed_table_count(text: str) -> int:
 def _col_count(row: str) -> int:
     """Number of cells in a Markdown table row (ignoring leading/trailing pipes)."""
     stripped = row.strip()
-    stripped = stripped.removeprefix("|") if hasattr(str, "removeprefix") else stripped.lstrip("|")
+    stripped = stripped.removeprefix("|")
     stripped = stripped[:-1] if stripped.endswith("|") else stripped
     return len([c for c in stripped.split("|")])
 

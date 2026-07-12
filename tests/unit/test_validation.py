@@ -196,6 +196,23 @@ class TestValidateFileContentType:
         assert is_valid is False
         assert 'polyglot' in error.lower() or 'mismatch' in error.lower()
 
+    def test_pdf_with_coincidental_eocd_bytes_in_body_not_rejected(self):
+        """A legitimate, large PDF whose binary body happens to contain the
+        4-byte ZIP EOCD signature (PK\\x05\\x06) well before the file's
+        trailing region — e.g. inside an embedded compressed stream — is not
+        a real PDF/ZIP polyglot and must not be rejected. Only an EOCD within
+        the trailing ~64KB (where ZIP readers actually look for it) indicates
+        a genuine polyglot; the signature must appear far enough from EOF
+        that it falls outside that window, which requires the file to exceed
+        the window size."""
+        body = (
+            b'stream\n' + (b'x' * 200) + b'PK\x05\x06' + (b'y' * 200) + b'\nendstream\n'
+            + b'z' * 70000  # pushes the EOCD bytes outside the trailing 65557-byte window
+        )
+        f = _make_file(_make_pdf(body))
+        is_valid, error = validate_file_content_type(f, '.pdf')
+        assert is_valid is True, f"expected valid PDF, got error: {error}"
+
     def test_docx_bytes_declared_as_pdf_rejected(self):
         """Scenario: extension/content-type mismatch is rejected (alternative error)."""
         f = _make_file(_make_docx())

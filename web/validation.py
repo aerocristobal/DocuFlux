@@ -271,6 +271,12 @@ _ZIP_FORMAT_MARKERS = {
 }
 
 _ZIP_EOCD_SIGNATURE = b'PK\x05\x06'  # End Of Central Directory record
+# A valid ZIP EOCD record is 22 bytes plus up to a 65535-byte comment field,
+# so any real ZIP archive's EOCD is within this many bytes of EOF. Searching
+# the whole file for this 4-byte signature (rather than just this trailing
+# window) risks false-positive polyglot rejections on legitimate PDFs whose
+# binary streams happen to contain the same 4 bytes by coincidence.
+_ZIP_EOCD_SEARCH_WINDOW = 65557
 
 
 def _sniff_mime(content):
@@ -322,7 +328,7 @@ def validate_file_content_type(file, declared_extension):
     if ext == '.pdf':
         if not header.startswith(b'%PDF'):
             return False, "File does not appear to be a valid PDF (missing %PDF header)"
-        if _ZIP_EOCD_SIGNATURE in content:
+        if _ZIP_EOCD_SIGNATURE in content[-_ZIP_EOCD_SEARCH_WINDOW:]:
             return False, "File content mismatch: PDF also contains a ZIP archive structure (polyglot)"
         if b'%%EOF' not in content[-2048:]:
             return False, "File does not appear to be a valid PDF (missing %%EOF — corrupt or truncated structure)"
