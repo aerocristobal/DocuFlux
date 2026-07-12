@@ -358,7 +358,7 @@ python3 -m py_compile web/app.py worker/tasks/conversion.py worker/warmup.py
 |----------|-------------|
 | [Product Requirements (PRD)](docs/PRD.md) | Product overview, personas, requirements, success metrics |
 | [Architecture](docs/ARCHITECTURE.md) | C4-style system views, data flows, security architecture, ADRs |
-| [Improvement Backlog](docs/BACKLOG.md) | Prioritized epics: conversion quality, OCR, hardening, optimization |
+| [Improvement Backlog](docs/user-stories/BACKLOG.md) | Prioritized epics: conversion quality, OCR, hardening, optimization |
 | [Build Guide](BUILD.md) | GPU/CPU build profiles and deployment |
 | [API Reference](docs/API.md) | Full REST API documentation |
 | [UI Specification](docs/UI_SPECIFICATION.md) | UI elements, workflows, and state machine |

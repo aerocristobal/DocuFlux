@@ -1,9 +1,9 @@
 # DocuFlux — Architecture Document
 
 **Status:** Current-state description · **Last updated:** 2026-06-11
-**Related docs:** [PRD.md](PRD.md) · [BACKLOG.md](BACKLOG.md) · [API.md](API.md) · [CONFIGURATION.md](CONFIGURATION.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [AI_INTEGRATION.md](AI_INTEGRATION.md)
+**Related docs:** [PRD.md](PRD.md) · [BACKLOG.md](user-stories/BACKLOG.md) · [API.md](API.md) · [CONFIGURATION.md](CONFIGURATION.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [AI_INTEGRATION.md](AI_INTEGRATION.md)
 
-This document describes the system as it exists today, including known gaps. Planned changes are referenced by their [BACKLOG.md](BACKLOG.md) story IDs.
+This document describes the system as it exists today, including known gaps. Planned changes are referenced by their [BACKLOG.md](user-stories/BACKLOG.md) story IDs.
 
 ---
 
@@ -369,9 +369,9 @@ Single Pydantic Settings class (`config.py`); precedence Docker secrets → envi
 
 | Limitation | Where | Planned evolution |
 |------------|-------|-------------------|
-| No quality signal on conversions | `worker/tasks/conversion.py`, API responses | [Backlog Epic 1](BACKLOG.md#epic-1) — scoring, smarter routing, quality in API |
-| No OCR on CPU deployments | worker CPU image | [Backlog Epic 2](BACKLOG.md#epic-2) — Tesseract fallback + routing |
-| Silent partial failures, temp-file leaks, healthcheck bug | worker tasks, compose | [Backlog Epic 3](BACKLOG.md#epic-3) |
-| Redis TLS off, key lifecycle, shallow validation, MCP root | redis, key_manager, validation, mcp_server | [Backlog Epic 4](BACKLOG.md#epic-4) |
-| Untested crypto, unpinned images, no lint/SAST/scan/SBOM | `.coveragerc`, Dockerfiles, CI | [Backlog Epic 5](BACKLOG.md#epic-5) |
-| Cold-start latency, head-of-line blocking, memory-bound I/O | warmup, queues, storage | [Backlog Epic 6](BACKLOG.md#epic-6) |
+| No quality signal on conversions | `worker/tasks/conversion.py`, API responses | [Backlog Epic 1](user-stories/BACKLOG.md#epic-1) — scoring, smarter routing, quality in API |
+| No OCR on CPU deployments | worker CPU image | [Backlog Epic 2](user-stories/BACKLOG.md#epic-2) — Tesseract fallback + routing |
+| Silent partial failures, temp-file leaks, healthcheck bug | worker tasks, compose | [Backlog Epic 3](user-stories/BACKLOG.md#epic-3) |
+| Redis TLS off, key lifecycle, shallow validation, MCP root | redis, key_manager, validation, mcp_server | [Backlog Epic 4](user-stories/BACKLOG.md#epic-4) |
+| Untested crypto, unpinned images, no lint/SAST/scan/SBOM | `.coveragerc`, Dockerfiles, CI | [Backlog Epic 5](user-stories/BACKLOG.md#epic-5) |
+| Cold-start latency, head-of-line blocking, memory-bound I/O | warmup, queues, storage | [Backlog Epic 6](user-stories/BACKLOG.md#epic-6) |
