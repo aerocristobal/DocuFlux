@@ -111,14 +111,18 @@ services:
       # - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       # - S3_REGION=us-east-1
       # - S3_SSE_ALGORITHM=AES256
+    # Story 6.3: heavy lane is GPU-queue only now. A 10-minute Marker job no
+    # longer sits ahead of Pandoc/metadata/maintenance tasks queued behind
+    # it — those go to worker-light below, a separate process/queue.
+    # GPU exclusivity preserved: concurrency stays 1 for this lane.
     command: >
       celery -A tasks worker
       --loglevel=info
       --pool=solo
       --without-mingle
       --without-gossip
-      --concurrency=${WORKER_CONCURRENCY:-1}
-      -Q gpu,high_priority,default
+      --concurrency=1
+      -Q gpu
     depends_on:
       redis:
         condition: service_healthy
@@ -142,10 +146,66 @@ services:
       - ALL
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=3g  # Increased for Marker model downloads
+    # Story 3.2: Probe Celery itself, not the MCP server. A dead Celery worker
+    # now flips the container to unhealthy so the orchestrator restarts it, and
+    # the check no longer depends on the MCP endpoint being reachable.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "celery -A tasks inspect ping -d celery@$${HOSTNAME} -t 5 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # Story 6.3: light lane — Pandoc, OCR, metadata, and maintenance tasks run
+  # here, on a separate process from the GPU/Marker worker above, so a long
+  # Marker job never blocks them. No GPU reservation; cheap to run/restart.
+  worker-light:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+      args:
+        BUILD_GPU: "false"
+    volumes:
+      - ./data:/app/data
+      - ./deploy/certs:/certs:ro  # Epic 24.1: Mount certificates for TLS
+    environment:
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - REDIS_METADATA_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - SECRET_KEY=${SECRET_KEY}
+      - MCP_SECRET=${MCP_SECRET}
+      - BUILD_GPU=false
+      - MARKER_ENABLED=false
+    command: >
+      celery -A tasks worker
+      --loglevel=info
+      --pool=solo
+      --without-mingle
+      --without-gossip
+      --concurrency=1
+      -Q high_priority,default
+    depends_on:
+      redis:
+        condition: service_healthy
+      mcp-server:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=1g
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A tasks inspect ping -d celery@$${HOSTNAME} -t 5 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
       retries: 3
       start_period: 30s
     restart: unless-stopped

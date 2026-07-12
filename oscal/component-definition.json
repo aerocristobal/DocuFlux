@@ -3,7 +3,7 @@
     "uuid": "ac4bf039-2da6-458a-972c-bf8f999ec25a",
     "metadata": {
       "title": "DocuFlux Component Definition",
-      "last-modified": "2026-03-21T00:00:00Z",
+      "last-modified": "2026-07-10T00:00:00Z",
       "version": "1.0.0",
       "oscal-version": "1.1.2",
       "roles": [
@@ -30,7 +30,9 @@
         "responsible-roles": [
           {
             "role-id": "provider",
-            "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+            "party-uuids": [
+              "72a08160-e279-4cc9-b49a-893847e22ff6"
+            ]
           }
         ],
         "protocols": [
@@ -91,7 +93,9 @@
         "responsible-roles": [
           {
             "role-id": "provider",
-            "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+            "party-uuids": [
+              "72a08160-e279-4cc9-b49a-893847e22ff6"
+            ]
           }
         ],
         "control-implementations": [
@@ -123,7 +127,9 @@
         "responsible-roles": [
           {
             "role-id": "provider",
-            "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+            "party-uuids": [
+              "72a08160-e279-4cc9-b49a-893847e22ff6"
+            ]
           }
         ],
         "protocols": [
@@ -154,7 +160,7 @@
               {
                 "uuid": "6d1bb212-ec1c-455f-8c16-8d6ff10d7250",
                 "control-id": "sc-8",
-                "description": "Redis supports optional TLS in-transit encryption configured via REDIS_TLS_CERT, REDIS_TLS_KEY, and REDIS_TLS_CA environment variables (config.py). TLS is enabled through docker-compose.tls.yml overlay. Internal communication occurs within the Docker bridge network or Kubernetes namespace, isolated by NetworkPolicy default-deny rules (deploy/k8s/network-policies.yaml)."
+                "description": "Redis TLS is generated via scripts/generate-redis-certs.sh and enabled through the docker-compose.tls.yml overlay (Story 4.1a); the server refuses plaintext connections under this profile (--port 0, --tls-port 6380) rather than merely offering TLS as an option. Every application-side consumer connects exclusively through shared/redis_client.py's create_redis_client()/create_sentinel_client() (Story 4.1b), which wires ssl_cert_reqs=required plus ca_certs/certfile/keyfile \u2014 no consumer constructs a raw, unverified client. Internal communication additionally occurs within the Docker bridge network or Kubernetes namespace, isolated by NetworkPolicy default-deny rules (deploy/k8s/network-policies.yaml)."
               },
               {
                 "uuid": "6c2f399f-2d7b-4fd8-80b6-724bf42135e5",
@@ -174,7 +180,9 @@
         "responsible-roles": [
           {
             "role-id": "provider",
-            "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+            "party-uuids": [
+              "72a08160-e279-4cc9-b49a-893847e22ff6"
+            ]
           }
         ],
         "control-implementations": [

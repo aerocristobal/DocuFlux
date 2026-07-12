@@ -67,11 +67,23 @@ class Settings(BaseSettings):
     mcp_server_url: str = Field("http://mcp-server:8080/execute", validation_alias="MCP_SERVER_URL")
 
     # --- Marker/SLM Specific ---
+    # Story 1.2: minimum shared/quality.py score (0-100) Pandoc output must
+    # meet for the hybrid engine to accept it; below this, falls back to Marker.
+    hybrid_quality_threshold: int = Field(60, validation_alias="HYBRID_QUALITY_THRESHOLD")
     max_marker_pages: int = Field(600, validation_alias="MAX_MARKER_PAGES")
     max_slm_context: int = Field(2000, validation_alias="MAX_SLM_CONTEXT")  # Example token limit
     slm_model_path: Optional[str] = Field(None, validation_alias="SLM_MODEL_PATH")  # No default, as it might be dynamically loaded
     marker_enabled: bool = Field(False, validation_alias="MARKER_ENABLED") # Default to False if not specified
     build_gpu: bool = Field(False, validation_alias="BUILD_GPU") # Default to False if not specified
+    # Story 6.2: preload Marker models in the Celery worker process at
+    # startup instead of on the first PDF conversion. Opt-in (defaults to
+    # today's lazy-loading behavior) since it adds real time/VRAM cost to
+    # worker startup.
+    eager_marker_warmup: bool = Field(False, validation_alias="EAGER_MARKER_WARMUP")
+
+    # Story 4.3: default lifetime for newly-created API keys. Overridable
+    # per-key via POST /api/v1/auth/keys's expires_in_days.
+    api_key_default_ttl_days: int = Field(90, validation_alias="API_KEY_DEFAULT_TTL_DAYS")
 
     @validator('build_gpu', pre=True)
     def build_gpu_auto(cls, v):
@@ -96,6 +108,10 @@ class Settings(BaseSettings):
     # Pydantic can parse JSON strings into Python types
     default_limits: List[str] = Field(["1000 per day", "200 per hour"], validation_alias="FLASK_LIMITER_DEFAULT_LIMITS")
     storage_uri: Optional[str] = Field(None, validation_alias="FLASK_LIMITER_STORAGE_URI") # Defaults to REDIS_METADATA_URL if None, handled below in settings instance creation
+    # Story 4.2: Explicit, configurable rate limit for the conversion endpoints
+    # (/convert and /api/v1/convert). Override via CONVERT_RATE_LIMIT, e.g.
+    # "60 per minute" or "500 per hour;50 per minute".
+    convert_rate_limit: str = Field("200 per hour", validation_alias="CONVERT_RATE_LIMIT")
 
     # --- Flask-SocketIO Settings ---
     socketio_async_mode: Literal["eventlet", "gevent", "threading", "fork"] = Field("eventlet", validation_alias="SOCKETIO_ASYNC_MODE")

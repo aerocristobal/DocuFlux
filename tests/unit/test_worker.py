@@ -144,11 +144,13 @@ class TestConvertDocument:
     @patch('tasks.socketio')
     @patch('subprocess.run')
     @patch('os.makedirs')
+    @patch('os.path.getsize')
     @patch('os.path.exists')
-    def test_success(self, mock_exists, mock_makedirs, mock_run,
+    def test_success(self, mock_exists, mock_getsize, mock_makedirs, mock_run,
                      mock_socketio, mock_redis, sample_job_id):
         """Pandoc conversion returns success and calls subprocess with pandoc."""
         mock_exists.return_value = True
+        mock_getsize.return_value = 1234  # non-empty output (Story 3.1)
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mock_redis.hset = MagicMock()
         mock_redis.hgetall = MagicMock(return_value={})
@@ -213,12 +215,14 @@ class TestConvertDocument:
     @patch('tasks.socketio')
     @patch('subprocess.run')
     @patch('os.makedirs')
+    @patch('os.path.getsize')
     @patch('os.path.exists')
-    def test_pdf_output_uses_xelatex(self, mock_exists, mock_makedirs,
+    def test_pdf_output_uses_xelatex(self, mock_exists, mock_getsize, mock_makedirs,
                                       mock_run, mock_socketio, mock_redis,
                                       sample_job_id):
         """PDF conversion includes XeLaTeX engine flag for CJK support."""
         mock_exists.return_value = True
+        mock_getsize.return_value = 4096  # non-empty output (Story 3.1)
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mock_redis.hset = MagicMock()
         mock_redis.hgetall = MagicMock(return_value={})
@@ -262,18 +266,70 @@ class TestConvertDocument:
 
         mock_redis.hset.assert_called()
 
+    @patch('tasks.fire_webhook')
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('subprocess.run')
+    def test_success_webhook_includes_quality_for_markdown_output(
+        self, mock_run, mock_socketio, mock_redis, mock_webhook, sample_job_id
+    ):
+        """Story 1.3: SUCCESS webhook payload carries the quality object
+        (same shape as api_v1_status), using the real scorer end-to-end."""
+        import os
+        import tempfile
+        mock_redis.hget.return_value = None
+        mock_redis.hgetall.return_value = {}
+        mock_redis.expire.return_value = True
+
+        good_text = "# Title\n\n" + ("Real prose content here. " * 30)
+
+        def _write_output(cmd, **kwargs):
+            output_path = cmd[cmd.index('-o') + 1]
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(good_text)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _write_output
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            os.makedirs(os.path.join(tmpdir, sample_job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, sample_job_id, 'test.md'), 'w') as f:
+                f.write('# hi')
+
+            result = tasks.convert_document(
+                job_id=sample_job_id,
+                input_filename='test.md',
+                output_filename='test.md',
+                from_format='markdown',
+                to_format='markdown',
+            )
+            tasks.storage = old_storage
+
+        assert result['status'] == 'success'
+        mock_webhook.assert_called_once()
+        args, _ = mock_webhook.call_args
+        _, webhook_status, webhook_extra = args
+        assert webhook_status == 'SUCCESS'
+        assert 'quality' in webhook_extra
+        assert webhook_extra['quality']['grade'] in ('good', 'fair', 'poor')
+        assert isinstance(webhook_extra['quality']['metrics'], dict)
+
     @patch('tasks.storage.cleanup_local_stage')
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
     @patch('subprocess.run')
     @patch('os.makedirs')
+    @patch('os.path.getsize')
     @patch('os.path.exists')
     def test_cleanup_local_stage_called_on_success(
-        self, mock_exists, mock_makedirs, mock_run, mock_socketio,
+        self, mock_exists, mock_getsize, mock_makedirs, mock_run, mock_socketio,
         mock_redis, mock_cleanup, sample_job_id
     ):
         """Story 3.3: local stage is always released, even on the happy path."""
         mock_exists.return_value = True
+        mock_getsize.return_value = 1234  # non-empty output (Story 3.1)
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         mock_redis.hset = MagicMock()
         mock_redis.hgetall = MagicMock(return_value={})
@@ -336,6 +392,98 @@ class TestConvertDocument:
 
         assert result['status'] == 'error'
         mock_cleanup.assert_not_called()
+
+
+class TestEmptyOutputDetection:
+    """Story 3.1: Pandoc exiting 0 with empty output must FAIL, not COMPLETE."""
+
+    @patch('tasks.fire_webhook')
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('subprocess.run')
+    @patch('os.makedirs')
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_empty_output_marks_failure_with_reason(
+            self, mock_exists, mock_getsize, mock_makedirs, mock_run,
+            mock_socketio, mock_redis, mock_webhook, sample_job_id):
+        """Pandoc writes a 0-byte file but exits 0 -> job FAILED, reason empty_output."""
+        import subprocess as _sp
+        mock_exists.return_value = True
+        mock_getsize.return_value = 0  # 0-byte output despite success exit
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_redis.hset = MagicMock()
+        mock_redis.hgetall = MagicMock(return_value={})
+
+        with pytest.raises(Exception, match="empty output"):
+            tasks.convert_document(
+                job_id=sample_job_id,
+                input_filename='bad.md',
+                output_filename='bad.html',
+                from_format='markdown',
+                to_format='html',
+            )
+
+        # The FAILURE metadata write must carry the empty_output reason code.
+        wrote_reason = any(
+            isinstance(c.kwargs.get('mapping'), dict)
+            and c.kwargs['mapping'].get('reason_code') == 'empty_output'
+            and c.kwargs['mapping'].get('status') == 'FAILURE'
+            for c in mock_redis.hset.call_args_list
+        )
+        assert wrote_reason, "expected a FAILURE write with reason_code=empty_output"
+
+        # Regression: the empty-output raise must not also be caught by the
+        # generic `except Exception` handler and re-accounted a second time
+        # (double webhook fire, double metric increments, double gauge decrement).
+        assert mock_webhook.call_count == 1, (
+            f"expected exactly one FAILURE webhook, got {mock_webhook.call_count}"
+        )
+
+
+class TestQualityScoringPersistence:
+    """Story 1.1: a Markdown conversion persists a quality grade/score/reasons."""
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('subprocess.run')
+    @patch('os.makedirs')
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_quality_metadata_persisted_for_markdown_output(
+            self, mock_exists, mock_getsize, mock_makedirs, mock_run,
+            mock_socketio, mock_redis, sample_job_id):
+        """A poor Markdown output persists quality_grade/score/reasons."""
+        mock_exists.return_value = True
+        mock_getsize.return_value = 12  # non-empty (passes 3.1)
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_redis.hset = MagicMock()
+        # page_count lookup used by the scorer
+        mock_redis.hget = MagicMock(return_value="10")
+        mock_redis.hgetall = MagicMock(return_value={})
+
+        # The converted file reads back as sparse markdown -> grade "poor".
+        sparse_md = "foo bar baz\n" * 10
+        with patch('builtins.open', mock_open(read_data=sparse_md)):
+            result = tasks.convert_document(
+                job_id=sample_job_id,
+                input_filename='scan.pdf',
+                output_filename='scan.md',
+                from_format='pdf',
+                to_format='markdown',
+            )
+
+        assert result['status'] == 'success'
+        # The SUCCESS metadata write must include quality fields.
+        success_write = None
+        for c in mock_redis.hset.call_args_list:
+            d = c.kwargs.get('mapping')
+            if isinstance(d, dict) and d.get('status') == 'SUCCESS':
+                success_write = d
+        assert success_write is not None, "no SUCCESS metadata write captured"
+        assert success_write.get('quality_grade') == 'poor'
+        assert 'low_word_density' in success_write.get('quality_reasons', '')
+        assert int(success_write.get('quality_score', '100')) < 45
 
 
 # ============================================================
@@ -407,6 +555,44 @@ class TestConvertWithMarker:
         )
 
         assert result['status'] == 'success'
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks.get_model_dict')
+    @patch('os.makedirs')
+    @patch('os.path.exists')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_success_persists_quality_metadata(self, mock_file, mock_exists, mock_makedirs,
+                                                 mock_get_models, mock_slm,
+                                                 mock_socketio, mock_redis, sample_job_id):
+        """Story 1.1/1.3: Marker's SUCCESS path scores and persists quality,
+        same as the Pandoc path (previously only convert_document did this)."""
+        mock_exists.return_value = True
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
+        mock_redis.hset = MagicMock()
+        mock_redis.hget = MagicMock(return_value="10")
+        mock_get_models.return_value = {}
+        mock_slm.delay = MagicMock()
+
+        # Sparse text -> grade "poor", matching convert_document's quality test.
+        sparse_md = "foo bar baz\n" * 10
+        _make_pdf_converter_mock(text=sparse_md, images={})
+
+        result = tasks.convert_with_marker.run(
+            sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+        )
+
+        assert result['status'] == 'success'
+        success_write = None
+        for c in mock_redis.hset.call_args_list:
+            d = c.kwargs.get('mapping')
+            if isinstance(d, dict) and d.get('status') == 'SUCCESS':
+                success_write = d
+        assert success_write is not None, "no SUCCESS metadata write captured"
+        assert success_write.get('quality_grade') == 'poor'
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -1219,6 +1405,73 @@ class TestFireWebhook:
             tasks.fire_webhook(job_id, 'FAILURE', {'error': 'oops'})
 
 
+class TestSaveMarkerOutput:
+    """Tests for _save_marker_output's include_images option (Story 1.5)."""
+
+    def _mock_rendered(self, text, images):
+        rendered = MagicMock()
+        rendered.metadata = {}
+        sys.modules['marker.output'].text_from_rendered.return_value = (text, {}, images)
+        return rendered
+
+    def test_include_images_true_writes_files_and_relinks(self, tmp_path):
+        img = MagicMock()
+        rendered = self._mock_rendered(
+            "See figure: ![fig1](fig1.png) for details.",
+            {"fig1.png": img},
+        )
+        output_path = tmp_path / "out.md"
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+
+        text, images, count, file_count = tasks._save_marker_output(
+            rendered, str(output_path), str(images_dir), include_images=True
+        )
+
+        img.save.assert_called_once_with(str(images_dir / "fig1.png"))
+        assert "images/fig1.png" in text
+        assert count == 1
+        assert file_count == 2  # markdown + 1 image
+        assert "images/fig1.png" in output_path.read_text()
+
+    def test_include_images_false_skips_files_and_strips_references(self, tmp_path):
+        img = MagicMock()
+        rendered = self._mock_rendered(
+            "See figure: ![fig1](fig1.png) for details.",
+            {"fig1.png": img},
+        )
+        output_path = tmp_path / "out.md"
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+
+        text, images, count, file_count = tasks._save_marker_output(
+            rendered, str(output_path), str(images_dir), include_images=False
+        )
+
+        img.save.assert_not_called()
+        assert "fig1.png" not in text
+        assert "![" not in text  # no broken image markdown left behind
+        assert "See figure:" in text and "for details." in text
+        assert count == 0
+        assert file_count == 1  # markdown only
+        written = output_path.read_text()
+        assert "fig1.png" not in written
+        assert list(images_dir.iterdir()) == []  # nothing written to disk
+
+    def test_include_images_defaults_to_true(self, tmp_path):
+        """Existing callers that don't pass include_images keep prior behavior."""
+        img = MagicMock()
+        rendered = self._mock_rendered("Text ![a](a.png)", {"a.png": img})
+        output_path = tmp_path / "out.md"
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+
+        _, _, count, _ = tasks._save_marker_output(rendered, str(output_path), str(images_dir))
+
+        assert count == 1
+        img.save.assert_called_once()
+
+
 class TestAssessPandocQuality:
     """Tests for the _assess_pandoc_quality helper."""
 
@@ -1318,6 +1571,202 @@ class TestConvertWithHybrid:
         assert result['engine'] == 'marker'
         mock_run_marker.assert_called_once()
 
+    # ── Story 1.2: engine routing driven by the real quality scorer ────────
+    # Unlike the two tests above (which mock _assess_pandoc_quality directly),
+    # these exercise the real scorer against real files so the routing
+    # decision itself — not just a mocked bool — is what's under test.
+
+    def _pandoc_writes(self, content):
+        """subprocess.run side_effect that writes `content` to the pandoc
+        command's -o output path, simulating what real pandoc would produce."""
+        def _run(cmd, **kwargs):
+            output_path = cmd[-1]
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return MagicMock(returncode=0)
+        return _run
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks.subprocess.run')
+    def test_text_based_pdf_routes_to_pandoc(
+        self, mock_run, mock_run_marker, mock_slm, mock_socketio, mock_redis
+    ):
+        """Scenario Outline: text-based PDF -> pandoc (real scorer, real file)."""
+        import tasks
+        import tempfile
+        import os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+
+        good_text = (
+            "# Chapter One\n\n" + ("This is a well-formed paragraph of real prose. " * 40) +
+            "\n\n## Section\n\n" + ("More readable body text follows here. " * 40)
+        )
+        mock_run.side_effect = self._pandoc_writes(good_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake pdf content')
+            result = tasks.convert_with_hybrid(job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown')
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'pandoc'
+        mock_run_marker.assert_not_called()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks._save_marker_output')
+    @patch('tasks._check_pdf_page_limit', return_value=None)
+    @patch('tasks.subprocess.run')
+    def test_scanned_pdf_routes_to_marker(
+        self, mock_run, mock_page_limit, mock_save, mock_run_marker,
+        mock_slm, mock_socketio, mock_redis
+    ):
+        """Scenario Outline: scanned PDF (near-empty text layer) -> marker."""
+        import tasks
+        import tempfile
+        import os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+        mock_run_marker.return_value = (MagicMock(), MagicMock())
+        mock_save.return_value = ('text', {}, 0, 1)
+
+        # A scanned PDF with no text layer: Pandoc extracts almost nothing.
+        scanned_text = "\n\n\n"
+        mock_run.side_effect = self._pandoc_writes(scanned_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake pdf content')
+            result = tasks.convert_with_hybrid(job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown')
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'marker'
+        mock_run_marker.assert_called_once()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks._save_marker_output')
+    @patch('tasks._check_pdf_page_limit', return_value=None)
+    @patch('tasks.subprocess.run')
+    def test_table_heavy_pdf_routes_to_marker(
+        self, mock_run, mock_page_limit, mock_save, mock_run_marker,
+        mock_slm, mock_socketio, mock_redis
+    ):
+        """Scenario Outline: table-heavy PDF (sparse prose, malformed tables) -> marker."""
+        import tasks
+        import tempfile
+        import os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+        mock_run_marker.return_value = (MagicMock(), MagicMock())
+        mock_save.return_value = ('text', {}, 0, 1)
+
+        # A table-heavy PDF poorly handled by Pandoc: sparse prose, a
+        # malformed table (header/separator/body column counts disagree),
+        # no heading structure — realistic worst case, not a contrived one.
+        table_heavy_text = (
+            "a | b | c\n"
+            "---|---\n"
+            "1 | 2 | 3 | 4\n"
+        )
+        mock_run.side_effect = self._pandoc_writes(table_heavy_text)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake pdf content')
+            result = tasks.convert_with_hybrid(job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown')
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'marker'
+        mock_run_marker.assert_called_once()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks._run_marker')
+    @patch('tasks._save_marker_output')
+    @patch('tasks._check_pdf_page_limit', return_value=None)
+    @patch('tasks.subprocess.run')
+    def test_marker_fallback_persists_quality_metadata(
+        self, mock_run, mock_page_limit, mock_save, mock_run_marker,
+        mock_slm, mock_socketio, mock_redis
+    ):
+        """Story 1.1/1.3: the Marker-fallback SUCCESS path also scores and
+        persists quality (previously only the Pandoc fast path did this)."""
+        import tasks
+        import tempfile
+        import os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+        mock_redis.hset = MagicMock()
+        mock_run_marker.return_value = (MagicMock(), MagicMock())
+        # Sparse text -> grade "poor", matching convert_document's quality test.
+        sparse_md = "foo bar baz\n" * 10
+        mock_save.return_value = (sparse_md, {}, 0, 1)
+
+        # A scanned PDF with no text layer: Pandoc extracts almost nothing,
+        # forcing the Marker fallback whose output is scored above.
+        mock_run.side_effect = self._pandoc_writes("\n\n\n")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake pdf content')
+            result = tasks.convert_with_hybrid(job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown')
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert result['engine'] == 'marker'
+        success_write = None
+        for c in mock_redis.hset.call_args_list:
+            d = c.kwargs.get('mapping')
+            if isinstance(d, dict) and d.get('status') == 'SUCCESS':
+                success_write = d
+        assert success_write is not None, "no SUCCESS metadata write captured"
+        # Previously the marker-fallback SUCCESS path wrote no quality fields
+        # at all; confirm scoring now ran (exact grade depends on the scorer's
+        # word-density heuristic without a known page_count in this test).
+        assert success_write.get('quality_grade') in ('poor', 'fair')
+        assert success_write.get('quality_score') is not None
+
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
     def test_invalid_uuid_returns_error(self, mock_socketio, mock_redis):
@@ -1340,6 +1789,160 @@ class TestConvertWithHybrid:
             tasks.convert_with_hybrid(
                 job_id, 'doc.pdf', 'doc.md', 'pdf_hybrid', 'markdown'
             )
+
+
+# ============================================================
+# convert_with_ocr tests (Story 2.1b — CPU-only Tesseract OCR path)
+# ============================================================
+
+class TestConvertWithOcr:
+    """Tests for the convert_with_ocr Celery task."""
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('pytesseract.image_to_string')
+    @patch('pdf2image.convert_from_path')
+    def test_success_scores_and_persists_quality(
+        self, mock_convert, mock_ocr, mock_slm, mock_socketio, mock_redis
+    ):
+        """Multi-page OCR success: text joined, quality scored and persisted."""
+        import tasks, tempfile, os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+        mock_convert.return_value = [MagicMock(), MagicMock()]  # 2 "pages"
+        mock_ocr.side_effect = [
+            "# Chapter One\n\n" + ("Real OCR'd prose text here. " * 30),
+            "# Chapter Two\n\n" + ("More recognizable body text. " * 30),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'scan.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake scanned pdf')
+
+            result = tasks.convert_with_ocr(job_id, 'scan.pdf', 'scan.md', 'pdf_ocr', 'markdown')
+
+            output_path = os.path.join(tmpdir, job_id, 'scan.md')
+            with open(output_path, encoding='utf-8') as f:
+                written = f.read()
+
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        assert result['status'] == 'success'
+        assert 'Chapter One' in written and 'Chapter Two' in written
+        assert mock_ocr.call_count == 2
+        update_calls = [c.kwargs['mapping'] for c in mock_redis.hset.call_args_list]
+        success_calls = [c for c in update_calls if c.get('status') == 'SUCCESS']
+        assert len(success_calls) == 1
+        assert success_calls[0]['quality_grade'] == 'good'
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    def test_invalid_uuid_returns_error(self, mock_socketio, mock_redis):
+        """Invalid job_id returns error dict without any OCR processing."""
+        import tasks
+        result = tasks.convert_with_ocr(
+            'not-a-uuid', 'scan.pdf', 'scan.md', 'pdf_ocr', 'markdown'
+        )
+        assert result['status'] == 'error'
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('os.path.exists', return_value=False)
+    def test_missing_input_raises(self, mock_exists, mock_socketio, mock_redis):
+        """FileNotFoundError raised when input file is absent."""
+        import tasks
+        mock_redis.hget.return_value = None
+        job_id = str(uuid.uuid4())
+        with pytest.raises(FileNotFoundError):
+            tasks.convert_with_ocr(
+                job_id, 'scan.pdf', 'scan.md', 'pdf_ocr', 'markdown'
+            )
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('pdf2image.convert_from_path', side_effect=Exception("poppler not found"))
+    def test_ocr_failure_marks_job_failed_and_cleans_up(
+        self, mock_convert, mock_socketio, mock_redis
+    ):
+        """A rasterization/OCR error fails the job and still releases the local stage."""
+        import tasks, tempfile, os
+        mock_redis.hget.return_value = None
+        mock_redis.expire.return_value = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks.OUTPUT_FOLDER = tmpdir
+            old_storage = tasks.storage
+            from storage import LocalStorageBackend
+            tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+            job_id = str(uuid.uuid4())
+            os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+            with open(os.path.join(tmpdir, job_id, 'scan.pdf'), 'wb') as f:
+                f.write(b'%PDF-1.4 fake scanned pdf')
+
+            with pytest.raises(Exception, match="poppler not found"):
+                tasks.convert_with_ocr(job_id, 'scan.pdf', 'scan.md', 'pdf_ocr', 'markdown')
+
+            tasks.storage = old_storage
+            tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+        fail_calls = [c.kwargs['mapping'] for c in mock_redis.hset.call_args_list]
+        assert any(c.get('status') == 'FAILURE' for c in fail_calls)
+
+
+# ============================================================
+# _eager_marker_warmup tests (Story 6.2)
+# ============================================================
+
+class TestEagerMarkerWarmup:
+
+    def test_disabled_by_default_does_nothing(self):
+        """eager_marker_warmup=False (the default) never touches get_model_dict
+        or Redis — zero behavior change for deployments that don't opt in."""
+        with patch.object(tasks.app_settings, 'eager_marker_warmup', False), \
+             patch.object(tasks.conversion, 'get_model_dict') as mock_get, \
+             patch.object(tasks, 'redis_client') as mock_redis:
+            tasks._eager_marker_warmup()
+
+        mock_get.assert_not_called()
+        mock_redis.set.assert_not_called()
+
+    def test_enabled_loads_model_and_sets_warm_flag(self):
+        """eager_marker_warmup=True calls get_model_dict() (in this worker
+        process, not warmup.py's) and marks marker:model_warm true."""
+        with patch.object(tasks.app_settings, 'eager_marker_warmup', True), \
+             patch.object(tasks.conversion, 'get_model_dict') as mock_get, \
+             patch.object(tasks, 'redis_client') as mock_redis:
+            tasks._eager_marker_warmup()
+
+        mock_get.assert_called_once()
+        mock_redis.set.assert_called_once_with('marker:model_warm', 'true')
+
+    def test_enabled_but_load_fails_falls_back_gracefully(self):
+        """A model-load failure sets the flag false and does not raise —
+        never blocks worker startup."""
+        with patch.object(tasks.app_settings, 'eager_marker_warmup', True), \
+             patch.object(tasks.conversion, 'get_model_dict', side_effect=RuntimeError("no GPU")), \
+             patch.object(tasks, 'redis_client') as mock_redis:
+            tasks._eager_marker_warmup()  # must not raise
+
+        mock_redis.set.assert_called_once_with('marker:model_warm', 'false')
+
+    def test_redis_unreachable_after_load_failure_does_not_raise(self):
+        """Even if Redis itself is unreachable while reporting the failure,
+        _eager_marker_warmup must not propagate — status flag is best-effort."""
+        with patch.object(tasks.app_settings, 'eager_marker_warmup', True), \
+             patch.object(tasks.conversion, 'get_model_dict', side_effect=RuntimeError("no GPU")), \
+             patch.object(tasks, 'redis_client') as mock_redis:
+            mock_redis.set.side_effect = ConnectionError("redis down")
+            tasks._eager_marker_warmup()  # must not raise
 
 
 # ============================================================

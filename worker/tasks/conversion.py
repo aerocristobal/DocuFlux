@@ -3,6 +3,7 @@ Conversion tasks: Pandoc, Marker AI, Marker+SLM, and Hybrid.
 """
 
 import os
+import re
 import subprocess
 import time
 import logging
@@ -12,6 +13,44 @@ from werkzeug.utils import secure_filename
 
 import tasks as _pkg
 from pandoc_options import build_pandoc_cmd
+from quality import score_markdown
+from table_postprocess import normalize_tables
+
+# Output formats whose content is Markdown (eligible for quality scoring, 1.1).
+_MARKDOWN_OUTPUT_FORMATS = {"markdown", "gfm"}
+
+
+class _AlreadyHandledFailure(Exception):
+    """Marks a failure whose metadata/webhook/metrics accounting has already
+    run, so the outer generic `except Exception` must re-raise it as-is
+    rather than repeating that accounting a second time."""
+
+
+def _score_quality(job_id, markdown_text):
+    """Score Markdown output quality and return (quality_meta, report).
+
+    Shared by every engine's SUCCESS path (Story 1.1/1.3) so quality is
+    visible in job metadata, /api/v1/status, and SUCCESS webhooks regardless
+    of which engine produced the Markdown. Best-effort — a scorer error must
+    never fail an otherwise-good job.
+    """
+    quality_meta = {}
+    report = None
+    try:
+        page_count_raw = _pkg.redis_client.hget(f"job:{job_id}", 'page_count')
+        try:
+            page_count = int(page_count_raw) if page_count_raw else None
+        except (TypeError, ValueError):
+            page_count = None
+        report = score_markdown(markdown_text, page_count=page_count)
+        quality_meta = report.to_metadata()
+        logging.info(
+            f"Quality for job {job_id}: grade={report.grade} "
+            f"score={report.score} reasons={report.reason_codes}"
+        )
+    except Exception as qe:  # pragma: no cover - defensive
+        logging.warning(f"Quality scoring failed for job {job_id}: {qe}")
+    return quality_meta, report
 
 
 # ── Marker helpers (shared by marker, marker_slm, hybrid) ──────────────────
@@ -72,18 +111,32 @@ def _run_marker(input_path, options):
     return converter, rendered
 
 
-def _save_marker_output(rendered, output_path, images_dir):
-    """Extract text and images from a Marker result and write to disk."""
+def _save_marker_output(rendered, output_path, images_dir, include_images=True, job_id=None):
+    """Extract text and images from a Marker result and write to disk.
+
+    Story 1.5: when include_images is False (a text-only consumer doesn't
+    want the extracted images), images are not written to disk at all and
+    their references are stripped from the Markdown entirely — never left
+    as broken links pointing at files that don't exist in the archive.
+    """
     from marker.output import text_from_rendered
 
     text, _, images = text_from_rendered(rendered)
 
     saved_images_count = 0
-    for filename, image in images.items():
-        image.save(os.path.join(images_dir, filename))
-        saved_images_count += 1
-        text = text.replace(f"({filename})", f"(images/{filename})")
-    logging.info(f"Saved {saved_images_count} images to {images_dir}")
+    if include_images:
+        for filename, image in images.items():
+            image.save(os.path.join(images_dir, filename))
+            saved_images_count += 1
+            text = text.replace(f"({filename})", f"(images/{filename})")
+        logging.info(f"Saved {saved_images_count} images to {images_dir}")
+    elif images:
+        for filename in images:
+            text = re.sub(rf'!\[[^\]]*\]\({re.escape(filename)}\)', '', text)
+        logging.info(f"Omitted {len(images)} images (include_images=False)")
+
+    # Story 1.4: repair ragged tables in Marker's Markdown output too.
+    text = _pkg._postprocess_tables(text, job_id)
 
     with open(output_path, "w", encoding='utf-8') as f:
         f.write(text)
@@ -152,15 +205,47 @@ def _slm_refine_markdown(text, job_id):
     return "\n\n".join(refined_chunks)
 
 
+def _postprocess_tables(text, job_id=None):
+    """Repair ragged Markdown tables (Story 1.4) before scoring/persisting.
+
+    Runs on every Pandoc/Marker/OCR Markdown output. Best-effort — a
+    postprocess error must never fail an otherwise-good job, so falls back
+    to the original text on any exception.
+    """
+    try:
+        result = normalize_tables(text)
+        if result.tables_found:
+            logging.info(
+                f"Table postprocess for job {job_id}: found={result.tables_found} "
+                f"repaired={result.tables_repaired} unrepairable={result.tables_unrepairable}"
+            )
+        return result.text
+    except Exception as e:
+        logging.warning(f"Table postprocess failed for job {job_id}: {e}")
+        return text
+
+
 def _assess_pandoc_quality(output_path, page_count):
-    """Return True if Pandoc's PDF->markdown output meets a minimum quality threshold."""
+    """Return True if Pandoc's PDF->markdown output meets the configured
+    hybrid quality threshold.
+
+    Story 1.2: routing is driven by the Story 1.1 quality scorer (word
+    density, headings, table well-formedness, garbage ratio, empty-page
+    ratio) instead of a fixed 50-words/page check, so the same signal used
+    to grade every conversion also decides the hybrid engine fallback.
+    """
     try:
         with open(output_path, encoding='utf-8', errors='replace') as f:
             text = f.read()
-        word_count = len(text.split())
-        words_per_page = word_count / max(page_count, 1)
-        logging.info(f"Pandoc quality: {word_count} words / {page_count} pages = {words_per_page:.1f} words/page")
-        return words_per_page >= 50
+        report = score_markdown(text, page_count=page_count)
+        threshold = _pkg.app_settings.hybrid_quality_threshold
+        passed = report.score >= threshold
+        logging.info(
+            f"Pandoc quality: score={report.score} grade={report.grade} "
+            f"threshold={threshold} reasons={report.reason_codes} -> "
+            f"{'pass' if passed else 'fallback to Marker'}"
+        )
+        return passed
     except Exception as e:
         logging.warning(f"Quality assessment failed: {e}")
         return False
@@ -225,16 +310,63 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
             process = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=500)
             logging.info(f"Conversion successful: {output_path}")
 
+            # Story 3.1: Pandoc can exit 0 yet write an empty / near-empty file
+            # (e.g. a malformed source). Detect that and fail loudly rather than
+            # shipping a half-converted document as success.
+            try:
+                output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+            except OSError:
+                output_size = 0
+            if output_size == 0:
+                error_msg = "Conversion produced empty output"
+                logging.error(f"Empty output for job {job_id}: {error_msg}")
+                _pkg.update_job_metadata(job_id, {
+                    'status': 'FAILURE', 'completed_at': str(time.time()),
+                    'error': error_msg, 'reason_code': 'empty_output',
+                    'progress': '0', 'stage': 'Failed',
+                })
+                _pkg.redis_client.expire(f"job:{job_id}", 600)
+                _pkg.fire_webhook(job_id, 'FAILURE', {'error': error_msg, 'reason_code': 'empty_output'})
+
+                duration = time.time() - start_time
+                conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+                conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='empty_output').inc()
+                conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+                worker_tasks_active.dec()
+                raise _AlreadyHandledFailure(error_msg)
+
+            # Story 1.1: Score Markdown output quality and persist the report so
+            # degraded conversions are detectable before users see them. Scoring is
+            # best-effort — a scorer error must never fail an otherwise-good job.
+            quality_meta = {}
+            report = None
+            if to_format in _MARKDOWN_OUTPUT_FORMATS:
+                try:
+                    with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
+                        md_text = fh.read()
+                    md_text = _pkg._postprocess_tables(md_text, job_id)
+                    with open(output_path, 'w', encoding='utf-8') as fh:
+                        fh.write(md_text)
+                    quality_meta, report = _score_quality(job_id, md_text)
+                except Exception as qe:  # pragma: no cover - defensive
+                    logging.warning(f"Quality scoring failed for job {job_id}: {qe}")
+
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS',
                 'completed_at': str(time.time()),
                 'progress': '100',
                 'encrypted': 'false',
                 'file_count': '1',
-                'stage': 'Complete'
+                'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            # Story 1.3: quality object in the webhook payload, same shape as
+            # api_v1_status's response — never omitted just because it's a webhook.
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
 
             duration = time.time() - start_time
             conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
@@ -273,6 +405,10 @@ def convert_document(job_id, input_filename, output_filename, from_format, to_fo
             worker_tasks_active.dec()
 
             raise Exception(f"Pandoc failed: {error_msg}")
+        except _AlreadyHandledFailure:
+            # Metadata/webhook/metrics accounting already ran at the raise
+            # site (e.g. the empty-output check above) — don't repeat it.
+            raise
         except Exception as e:
             logging.error(f"Unexpected error for job {job_id}: {str(e)}")
             _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
@@ -350,17 +486,30 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
             converter, rendered = _pkg._run_marker(input_path, options or {})
 
             _pkg.update_job_metadata(job_id, {'progress': '80', 'stage': 'Saving extracted content'})
-            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+            text, images, _, file_count = _pkg._save_marker_output(
+                rendered, output_path, images_dir,
+                include_images=(options or {}).get('include_images', True),
+                job_id=job_id,
+            )
 
             _pkg.update_job_metadata(job_id, {'progress': '90', 'file_count': str(file_count), 'stage': 'Finalizing output'})
             logging.info(f"Marker conversion successful: {output_path}")
 
+            quality_meta = {}
+            report = None
+            if to_format in _MARKDOWN_OUTPUT_FORMATS:
+                quality_meta, report = _score_quality(job_id, text)
+
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),
-                'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
+                'progress': '100', 'encrypted': 'false', 'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
             _pkg.extract_slm_metadata.delay(job_id, output_path)
 
             duration = time.time() - start_time
@@ -447,25 +596,42 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
             converter, rendered = _pkg._run_marker(input_path, options or {})
 
             _pkg.update_job_metadata(job_id, {'progress': '50', 'stage': 'Saving AI conversion output'})
-            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+            text, images, _, file_count = _pkg._save_marker_output(
+                rendered, output_path, images_dir,
+                include_images=(options or {}).get('include_images', True),
+                job_id=job_id,
+            )
 
             _pkg._cleanup_marker_memory(converter, rendered)
             converter = rendered = None
 
             logging.info(f"[{job_id}] Starting SLM refinement pass")
             refined_text = _pkg._slm_refine_markdown(text, job_id)
+            # Story 1.4: the SLM pass can re-mangle table structure, so repair
+            # again on the refined text (the initial post-process inside
+            # _save_marker_output only covered the pre-SLM save).
+            refined_text = _pkg._postprocess_tables(refined_text, job_id)
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(refined_text)
 
             _pkg.update_job_metadata(job_id, {'progress': '95', 'file_count': str(file_count), 'stage': 'Finalizing output'})
             logging.info(f"Marker+SLM conversion successful: {output_path}")
 
+            quality_meta = {}
+            report = None
+            if to_format in _MARKDOWN_OUTPUT_FORMATS:
+                quality_meta, report = _score_quality(job_id, refined_text)
+
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),
-                'progress': '100', 'encrypted': 'false', 'stage': 'Complete'
+                'progress': '100', 'encrypted': 'false', 'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
             _pkg.extract_slm_metadata.delay(job_id, output_path)
 
             duration = time.time() - start_time
@@ -564,13 +730,33 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         _pkg.update_job_metadata(job_id, {'progress': '40', 'stage': 'Checking conversion quality'})
 
         if pandoc_ok:
+            # Story 1.1/1.2: persist the same quality report that decided the
+            # routing, so the accepted engine's grade/reasons are visible too.
+            quality_meta = {}
+            report = None
+            try:
+                with open(output_path, 'r', encoding='utf-8', errors='replace') as fh:
+                    pandoc_text = fh.read()
+                pandoc_text = _pkg._postprocess_tables(pandoc_text, job_id)
+                with open(output_path, 'w', encoding='utf-8') as fh:
+                    fh.write(pandoc_text)
+                quality_meta, report = _score_quality(job_id, pandoc_text)
+            except Exception as qe:  # pragma: no cover - defensive
+                logging.warning(f"Quality metadata persistence failed for job {job_id}: {qe}")
+
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),
                 'progress': '100', 'encrypted': 'false', 'file_count': '1',
-                'hybrid_engine_used': 'pandoc', 'stage': 'Complete'
+                'hybrid_engine_used': 'pandoc', 'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            # Story 1.3: quality object in the webhook payload, same shape as
+            # api_v1_status's response.
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
             _pkg.extract_slm_metadata.delay(job_id, output_path)
 
             duration = time.time() - start_time
@@ -595,15 +781,28 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         try:
             converter, rendered = _pkg._run_marker(input_path, options or {})
             _pkg.update_job_metadata(job_id, {'progress': '85', 'stage': 'Saving extracted content'})
-            text, images, _, file_count = _pkg._save_marker_output(rendered, output_path, images_dir)
+            text, images, _, file_count = _pkg._save_marker_output(
+                rendered, output_path, images_dir,
+                include_images=(options or {}).get('include_images', True),
+                job_id=job_id,
+            )
+
+            quality_meta = {}
+            report = None
+            if to_format in _MARKDOWN_OUTPUT_FORMATS:
+                quality_meta, report = _score_quality(job_id, text)
 
             _pkg.update_job_metadata(job_id, {
                 'status': 'SUCCESS', 'completed_at': str(time.time()),
                 'progress': '100', 'encrypted': 'false', 'file_count': str(file_count),
-                'hybrid_engine_used': 'marker', 'stage': 'Complete'
+                'hybrid_engine_used': 'marker', 'stage': 'Complete',
+                **quality_meta,
             })
             _pkg.redis_client.expire(f"job:{job_id}", 7200)
-            _pkg.fire_webhook(job_id, 'SUCCESS', {'download_url': f'/api/v1/download/{job_id}'})
+            webhook_extra = {'download_url': f'/api/v1/download/{job_id}'}
+            if report is not None:
+                webhook_extra['quality'] = report.to_summary()
+            _pkg.fire_webhook(job_id, 'SUCCESS', webhook_extra)
             _pkg.extract_slm_metadata.delay(job_id, output_path)
 
             duration = time.time() - start_time
@@ -626,5 +825,123 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
             worker_tasks_active.dec()
             _pkg._cleanup_marker_memory(converter, rendered, text, images)
             raise
+    finally:
+        _pkg.storage.cleanup_local_stage(safe_job_id)
+
+
+@_pkg.celery.task(
+    name='tasks.convert_with_ocr',
+    time_limit=900,
+    soft_time_limit=840,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=1,
+)
+def convert_with_ocr(job_id, input_filename, output_filename, from_format, to_format, options=None):
+    """Convert a scanned PDF to Markdown via Tesseract OCR (Story 2.1b).
+
+    CPU-only path: rasterizes each page (pdf2image/poppler) and runs
+    Tesseract over it, so scanned documents convert without a GPU or
+    Marker AI. Routed to the CPU queues, never 'gpu'.
+    """
+    from metrics import worker_tasks_active, conversion_total, conversion_failures_total, conversion_duration_seconds
+
+    worker_tasks_active.inc()
+    start_time = time.time()
+
+    if not _pkg.is_valid_uuid(job_id):
+        logging.error(f"Invalid job_id received: {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "error", "message": "Invalid job ID"}
+
+    current_status = _pkg.redis_client.hget(f"job:{job_id}", 'status')
+    if current_status in ('FAILURE', 'REVOKED'):
+        logging.warning(f"Skipping re-queued task for already-{current_status} job {job_id}")
+        worker_tasks_active.dec()
+        return {"status": "skipped", "reason": current_status}
+
+    safe_job_id = secure_filename(job_id)
+    safe_input = secure_filename(input_filename)
+    safe_output = secure_filename(output_filename)
+    input_path = _pkg.storage.get_local_path(safe_job_id, safe_input, folder='upload')
+    output_path = _pkg.storage.get_local_path(safe_job_id, safe_output, folder='output')
+
+    logging.info(f"Starting OCR conversion for job {job_id}")
+    _pkg.update_job_metadata(job_id, {'status': 'PROCESSING', 'started_at': str(time.time()), 'progress': '5', 'stage': 'Preparing OCR'})
+
+    try:
+        if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
+        _pkg.storage.makedirs(safe_job_id, folder='output')
+
+        import pytesseract
+        from pdf2image import convert_from_path
+
+        lang = (options or {}).get('ocr_lang', 'eng')
+
+        _pkg.update_job_metadata(job_id, {'progress': '15', 'stage': 'Rasterizing pages'})
+        pages = convert_from_path(input_path)
+        _pkg.update_job_metadata(job_id, {'page_count': str(len(pages))})
+
+        page_texts = []
+        for i, page in enumerate(pages):
+            _pkg.update_job_metadata(job_id, {
+                'progress': str(15 + int(70 * (i + 1) / max(len(pages), 1))),
+                'stage': f'OCR page {i + 1}/{len(pages)}',
+            })
+            page_texts.append(pytesseract.image_to_string(page, lang=lang).strip())
+
+        markdown_text = "\n\n---\n\n".join(page_texts)
+        markdown_text = _pkg._postprocess_tables(markdown_text, job_id)
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_text)
+
+        # Story 1.1: score OCR output the same way as every other engine —
+        # OCR is especially prone to garbage/empty pages, so this is where
+        # the scorer earns its keep most.
+        report = score_markdown(markdown_text, page_count=len(pages))
+        quality_meta = report.to_metadata()
+        logging.info(
+            f"OCR quality for job {job_id}: grade={report.grade} "
+            f"score={report.score} reasons={report.reason_codes}"
+        )
+
+        _pkg.update_job_metadata(job_id, {
+            'status': 'SUCCESS', 'completed_at': str(time.time()),
+            'progress': '100', 'encrypted': 'false', 'file_count': '1',
+            'stage': 'Complete',
+            **quality_meta,
+        })
+        _pkg.redis_client.expire(f"job:{job_id}", 7200)
+        # Story 1.3: quality object in the webhook payload, same shape as
+        # api_v1_status's response.
+        _pkg.fire_webhook(job_id, 'SUCCESS', {
+            'download_url': f'/api/v1/download/{job_id}',
+            'quality': report.to_summary(),
+        })
+        _pkg.extract_slm_metadata.delay(job_id, output_path)
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='success').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+
+        return {"status": "success", "output_file": os.path.basename(output_path)}
+
+    except Exception as e:
+        logging.error(f"OCR error for job {job_id}: {e}")
+        _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})
+        _pkg.redis_client.expire(f"job:{job_id}", 600)
+        _pkg.fire_webhook(job_id, 'FAILURE', {'error': str(e)[:500]})
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='ocr_error').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
+        worker_tasks_active.dec()
+        raise
     finally:
         _pkg.storage.cleanup_local_stage(safe_job_id)

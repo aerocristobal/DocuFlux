@@ -16,6 +16,7 @@ import web.app as _app_mod
 from formats import FORMATS, detect_format_from_extension
 from pandoc_options import validate_pandoc_options
 from web.validation import require_valid_uuid, validate_file_content_type
+from job_metadata import build_job_metadata
 
 conversion_bp = Blueprint('conversion', __name__)
 
@@ -87,12 +88,11 @@ def convert():
         base_name = os.path.splitext(input_filename)[0]
         output_filename = f"{base_name}.{to_info['extension'].lstrip('.')}"
 
-        _app_mod.update_job_metadata(job_id, {
-            'status': 'PENDING', 'created_at': str(time.time()), 'filename': file.filename,
-            'from': from_format, 'to': to_format,
-            'force_ocr': str(request.form.get('force_ocr') == 'on'),
-            'use_llm': str(request.form.get('use_llm') == 'on')
-        })
+        _app_mod.update_job_metadata(job_id, build_job_metadata(
+            file.filename, from_format, to_format,
+            force_ocr=str(request.form.get('force_ocr') == 'on'),
+            use_llm=str(request.form.get('use_llm') == 'on'),
+        ))
         _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
 
         file_size = _app_mod.storage.get_file_size(job_id, input_filename, folder='upload')
@@ -103,6 +103,8 @@ def convert():
             task_name = 'tasks.convert_with_hybrid'
         elif from_format == 'pdf_marker_slm':
             task_name = 'tasks.convert_with_marker_slm'
+        elif from_format == 'pdf_ocr':
+            task_name = 'tasks.convert_with_ocr'
         else:
             task_name = 'tasks.convert_document'
         task_args = [job_id, input_filename, output_filename, from_format, to_format]
@@ -276,12 +278,11 @@ def retry_job(job_id):
     to_info = next((f for f in FORMATS if f['key'] == job_data.get('to')), None)
     output_filename = f"{os.path.splitext(input_filename)[0]}.{to_info['extension'].lstrip('.')}"
 
-    _app_mod.update_job_metadata(new_job_id, {
-        'status': 'PENDING', 'created_at': str(time.time()), 'filename': input_filename,
-        'from': job_data.get('from'), 'to': job_data.get('to'),
-        'force_ocr': job_data.get('force_ocr'),
-        'use_llm': job_data.get('use_llm')
-    })
+    _app_mod.update_job_metadata(new_job_id, build_job_metadata(
+        input_filename, job_data.get('from'), job_data.get('to'),
+        force_ocr=job_data.get('force_ocr'),
+        use_llm=job_data.get('use_llm'),
+    ))
     _app_mod.redis_client.zadd('jobs:active', {new_job_id: time.time()})
 
     original_from = job_data.get('from')
@@ -291,6 +292,8 @@ def retry_job(job_id):
         task_name = 'tasks.convert_with_hybrid'
     elif original_from == 'pdf_marker_slm':
         task_name = 'tasks.convert_with_marker_slm'
+    elif original_from == 'pdf_ocr':
+        task_name = 'tasks.convert_with_ocr'
     else:
         task_name = 'tasks.convert_document'
     task_args = [new_job_id, input_filename, output_filename, original_from, job_data.get('to')]
@@ -432,7 +435,9 @@ def download_zip(job_id):
 @conversion_bp.route('/api/v1/convert', methods=['POST'])
 @_app_mod.csrf.exempt
 @_app_mod.require_api_key
-@_app_mod.limiter.limit("200 per hour")
+# Story 4.2: Rate limit is configurable via CONVERT_RATE_LIMIT (config.py),
+# not hardcoded. The callable is evaluated per-request so env overrides apply.
+@_app_mod.limiter.limit(lambda: _app_mod.app_settings.convert_rate_limit)
 def api_v1_convert():
     """REST API endpoint for document conversion submission."""
     if not _app_mod.check_disk_space():
@@ -456,9 +461,11 @@ def api_v1_convert():
     engine = request.form.get('engine', 'pandoc')
     force_ocr = request.form.get('force_ocr', 'false').lower() == 'true'
     use_llm = request.form.get('use_llm', 'false').lower() == 'true'
+    # Story 1.5: text-only consumers can skip extracted images entirely.
+    include_images = request.form.get('include_images', 'true').lower() == 'true'
 
-    if engine not in ['pandoc', 'marker']:
-        return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc" or "marker"'}), 422
+    if engine not in ['pandoc', 'marker', 'hybrid', 'marker_slm', 'ocr']:
+        return jsonify({'error': f'Invalid engine: {engine}. Must be "pandoc", "marker", "hybrid", "marker_slm", or "ocr"'}), 422
 
     pandoc_options = None
     raw_pandoc = request.form.get('pandoc_options')
@@ -488,6 +495,9 @@ def api_v1_convert():
         internal_from_format = 'pdf_hybrid'
     elif engine == 'marker_slm' and from_format == 'pdf':
         internal_from_format = 'pdf_marker_slm'
+    elif engine == 'ocr' and from_format == 'pdf':
+        # Story 2.1b: CPU-only Tesseract OCR path for scanned PDFs.
+        internal_from_format = 'pdf_ocr'
     else:
         internal_from_format = from_format
 
@@ -511,15 +521,10 @@ def api_v1_convert():
     if format_info:
         output_filename += format_info['extension']
 
-    metadata = {
-        'status': 'PENDING',
-        'filename': safe_filename,
-        'from': internal_from_format,
-        'to': to_format,
-        'engine': engine,
-        'created_at': timestamp,
-        'progress': '0'
-    }
+    metadata = build_job_metadata(
+        safe_filename, internal_from_format, to_format,
+        created_at=timestamp, progress='0', engine=engine,
+    )
 
     if engine == 'marker':
         metadata['force_ocr'] = str(force_ocr)
@@ -532,25 +537,33 @@ def api_v1_convert():
     file_size = _app_mod.storage.get_file_size(job_id, safe_filename, folder='upload')
 
     if internal_from_format == 'pdf_marker':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_hybrid':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_marker_slm':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm}
+        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
+        )
+    elif internal_from_format == 'pdf_ocr':
+        # Story 2.1b: CPU-only OCR — size-routed like Pandoc, never 'gpu'.
+        queue_name = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
+        _app_mod.celery.send_task(
+            'tasks.convert_with_ocr',
+            args=[job_id, safe_filename, output_filename, internal_from_format, to_format],
+            queue=queue_name
         )
     else:
         task_kwargs = {}
@@ -581,9 +594,31 @@ def api_v1_status(job_id):
     if not metadata:
         return jsonify({'error': 'Job not found'}), 404
 
+    # Story 1.3: surface the Story 1.1/1.2 quality report, if this job has one.
+    quality = None
+    if metadata.get('quality_grade'):
+        quality = {
+            'grade': metadata['quality_grade'],
+            'score': int(metadata.get('quality_score', 0)),
+            'reasons': [r for r in metadata.get('quality_reasons', '').split(',') if r],
+        }
+        raw_metrics = metadata.get('quality_metrics')
+        if raw_metrics:
+            try:
+                quality['metrics'] = json.loads(raw_metrics)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    status_value = metadata.get('status', 'unknown').lower()
+    if metadata.get('status') == 'SUCCESS' and quality and quality['grade'] == 'poor':
+        # Degraded output completes as completed-with-warnings, never silently
+        # as plain success — the underlying Redis status stays SUCCESS
+        # (retention/cleanup logic elsewhere keys off it unchanged).
+        status_value = 'completed-with-warnings'
+
     response = {
         'job_id': job_id,
-        'status': metadata.get('status', 'unknown').lower(),
+        'status': status_value,
         'progress': int(metadata.get('progress', 0)),
         'filename': metadata.get('filename'),
         'from_format': metadata.get('from'),
@@ -591,6 +626,8 @@ def api_v1_status(job_id):
         'engine': metadata.get('engine', 'pandoc'),
         'created_at': datetime.fromtimestamp(float(metadata.get('created_at', 0))).isoformat() + 'Z'
     }
+    if quality:
+        response['quality'] = quality
 
     if 'started_at' in metadata:
         response['started_at'] = datetime.fromtimestamp(float(metadata['started_at'])).isoformat() + 'Z'

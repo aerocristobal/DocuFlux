@@ -163,7 +163,7 @@ class TestConversionSubmission:
         mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
 
         data = {
-            'file': (io.BytesIO(b'%PDF-1.4 fake pdf'), 'report.pdf'),
+            'file': (io.BytesIO(b'%PDF-1.4 fake pdf\n%%EOF'), 'report.pdf'),
             'from_format': 'pdf_marker',
             'to_format': 'markdown'
         }
@@ -180,7 +180,7 @@ class TestConversionSubmission:
         mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
 
         data = {
-            'file': (io.BytesIO(b'%PDF-1.4 fake pdf'), 'report.pdf'),
+            'file': (io.BytesIO(b'%PDF-1.4 fake pdf\n%%EOF'), 'report.pdf'),
             'from_format': 'pdf_hybrid',
             'to_format': 'markdown'
         }
@@ -712,7 +712,7 @@ class TestFullPipelineFlow:
         """Marker pipeline producing images returns download_zip URL in status."""
         mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
         data = {
-            'file': (io.BytesIO(b'%PDF-1.4 fake'), 'report.pdf'),
+            'file': (io.BytesIO(b'%PDF-1.4 fake\n%%EOF'), 'report.pdf'),
             'from_format': 'pdf_marker',
             'to_format': 'markdown',
         }

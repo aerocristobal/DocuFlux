@@ -5,6 +5,7 @@ import time
 import requests
 import logging
 from celery import Celery
+from celery.signals import task_prerun, task_postrun
 from flask_socketio import SocketIO
 
 from config import settings
@@ -14,13 +15,26 @@ from job_metadata import update_job_metadata as _shared_update, get_job_metadata
 from uuid_validation import validate_uuid
 from pandoc_options import PANDOC_OPTIONS_SCHEMA, PDF_DEFAULTS, build_pandoc_cmd
 from storage import create_storage_backend
+from logging_config import configure_json_logging, set_job_context
 
-# Configure Structured Logging
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter('{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}'))
-root_logger = logging.getLogger()
-root_logger.addHandler(handler)
-root_logger.setLevel(logging.INFO)
+# Story 3.5: shared JSON log format with the web tier (shared/logging_config.py).
+configure_json_logging()
+
+
+@task_prerun.connect
+def _set_job_log_context(task_id=None, args=None, **_kwargs):
+    """Correlate every log line for a task's execution with its job_id/task_id.
+
+    Every task in this module takes job_id as its first positional arg, so
+    this one signal handler covers all of them without touching each task.
+    """
+    job_id = args[0] if args else None
+    set_job_context(job_id=job_id, task_id=task_id)
+
+
+@task_postrun.connect
+def _clear_job_log_context(**_kwargs):
+    set_job_context()
 
 # Load secrets and settings
 try:
@@ -67,6 +81,7 @@ celery.conf.task_routes = {
     'tasks.convert_with_marker': {'queue': 'gpu'},
     'tasks.convert_with_marker_slm': {'queue': 'gpu'},
     'tasks.convert_with_hybrid': {'queue': 'gpu'},
+    'tasks.convert_with_ocr': {'queue': 'default'},
 }
 
 # Epic 7.3: Dead letter queue — capture permanently failed tasks
@@ -157,7 +172,7 @@ from tasks import maintenance  # noqa: E402, F401
 from tasks import metadata    # noqa: E402, F401
 
 # Re-export task functions for backward compatibility
-from tasks.conversion import convert_document, convert_with_marker, convert_with_marker_slm, convert_with_hybrid
+from tasks.conversion import convert_document, convert_with_marker, convert_with_marker_slm, convert_with_hybrid, convert_with_ocr
 from tasks.capture import analyze_screenshot_layout, agentic_page_turner, process_capture_batch, assemble_capture_session
 from tasks.maintenance import cleanup_old_files, migrate_filesystem_jobs, update_metrics, sweep_orphaned_temp_files
 from tasks.metadata import extract_slm_metadata, test_amazon_session
@@ -166,11 +181,43 @@ from tasks.metadata import extract_slm_metadata, test_amazon_session
 from tasks.conversion import (
     get_model_dict, model_dict, _check_pdf_page_limit, _run_marker,
     _save_marker_output, _cleanup_marker_memory, _slm_refine_markdown,
-    _assess_pandoc_quality, PageLimitExceeded,
+    _assess_pandoc_quality, _postprocess_tables, PageLimitExceeded,
 )
 from tasks.maintenance import (
     _get_disk_usage_percent, _get_directory_size, _job_retention_decision,
 )
+
+def _eager_marker_warmup():
+    """Story 6.2: preload Marker models in this Celery worker process at
+    startup instead of on the first PDF conversion.
+
+    warmup.py (the health-check sidecar) runs as a *separate process* from
+    this worker (see worker/entrypoint.sh — `python3 warmup.py &` then
+    `exec celery ...`), so loading models there would warm the wrong
+    process. This runs in the worker process itself, at import time — the
+    same point every task will later call get_model_dict() from — so a
+    real conversion never pays the model-load penalty on its first
+    request. Opt-in and best-effort: a failure here just falls back to
+    today's lazy-loading behavior, never blocks the worker from starting.
+    The Redis key is left absent when the feature is off, so consumers
+    should treat "missing" the same as "false" (cold/lazy).
+    """
+    if not app_settings.eager_marker_warmup:
+        return
+    try:
+        logging.info("Story 6.2: eager Marker warmup starting...")
+        conversion.get_model_dict()
+        redis_client.set('marker:model_warm', 'true')
+        logging.info("Story 6.2: eager Marker warmup complete.")
+    except Exception as e:
+        logging.warning(f"Story 6.2: eager Marker warmup failed, falling back to lazy loading: {e}")
+        try:
+            redis_client.set('marker:model_warm', 'false')
+        except Exception:
+            pass  # Redis unreachable — don't crash worker startup over a status flag
+
+
+_eager_marker_warmup()
 
 # Beat schedule
 celery.conf.beat_schedule = {

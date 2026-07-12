@@ -35,27 +35,11 @@ from key_manager import create_key_manager
 from formats import FORMATS, detect_format_from_extension
 from pandoc_options import PANDOC_OPTIONS_SCHEMA, validate_pandoc_options
 from storage import create_storage_backend
+from logging_config import configure_json_logging, set_request_id
 import tempfile
 
-# Configure Structured Logging with request-ID correlation
-class _RequestIdFilter(logging.Filter):
-    """Inject the current Flask request_id into every log record."""
-    def filter(self, record):
-        try:
-            record.request_id = getattr(g, 'request_id', '-')
-        except RuntimeError:
-            record.request_id = '-'
-        return True
-
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter(
-    '{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s",'
-    ' "request_id": "%(request_id)s", "message": "%(message)s"}'
-))
-handler.addFilter(_RequestIdFilter())
-root_logger = logging.getLogger()
-root_logger.addHandler(handler)
-root_logger.setLevel(logging.INFO)
+# Story 3.5: shared JSON log format with the worker tier (shared/logging_config.py).
+configure_json_logging()
 
 # Load secrets and settings
 try:
@@ -133,6 +117,7 @@ def request_entity_too_large(error):
 def _assign_request_id():
     """Generate or propagate a correlation ID for structured log tracing."""
     g.request_id = request.headers.get('X-Request-ID') or str(uuid.uuid4())[:8]
+    set_request_id(g.request_id)
 
 
 @app.after_request
@@ -235,6 +220,7 @@ celery.conf.task_routes = {
     'tasks.convert_with_marker': {'queue': 'gpu'},
     'tasks.convert_with_marker_slm': {'queue': 'gpu'},
     'tasks.convert_with_hybrid': {'queue': 'gpu'},
+    'tasks.convert_with_ocr': {'queue': 'default'},
     'tasks.assemble_capture_session': {'queue': 'default'},
 }
 
@@ -340,6 +326,7 @@ def get_job_metadata(job_id):
 # ============================================================================
 
 import secrets
+import hashlib
 from functools import wraps
 
 APIKEY_PREFIX = 'apikey:'
@@ -350,8 +337,25 @@ def _generate_api_key():
     return 'dk_' + secrets.token_urlsafe(32)
 
 
+def _key_id(key):
+    """Non-reversible identifier for audit logs (Story 4.3).
+
+    The raw key itself must never appear in logs, so audit events log this
+    prefix instead — stable enough to correlate events for the same key,
+    but useless for reconstructing the secret. Uses PBKDF2-HMAC-SHA256
+    (salted with the app's SECRET_KEY) rather than a bare fast hash, per
+    CodeQL's weak-sensitive-data-hashing check (CWE-916).
+    """
+    digest = hashlib.pbkdf2_hmac('sha256', key.encode(), app.secret_key.encode(), 100_000)
+    return digest.hex()[:16]
+
+
 def _validate_api_key(key):
-    """Return key metadata dict if valid, None otherwise."""
+    """Return key metadata dict if the key exists, None if not found/revoked.
+
+    Does not check expiry — callers needing expiry enforcement should also
+    call _is_key_expired() on the returned metadata (see require_api_key).
+    """
     if not key or not key.startswith('dk_'):
         return None
     try:
@@ -363,15 +367,48 @@ def _validate_api_key(key):
         return None
 
 
+def _is_key_expired(metadata):
+    """True if metadata carries an expires_at timestamp in the past.
+
+    Keys created without an expires_at (legacy keys predating Story 4.3)
+    never expire.
+    """
+    expires_at = metadata.get('expires_at')
+    if not expires_at:
+        return False
+    try:
+        return float(expires_at) < time.time()
+    except (TypeError, ValueError):
+        return False
+
+
 def require_api_key(f):
-    """Decorator: require valid X-API-Key header, return 401/403 otherwise."""
+    """Decorator: require a valid, unexpired X-API-Key header, 401/403 otherwise.
+
+    Story 4.3: every attempt is audit-logged with the key's hashed ID (never
+    the raw key value), and a valid key's last-used timestamp is updated.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         key = request.headers.get('X-API-Key', '').strip()
         if not key:
             return jsonify({'error': 'API key required. Provide X-API-Key header.'}), 401
-        if not _validate_api_key(key):
+
+        metadata = _validate_api_key(key)
+        if metadata is None:
+            logging.info(f"api_key_audit event=rejected reason=invalid_or_revoked key_id={_key_id(key)}")
             return jsonify({'error': 'Invalid or revoked API key'}), 403
+
+        if _is_key_expired(metadata):
+            logging.info(f"api_key_audit event=rejected reason=key_expired key_id={_key_id(key)}")
+            return jsonify({'error': 'API key has expired', 'code': 'key_expired'}), 401
+
+        try:
+            redis_client.hset(f"{APIKEY_PREFIX}{key}", 'last_used_at', str(time.time()))
+        except Exception:
+            pass  # audit/bookkeeping failure must never block an otherwise-valid request
+
+        logging.info(f"api_key_audit event=authorized key_id={_key_id(key)}")
         return f(*args, **kwargs)
     return decorated
 

@@ -1,5 +1,6 @@
 import pytest
 import io
+import time
 import uuid
 from unittest.mock import patch, MagicMock
 
@@ -783,6 +784,139 @@ class TestApiKeyAuth:
             headers={'X-API-Key': 'dk_validkey123'},
         )
         assert response.status_code == 400  # Missing file, not auth error
+
+
+class TestApiKeyExpirationAndAudit:
+    """Tests for Story 4.3: API key expiration and audit logging."""
+
+    ADMIN_SECRET = 'test-admin-secret'
+    ADMIN_HEADERS = {'Authorization': f'Bearer {ADMIN_SECRET}'}
+
+    def _with_admin_secret(self):
+        from pydantic import SecretStr
+        import web.app as app_mod
+        original = app_mod.app_settings.admin_api_secret
+        app_mod.app_settings.admin_api_secret = SecretStr(self.ADMIN_SECRET)
+        return original
+
+    def _restore_admin_secret(self, original):
+        import web.app as app_mod
+        app_mod.app_settings.admin_api_secret = original
+
+    @patch('app.redis_client')
+    def test_create_api_key_sets_expires_at_from_default_ttl(self, mock_redis, client):
+        """New keys default to app_settings.api_key_default_ttl_days out."""
+        original = self._with_admin_secret()
+        try:
+            mock_redis.hset.return_value = True
+            before = time.time()
+            response = client.post('/api/v1/auth/keys', json={'label': 'x'}, headers=self.ADMIN_HEADERS)
+            assert response.status_code == 201
+            data = response.get_json()
+            assert 'expires_at' in data
+            import web.app as app_mod
+            expected_ttl_seconds = app_mod.app_settings.api_key_default_ttl_days * 86400
+            assert float(data['expires_at']) >= before + expected_ttl_seconds - 5
+        finally:
+            self._restore_admin_secret(original)
+
+    @patch('app.redis_client')
+    def test_create_api_key_respects_custom_expires_in_days(self, mock_redis, client):
+        original = self._with_admin_secret()
+        try:
+            mock_redis.hset.return_value = True
+            before = time.time()
+            response = client.post(
+                '/api/v1/auth/keys', json={'label': 'x', 'expires_in_days': 1},
+                headers=self.ADMIN_HEADERS,
+            )
+            assert response.status_code == 201
+            data = response.get_json()
+            assert float(data['expires_at']) < before + 2 * 86400
+        finally:
+            self._restore_admin_secret(original)
+
+    @patch('app.redis_client')
+    def test_create_api_key_rejects_non_positive_expires_in_days(self, mock_redis, client):
+        original = self._with_admin_secret()
+        try:
+            response = client.post(
+                '/api/v1/auth/keys', json={'expires_in_days': 0},
+                headers=self.ADMIN_HEADERS,
+            )
+            assert response.status_code == 400
+        finally:
+            self._restore_admin_secret(original)
+
+    @patch('app.redis_client')
+    def test_convert_with_expired_api_key_returns_401_key_expired(self, mock_redis, client):
+        """Scenario: Expired key is rejected with a distinct code (error path)."""
+        mock_redis.hgetall.return_value = {
+            'created_at': '1700000000.0',
+            'expires_at': str(time.time() - 3600),  # expired an hour ago
+        }
+        response = client.post(
+            '/api/v1/convert', data={}, headers={'X-API-Key': 'dk_expiredkey'},
+        )
+        assert response.status_code == 401
+        assert response.get_json()['code'] == 'key_expired'
+
+    @patch('app.redis_client')
+    def test_convert_with_future_expires_at_is_accepted(self, mock_redis, client):
+        """Scenario: Valid unexpired key is accepted (happy path)."""
+        mock_redis.hgetall.return_value = {
+            'created_at': '1700000000.0',
+            'expires_at': str(time.time() + 3600),
+        }
+        response = client.post(
+            '/api/v1/convert', data={}, headers={'X-API-Key': 'dk_futurekey'},
+        )
+        assert response.status_code == 400  # missing file, not an auth error
+
+    @patch('app.redis_client')
+    def test_legacy_key_without_expires_at_never_expires(self, mock_redis, client):
+        """Keys created before Story 4.3 (no expires_at field) still work."""
+        mock_redis.hgetall.return_value = {'created_at': '1700000000.0', 'label': 'legacy'}
+        response = client.post(
+            '/api/v1/convert', data={}, headers={'X-API-Key': 'dk_legacykey'},
+        )
+        assert response.status_code == 400  # missing file, not an auth error
+
+    @patch('app.redis_client')
+    def test_valid_auth_updates_last_used_at(self, mock_redis, client):
+        """Scenario: Last-used timestamp updates on use (alternative path)."""
+        mock_redis.hgetall.return_value = {'created_at': '1700000000.0'}
+        client.post('/api/v1/convert', data={}, headers={'X-API-Key': 'dk_touchme'})
+        last_used_calls = [
+            call for call in mock_redis.hset.call_args_list
+            if len(call.args) >= 2 and call.args[1] == 'last_used_at'
+        ]
+        assert len(last_used_calls) == 1
+
+    @patch('app.redis_client')
+    def test_audit_log_never_contains_raw_key(self, mock_redis, client, caplog):
+        """Scenario: Audit log never records the secret (boundary)."""
+        import logging as _logging
+        mock_redis.hgetall.return_value = {'created_at': '1700000000.0'}
+        raw_key = 'dk_supersecretvalue'
+        with caplog.at_level(_logging.INFO):
+            client.post('/api/v1/convert', data={}, headers={'X-API-Key': raw_key})
+        audit_records = [r for r in caplog.records if 'api_key_audit' in r.message]
+        assert audit_records, "expected at least one api_key_audit log line"
+        for record in audit_records:
+            assert raw_key not in record.message
+        import web.app as app_mod
+        expected_key_id = app_mod._key_id(raw_key)
+        assert any(expected_key_id in r.message for r in audit_records)
+
+    @patch('app.redis_client')
+    def test_audit_log_records_rejection_for_invalid_key(self, mock_redis, client, caplog):
+        import logging as _logging
+        mock_redis.hgetall.return_value = {}
+        with caplog.at_level(_logging.INFO):
+            client.post('/api/v1/convert', data={}, headers={'X-API-Key': 'dk_nosuchkey'})
+        audit_records = [r for r in caplog.records if 'api_key_audit' in r.message]
+        assert any('rejected' in r.message and 'invalid_or_revoked' in r.message for r in audit_records)
 
 
 # ============================================================================

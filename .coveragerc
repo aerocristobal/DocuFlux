@@ -1,12 +1,4 @@
 [run]
-omit =
-    shared/encryption.py
-    shared/key_manager.py
-    shared/redis_encryption.py
-    shared/secrets_manager.py
-    web/validation.py
-    worker/metrics.py
-    worker/warmup.py
 
 [report]
 fail_under = 70

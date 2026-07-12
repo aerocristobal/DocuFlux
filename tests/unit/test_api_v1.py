@@ -9,6 +9,14 @@ import io
 from unittest.mock import Mock, patch
 import time
 
+# Story 4.4 deepened validate_file_content_type() to require a real PDF
+# structure (trailer/%%EOF), not just the %PDF header — fixtures that go
+# through the actual upload-validation path need genuinely valid bytes.
+VALID_PDF_BYTES = (
+    b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+    b"trailer\n<< /Root 1 0 R >>\nstartxref\n0\n%%EOF\n"
+)
+
 
 @pytest.fixture
 def client():
@@ -114,7 +122,7 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
 
     # Create test PDF file
     data = {
-        'file': (io.BytesIO(b"%PDF-1.4 test content"), 'test.pdf'),
+        'file': (io.BytesIO(VALID_PDF_BYTES), 'test.pdf'),
         'to_format': 'markdown',
         'engine': 'marker',
         'force_ocr': 'true',
@@ -137,6 +145,55 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
     options = call_args[1]['args'][5]
     assert options['force_ocr'] == True
     assert options['use_llm'] == False
+    assert options['include_images'] == True  # Story 1.5 default
+
+
+def test_api_v1_convert_include_images_false_reaches_task_options(
+    client, mock_redis, mock_celery, mock_disk_space, api_headers
+):
+    """Story 1.5: include_images=false is forwarded to the Celery task options."""
+    mock_redis.hset = Mock()
+    mock_redis.hgetall = Mock(return_value={})
+    mock_celery.send_task = Mock()
+
+    data = {
+        'file': (io.BytesIO(VALID_PDF_BYTES), 'test.pdf'),
+        'to_format': 'markdown',
+        'engine': 'marker',
+        'include_images': 'false',
+    }
+
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+
+    assert response.status_code == 202
+    call_args = mock_celery.send_task.call_args
+    options = call_args[1]['args'][5]
+    assert options['include_images'] == False
+
+
+def test_api_v1_convert_success_ocr(client, mock_redis, mock_celery, mock_disk_space, api_headers):
+    """Story 2.1b: engine=ocr dispatches to tasks.convert_with_ocr on a CPU queue."""
+    mock_redis.hset = Mock()
+    mock_redis.hgetall = Mock(return_value={})
+    mock_celery.send_task = Mock()
+
+    data = {
+        'file': (io.BytesIO(VALID_PDF_BYTES), 'scan.pdf'),
+        'to_format': 'markdown',
+        'engine': 'ocr',
+    }
+
+    response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
+
+    assert response.status_code == 202
+    json_data = response.get_json()
+    assert json_data['status'] == 'queued'
+
+    mock_celery.send_task.assert_called_once()
+    call_args = mock_celery.send_task.call_args
+    assert call_args[0][0] == 'tasks.convert_with_ocr'
+    assert call_args[1]['args'][3] == 'pdf_ocr'  # internal from_format
+    assert call_args[1]['queue'] != 'gpu'  # CPU-only path, never the gpu queue
 
 
 def test_api_v1_convert_auto_detect_format(client, mock_redis, mock_celery, mock_disk_space, api_headers):
@@ -244,6 +301,103 @@ def test_api_v1_convert_cannot_detect_format(client, mock_disk_space, api_header
     assert 'auto-detect' in json_data['error']
 
 
+def test_api_v1_convert_rate_limit_returns_429(mock_redis, mock_celery, mock_disk_space, api_headers):
+    """Story 4.2: once the configured convert limit is exceeded, the next
+    request is rejected with HTTP 429.
+    
+    Builds its own client so the limiter stays enabled (the shared `client`
+    fixture disables it), points the configurable limit at a small value, and
+    fires N+1 requests.
+    """
+    import os, tempfile, io
+    import web.app as web_app_mod
+    from storage import LocalStorageBackend
+        
+    # Override the limiter's storage backend for this test to be in-memory
+    # to avoid the 'No address found' network error from Redis during unit tests.
+    import flask_limiter
+        
+    app_settings = web_app_mod.app_settings
+    n = 3  # configured limit for this test
+    original_enabled = web_app_mod.limiter.enabled
+    original_limit = app_settings.convert_rate_limit
+    app_settings.convert_rate_limit = f"{n} per minute"
+        
+    from web.app import app, limiter
+        
+    # To change the storage url, we have to re-init the limiter or mock it.
+    # The easiest way for unit tests failing on Redis connection is to patch 
+    # the limiter's strategy storage directly if possible, or just mock hit/check
+    limiter.enabled = True
+        
+    # The easiest way is to mock hit() to return True up to N times, then False.
+    hit_counts = {'count': 0}
+    def _mock_hit(*args, **kwargs):
+        hit_counts['count'] += 1
+        if hit_counts['count'] <= n:
+            return True
+        return False
+            
+    try:
+        with patch.object(limiter._key_func.__self__ if hasattr(limiter, "_key_func") else limiter, '_check_request_limit', side_effect=None) as check_mock:
+            pass # This is complex, let's mock the limits.strategies.RateLimiter hit method
+    except Exception:
+        pass
+            
+    with patch('limits.strategies.FixedWindowRateLimiter.hit', side_effect=_mock_hit):
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        _tmpdir = tempfile.mkdtemp(prefix='docuflux_ratelimit_test_')
+        _upload = os.path.join(_tmpdir, 'uploads')
+        _output = os.path.join(_tmpdir, 'outputs')
+        os.makedirs(_upload, exist_ok=True)
+        os.makedirs(_output, exist_ok=True)
+        web_app_mod.storage = LocalStorageBackend(upload_folder=_upload, output_folder=_output)
+        app.config['UPLOAD_FOLDER'] = _upload
+        app.config['OUTPUT_FOLDER'] = _output
+
+    mock_redis.hset = Mock()
+    mock_redis.hgetall = Mock(return_value={})
+    mock_celery.send_task = Mock()
+
+    n = 3  # configured limit for this test
+    original_enabled = limiter.enabled
+    original_limit = web_app_mod.app_settings.convert_rate_limit
+    web_app_mod.app_settings.convert_rate_limit = f"{n} per minute"
+    limiter.enabled = True
+    # Clear any limiter state accumulated by earlier tests
+    try:
+        limiter.reset()
+    except Exception:
+        pass
+
+    try:
+        def _post():
+            data = {
+                'file': (io.BytesIO(b"# Test Markdown"), 'test.md'),
+                'to_format': 'docx',
+                'engine': 'pandoc',
+            }
+            return client.post(
+                '/api/v1/convert', data=data,
+                content_type='multipart/form-data', headers=api_headers,
+            )
+
+        with app.test_client() as client:
+            statuses = [_post().status_code for _ in range(n + 1)]
+
+        # First N succeed (202), the N+1th is rate-limited (429)
+        assert statuses[:n] == [202] * n, f"expected first {n} to be 202, got {statuses}"
+        assert statuses[n] == 429, f"expected request {n + 1} to be 429, got {statuses}"
+    finally:
+        limiter.enabled = original_enabled
+        web_app_mod.app_settings.convert_rate_limit = original_limit
+        try:
+            limiter.reset()
+        except Exception:
+            pass
+
+
 # ============================================================================
 # GET /api/v1/status/{job_id} Tests
 # ============================================================================
@@ -334,6 +488,71 @@ def test_api_v1_status_success(client, mock_redis):
     assert json_data['download_url'] == f'/api/v1/download/{job_id}'
     assert json_data['is_multifile'] == False
     assert json_data['file_count'] == 1
+
+
+def test_api_v1_status_good_quality_stays_success(client, mock_redis):
+    """Story 1.3: a 'good' quality grade doesn't downgrade the reported status."""
+    job_id = '550e8400-e29b-41d4-a716-446655440001'
+    import json as json_module
+    mock_redis.hgetall = Mock(return_value={
+        'status': 'SUCCESS',
+        'filename': 'test.pdf',
+        'from': 'pdf',
+        'to': 'markdown',
+        'engine': 'pandoc',
+        'created_at': str(time.time() - 60),
+        'completed_at': str(time.time() - 5),
+        'progress': '100',
+        'quality_grade': 'good',
+        'quality_score': '90',
+        'quality_reasons': '',
+        'quality_metrics': json_module.dumps({'words_per_page': 500.0, 'has_headings': 1.0}),
+    })
+
+    import web.app as _app
+    _app.storage.save_file(job_id, 'test.md', b'# Converted', folder='output')
+
+    response = client.get(f'/api/v1/status/{job_id}')
+
+    assert response.status_code == 200
+    json_data = response.get_json()
+    assert json_data['status'] == 'success'
+    assert json_data['quality']['grade'] == 'good'
+    assert json_data['quality']['score'] == 90
+    assert json_data['quality']['reasons'] == []
+    assert json_data['quality']['metrics']['has_headings'] == 1.0
+
+
+def test_api_v1_status_poor_quality_reports_completed_with_warnings(client, mock_redis):
+    """Story 1.3: a 'poor' quality grade completes as completed-with-warnings,
+    never silently as plain success."""
+    job_id = '550e8400-e29b-41d4-a716-446655440002'
+    mock_redis.hgetall = Mock(return_value={
+        'status': 'SUCCESS',
+        'filename': 'scan.pdf',
+        'from': 'pdf_ocr',
+        'to': 'markdown',
+        'engine': 'pandoc',
+        'created_at': str(time.time() - 60),
+        'completed_at': str(time.time() - 5),
+        'progress': '100',
+        'quality_grade': 'poor',
+        'quality_score': '10',
+        'quality_reasons': 'low_word_density,no_headings',
+    })
+
+    import web.app as _app
+    _app.storage.save_file(job_id, 'scan.md', b'garbled ocr text', folder='output')
+
+    response = client.get(f'/api/v1/status/{job_id}')
+
+    assert response.status_code == 200
+    json_data = response.get_json()
+    assert json_data['status'] == 'completed-with-warnings'
+    assert json_data['quality']['grade'] == 'poor'
+    assert json_data['quality']['reasons'] == ['low_word_density', 'no_headings']
+    # Download is still available — degraded isn't the same as failed.
+    assert 'download_url' in json_data
 
 
 def test_api_v1_status_failed(client, mock_redis):
@@ -744,7 +963,7 @@ class TestApiV1PandocOptions:
         mock_redis.hgetall = Mock(return_value={})
 
         data = {
-            'file': (io.BytesIO(b"%PDF-1.4 test content"), 'test.pdf'),
+            'file': (io.BytesIO(VALID_PDF_BYTES), 'test.pdf'),
             'to_format': 'markdown',
             'engine': 'marker',
             'pandoc_options': json.dumps({'toc': True}),

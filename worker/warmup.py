@@ -1,10 +1,13 @@
 import os
 import time
-import redis
 import threading
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from llama_cpp import Llama
+
+from config import settings
+from settings_loader import load_settings
+from redis_client import create_redis_client
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -17,21 +20,38 @@ VRAM_KEY = "service:marker:gpu_vram_free"
 slm_model = None
 
 
-# Connect to Redis
+# Story 4.1b: route through the same TLS-aware factory as every other Redis
+# consumer, instead of a raw redis.StrictRedis.from_url() that skips the
+# ssl_cert_reqs/ca_certs/certfile/keyfile kwargs the rest of the app requires.
+_app_settings = load_settings(settings)
 redis_url = os.environ.get('REDIS_METADATA_URL', 'redis://redis:6379/1')
-r = redis.StrictRedis.from_url(redis_url, decode_responses=True)
+r = create_redis_client(redis_url, _app_settings, decode_responses=True)
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/healthz':
+            # Story 6.2: report Marker warm/cold state alongside the existing
+            # ready/initializing signal. marker:model_warm is set by the
+            # Celery worker process (worker/tasks/__init__.py) — a separate
+            # process from this one — via Redis, since eager warmup happens
+            # in the worker process, not here.
+            try:
+                marker_warm = r.get('marker:model_warm') == 'true'
+            except Exception:
+                marker_warm = False
+
             if os.path.exists(MODELS_READY_FILE):
                 self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(b"OK")
+                self.wfile.write(('{"status": "OK", "marker_warm": %s}' %
+                                   ('true' if marker_warm else 'false')).encode())
             else:
                 self.send_response(503)
+                self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(b"Initializing")
+                self.wfile.write(('{"status": "Initializing", "marker_warm": %s}' %
+                                   ('true' if marker_warm else 'false')).encode())
         else:
             self.send_response(404)
             self.end_headers()

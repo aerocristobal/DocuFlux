@@ -1,6 +1,7 @@
 """Tests for web.validation — Epic 8: Strengthen Input Validation."""
 
 import io
+import zipfile
 import pytest
 from unittest.mock import patch
 from web.validation import (
@@ -77,9 +78,54 @@ def _make_file(content: bytes):
     return io.BytesIO(content)
 
 
+def _make_pdf(body: bytes = b'1 0 obj\n<< /Type /Catalog >>\nendobj\n') -> bytes:
+    """A structurally real, minimal PDF: header, one object, trailer, %%EOF."""
+    return (
+        b'%PDF-1.4\n' + body +
+        b'trailer\n<< /Root 1 0 R >>\nstartxref\n0\n%%EOF\n'
+    )
+
+
+def _make_zip(entries: dict) -> bytes:
+    """A real ZIP archive (genuine EOCD record) with the given entries."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def _make_docx() -> bytes:
+    return _make_zip({
+        '[Content_Types].xml': '<Types/>',
+        'word/document.xml': '<w:document/>',
+    })
+
+
+def _make_odt() -> bytes:
+    return _make_zip({
+        'mimetype': 'application/vnd.oasis.opendocument.text',
+        'content.xml': '<office:document-content/>',
+    })
+
+
+def _make_epub() -> bytes:
+    return _make_zip({
+        'mimetype': 'application/epub+zip',
+        'META-INF/container.xml': '<container/>',
+    })
+
+
+def _make_pdf_zip_polyglot() -> bytes:
+    """A real PDF (with %%EOF) that also carries a genuine ZIP archive
+    appended after it — a classic PDF/ZIP polyglot. A header-only check
+    sees a valid PDF; the ZIP's End-Of-Central-Directory record is real."""
+    return _make_pdf() + _make_zip({'payload.txt': 'hidden'})
+
+
 class TestValidateFileContentType:
     def test_pdf_valid(self):
-        f = _make_file(b'%PDF-1.4 rest of content')
+        f = _make_file(_make_pdf())
         is_valid, error = validate_file_content_type(f, '.pdf')
         assert is_valid is True
         assert error is None
@@ -91,25 +137,28 @@ class TestValidateFileContentType:
         assert '%PDF' in error
 
     def test_docx_valid(self):
-        f = _make_file(b'PK\x03\x04 docx content')
+        f = _make_file(_make_docx())
         is_valid, error = validate_file_content_type(f, '.docx')
         assert is_valid is True
+        assert error is None
 
     def test_docx_invalid(self):
-        f = _make_file(b'%PDF-1.4 not a docx')
+        f = _make_file(_make_pdf())
         is_valid, error = validate_file_content_type(f, '.docx')
         assert is_valid is False
         assert 'ZIP/PK' in error
 
     def test_odt_valid(self):
-        f = _make_file(b'PK\x03\x04 odt content')
+        f = _make_file(_make_odt())
         is_valid, error = validate_file_content_type(f, '.odt')
         assert is_valid is True
+        assert error is None
 
     def test_epub_valid(self):
-        f = _make_file(b'PK\x03\x04 epub content')
+        f = _make_file(_make_epub())
         is_valid, error = validate_file_content_type(f, '.epub')
         assert is_valid is True
+        assert error is None
 
     def test_text_valid_utf8(self):
         f = _make_file('Hello world'.encode('utf-8'))
@@ -133,10 +182,76 @@ class TestValidateFileContentType:
         assert is_valid is True
 
     def test_preserves_stream_position(self):
-        f = _make_file(b'%PDF-1.4 content here')
+        f = _make_file(_make_pdf() + b'padding')
         f.seek(5)
         validate_file_content_type(f, '.pdf')
         assert f.tell() == 5
+
+    # ── Story 4.4: deep validation beyond 8 magic bytes ─────────────────────
+
+    def test_pdf_zip_polyglot_rejected(self):
+        """Scenario: ZIP-PDF polyglot uploaded as .pdf is rejected (error path)."""
+        f = _make_file(_make_pdf_zip_polyglot())
+        is_valid, error = validate_file_content_type(f, '.pdf')
+        assert is_valid is False
+        assert 'polyglot' in error.lower() or 'mismatch' in error.lower()
+
+    def test_pdf_with_coincidental_eocd_bytes_in_body_not_rejected(self):
+        """A legitimate, large PDF whose binary body happens to contain the
+        4-byte ZIP EOCD signature (PK\\x05\\x06) well before the file's
+        trailing region — e.g. inside an embedded compressed stream — is not
+        a real PDF/ZIP polyglot and must not be rejected. Only an EOCD within
+        the trailing ~64KB (where ZIP readers actually look for it) indicates
+        a genuine polyglot; the signature must appear far enough from EOF
+        that it falls outside that window, which requires the file to exceed
+        the window size."""
+        body = (
+            b'stream\n' + (b'x' * 200) + b'PK\x05\x06' + (b'y' * 200) + b'\nendstream\n'
+            + b'z' * 70000  # pushes the EOCD bytes outside the trailing 65557-byte window
+        )
+        f = _make_file(_make_pdf(body))
+        is_valid, error = validate_file_content_type(f, '.pdf')
+        assert is_valid is True, f"expected valid PDF, got error: {error}"
+
+    def test_docx_bytes_declared_as_pdf_rejected(self):
+        """Scenario: extension/content-type mismatch is rejected (alternative error)."""
+        f = _make_file(_make_docx())
+        is_valid, error = validate_file_content_type(f, '.pdf')
+        assert is_valid is False
+        assert '%PDF' in error
+
+    def test_truncated_pdf_missing_eof_rejected(self):
+        """Scenario: structurally corrupt file of the right type is rejected (boundary)."""
+        truncated = b'%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n'  # no trailer/%%EOF
+        f = _make_file(truncated)
+        is_valid, error = validate_file_content_type(f, '.pdf')
+        assert is_valid is False
+        assert 'corrupt' in error.lower() or 'truncated' in error.lower() or '%%EOF' in error
+
+    def test_corrupt_zip_declared_as_docx_rejected(self):
+        """A .docx-declared file with a PK header but no real ZIP structure
+        (no End-Of-Central-Directory record) is rejected as corrupt, not
+        waved through on the header alone."""
+        f = _make_file(b'PK\x03\x04 this is not actually a real zip archive')
+        is_valid, error = validate_file_content_type(f, '.docx')
+        assert is_valid is False
+        assert 'corrupt' in error.lower() or 'unparseable' in error.lower()
+
+    def test_plain_zip_declared_as_docx_rejected(self):
+        """A genuinely valid ZIP that lacks word/document.xml can't pass as
+        a .docx just because it opens successfully."""
+        f = _make_file(_make_zip({'hello.txt': 'just a plain zip'}))
+        is_valid, error = validate_file_content_type(f, '.docx')
+        assert is_valid is False
+        assert 'mismatch' in error.lower()
+
+    def test_odt_bytes_declared_as_epub_rejected(self):
+        """ODT and EPUB are both ZIP-based; the wrong marker entry must
+        still be caught even though both pass the shallow PK header check."""
+        f = _make_file(_make_odt())
+        is_valid, error = validate_file_content_type(f, '.epub')
+        assert is_valid is False
+        assert 'mismatch' in error.lower()
 
 
 # ── require_valid_uuid decorator (integration via Flask test client) ─────────

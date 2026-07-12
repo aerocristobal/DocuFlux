@@ -68,12 +68,17 @@ spec:
             requests:
               memory: 512Mi
               cpu: 500m
+          # Story 3.2: Probe Celery itself, not the MCP server's /healthz:8080.
           livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 15
+            exec:
+              command:
+                - sh
+                - -c
+                - celery -A tasks inspect ping -d celery@$(hostname) -t 5 >/dev/null 2>&1 || exit 1
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
           ports:
             - containerPort: 9090
               name: metrics
@@ -128,7 +133,12 @@ spec:
             - --without-gossip
             - --concurrency=1
             - -Q
-            - gpu,high_priority,default
+            # Story 6.3: GPU worker is strictly the heavy lane now — the CPU
+            # `worker` Deployment above already independently consumes
+            # high_priority/default, so a long Marker job here can no longer
+            # sit ahead of a light task this worker had already prefetched
+            # from a shared queue. GPU exclusivity, concurrency=1 preserved.
+            - gpu
           env:
             - name: BUILD_GPU
               value: "true"
@@ -159,12 +169,17 @@ spec:
               memory: 4Gi
               cpu: "1"
               nvidia.com/gpu: "1"
+          # Story 3.2: Probe Celery itself, not the MCP server's /healthz:8080.
           livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
-            initialDelaySeconds: 30
-            periodSeconds: 15
+            exec:
+              command:
+                - sh
+                - -c
+                - celery -A tasks inspect ping -d celery@$(hostname) -t 5 >/dev/null 2>&1 || exit 1
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
           ports:
             - containerPort: 9090
               name: metrics

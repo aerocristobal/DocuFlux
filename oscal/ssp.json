@@ -3,7 +3,7 @@
     "uuid": "8a73dab8-65ae-4b6f-8cb4-0ae8b22d2e58",
     "metadata": {
       "title": "DocuFlux System Security Plan",
-      "last-modified": "2026-03-21T00:00:00Z",
+      "last-modified": "2026-07-10T00:00:00Z",
       "version": "1.0.0",
       "oscal-version": "1.1.2",
       "roles": [
@@ -30,7 +30,9 @@
       "responsible-parties": [
         {
           "role-id": "system-owner",
-          "party-uuids": ["72a08160-e279-4cc9-b49a-893847e22ff6"]
+          "party-uuids": [
+            "72a08160-e279-4cc9-b49a-893847e22ff6"
+          ]
         }
       ]
     },
@@ -86,7 +88,9 @@
         {
           "uuid": "7b518ac4-4fb3-4ffb-9e65-58c60ff15fa1",
           "title": "API Consumer",
-          "role-ids": ["api-user"],
+          "role-ids": [
+            "api-user"
+          ],
           "description": "External users and automated systems that interact with DocuFlux via API keys to submit document conversion jobs, query job status, and download converted files."
         }
       ],
@@ -236,9 +240,9 @@
             {
               "component-uuid": "bc2350a3-944d-4e7a-9b3a-0b0de0b3b42f",
               "uuid": "e2c53248-9fdd-4837-823b-62ee18e07fdd",
-              "description": "Redis supports optional TLS in-transit encryption configured via REDIS_TLS_CERT, REDIS_TLS_KEY, and REDIS_TLS_CA environment variables (config.py). TLS is enabled through the docker-compose.tls.yml overlay configuration. In Kubernetes, NetworkPolicy default-deny rules (deploy/k8s/network-policies.yaml) restrict Redis access to only the web and worker services within the docuflux namespace.",
+              "description": "Redis TLS in-transit encryption is generated via scripts/generate-redis-certs.sh and enabled through the docker-compose.tls.yml overlay (Story 4.1a); certificate lifecycle is documented in docs/CERTIFICATE_MANAGEMENT.md. The Redis server refuses plaintext connections entirely under this profile (--port 0, --tls-port 6380 in docker-compose.tls.yml), rather than merely offering TLS as an option. All application-side Redis consumers (web/app.py, worker/tasks/__init__.py, worker/warmup.py) connect exclusively through shared/redis_client.py's create_redis_client()/create_sentinel_client(), which wires ssl_cert_reqs=required plus ca_certs/certfile/keyfile for rediss:// URLs \u2014 no consumer constructs a raw, unverified Redis client (Story 4.1b). In Kubernetes, NetworkPolicy default-deny rules (deploy/k8s/network-policies.yaml) additionally restrict Redis access to only the web and worker services within the docuflux namespace. Verified by tests/unit/test_redis_sentinel.py (TLS kwarg wiring) and tests/unit/test_validation_metrics_warmup.py (TestWarmup::test_redis_client_created_via_tls_aware_factory).",
               "implementation-status": {
-                "state": "partially-implemented"
+                "state": "implemented"
               }
             },
             {

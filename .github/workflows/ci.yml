@@ -84,6 +84,72 @@ jobs:
     - name: Run Bandit (fail on high severity)
       run: bandit -r web worker shared -lll
 
+    - name: Generate SBOM (syft)
+      uses: anchore/sbom-action@v0
+      with:
+        path: .
+        format: spdx-json
+        output-file: sbom.spdx.json
+
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom
+        path: sbom.spdx.json
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install ruff and mypy
+      run: pip install ruff mypy
+
+    - name: Run ruff
+      # Story 5.3a: staged adoption — report findings without blocking merges
+      # until the existing backlog of issues (mostly unused imports) is
+      # cleaned up in a follow-up story.
+      run: ruff check web worker shared || true
+
+    - name: Run mypy
+      run: mypy web worker shared --ignore-missing-imports || true
+
+  lint-js:
+    # Story 5.3b: eslint gate for extension-src/ and mcp_server/.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: |
+          extension-src/package-lock.json
+          mcp_server/package-lock.json
+
+    - name: Install extension-src dependencies
+      run: npm ci
+      working-directory: extension-src
+
+    - name: Lint extension-src
+      run: npm run lint
+      working-directory: extension-src
+
+    - name: Install mcp_server dependencies
+      run: npm ci
+      working-directory: mcp_server
+
+    - name: Lint mcp_server
+      run: npm run lint
+      working-directory: mcp_server
+
   extension-deps:
     runs-on: ubuntu-latest
     steps:
