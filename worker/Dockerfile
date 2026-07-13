@@ -8,7 +8,7 @@ ARG BUILD_GPU=true
 
 # Stage 1: Base image selection (GPU with CUDA or CPU-only Ubuntu)
 FROM nvcr.io/nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04@sha256:217134b60289ced62b47463be32584329baf35cb55a9ccda6626b91bd59803be AS base-true
-FROM ubuntu:26.04@sha256:b7f48194d4d8b763a478a621cdc81c27be222ba2206ca3ca6bc42b49685f3d9e AS base-false
+FROM ubuntu:22.04 AS base-false
 
 # Select base based on BUILD_GPU argument
 FROM base-${BUILD_GPU} AS base
@@ -42,11 +42,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     git-lfs \
     curl \
     libgl1 \
-    libglib2.0-0 \
-    tesseract-ocr \
-    && git lfs install \
-    && ln -s /usr/bin/python3 /usr/bin/python \
-    && fc-cache -fv
+     libglib2.0-0 \
+     tesseract-ocr \
+     ninja-build \
+     && git lfs install \
+     && ln -s /usr/bin/python3 /usr/bin/python \
+     && fc-cache -fv
 
 # Story 2.1a: Install the configured Tesseract language packs. Done in its own
 # layer so changing the language set doesn't rebuild the heavy base layer. Skips
@@ -81,7 +82,7 @@ ENV HF_DATASETS_CACHE=/app/.cache/huggingface/datasets
 # Copy appropriate requirements file based on build mode
 COPY worker/requirements-${BUILD_GPU}.txt requirements-build.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --upgrade pip setuptools
+    pip3 install setuptools
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --extra-index-url https://download.pytorch.org/whl/cu118 -r requirements-build.txt
 
