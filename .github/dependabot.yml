@@ -8,6 +8,12 @@ updates:
     directory: "/worker"
     schedule:
       interval: "weekly"
+    ignore:
+      # ubuntu is pinned to 22.04: 26.04 ships Python 3.14, which breaks
+      # gevent's compile step and `pip install --upgrade pip` (PEP 668),
+      # and worker/Dockerfile hardcodes the 22.04 python3.10 path.
+      # See PR #126 / #129. Bump only with a matching Dockerfile update.
+      - dependency-name: "ubuntu"
   - package-ecosystem: "docker"
     directory: "/mcp_server"
     schedule:

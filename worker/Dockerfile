@@ -42,12 +42,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     git-lfs \
     curl \
     libgl1 \
-     libglib2.0-0 \
-     tesseract-ocr \
-     ninja-build \
-     && git lfs install \
-     && ln -s /usr/bin/python3 /usr/bin/python \
-     && fc-cache -fv
+    libglib2.0-0 \
+    tesseract-ocr \
+    ninja-build \
+    && git lfs install \
+    && ln -s /usr/bin/python3 /usr/bin/python \
+    && fc-cache -fv
 
 # Story 2.1a: Install the configured Tesseract language packs. Done in its own
 # layer so changing the language set doesn't rebuild the heavy base layer. Skips
@@ -82,7 +82,7 @@ ENV HF_DATASETS_CACHE=/app/.cache/huggingface/datasets
 # Copy appropriate requirements file based on build mode
 COPY worker/requirements-${BUILD_GPU}.txt requirements-build.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install setuptools
+    pip3 install --upgrade pip setuptools
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --extra-index-url https://download.pytorch.org/whl/cu118 -r requirements-build.txt
 
