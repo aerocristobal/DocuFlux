@@ -1,6 +1,6 @@
-import globals from 'globals';
+const globals = require('globals');
 
-export default [
+module.exports = [
   {
     files: ['**/*.js'],
     ignores: ['node_modules/**'],
