@@ -1091,6 +1091,26 @@ def test_wrong_method_returns_405_not_500(client):
     assert resp.get_json()['error'] == 'Method Not Allowed'
 
 
+def test_5xx_http_exception_keeps_its_own_status_code(client):
+    """A deliberate 503 must not be flattened to 500.
+
+    A client deciding whether to retry reads the status code: 503 says "try again",
+    500 says "this request is broken". Reporting one as the other is a real
+    behavioural difference, not cosmetics.
+    """
+    resp = client.get('/_test_raise_503')
+    assert resp.status_code == 503
+    assert resp.get_json()['error'] == 'Service Unavailable'
+
+
+def test_5xx_http_exception_does_not_echo_its_description(client):
+    """4xx descriptions are werkzeug's static strings; 5xx ones can describe internals."""
+    resp = client.get('/_test_raise_503')
+    body = resp.get_data(as_text=True)
+    assert '10.0.0.7' not in body, f"a 5xx description reached the client: {body}"
+    assert 'request_id' in resp.get_json()
+
+
 def test_csrf_failure_returns_400_with_reason(app):
     """A missing CSRF session token surfaces as 400 with the reason, not an opaque 500.
 

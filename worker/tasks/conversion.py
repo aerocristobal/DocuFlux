@@ -26,15 +26,18 @@ class _AlreadyHandledFailure(Exception):
     rather than repeating that accounting a second time."""
 
 
+_MISSING_INPUT_ERROR = 'Input file missing'
+
+
 class _MissingInput(FileNotFoundError):
     """Input file absent, with the job already marked FAILURE at the raise site.
 
     Subclasses FileNotFoundError so callers and tests that expect that type still
-    work, while letting the generic handler re-raise without overwriting the clean
-    'Input file missing' message with a path that exposes the container's layout.
-    The other engines get this for free because their generic handler sits in an
-    inner try that begins after the existence check; convert_with_ocr uses a single
-    try, so it needs the marker."""
+    work, while letting the generic handler skip the metadata write without
+    overwriting the clean 'Input file missing' message with a path that exposes the
+    container's layout. The other engines get the clean message for free because
+    their generic handler sits in an inner try that begins after the existence check;
+    convert_with_ocr uses a single try, so it needs the marker."""
 
 
 def _score_quality(job_id, markdown_text):
@@ -882,7 +885,7 @@ def convert_with_ocr(job_id, input_filename, output_filename, from_format, to_fo
 
     try:
         if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
-            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
+            _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': _MISSING_INPUT_ERROR})
             raise _MissingInput(f"Input file not found: {input_path}")
 
         _pkg.storage.makedirs(safe_job_id, folder='output')
@@ -943,8 +946,19 @@ def convert_with_ocr(job_id, input_filename, output_filename, from_format, to_fo
         return {"status": "success", "output_file": os.path.basename(output_path)}
 
     except _MissingInput:
-        # The job is already marked FAILURE with a clean message; re-raise without
-        # overwriting it with the input path.
+        # The job metadata is already FAILURE with a clean message, so skip the write
+        # that would overwrite it with the input path — but do everything else the
+        # generic handler does. A caller with a registered webhook has to learn that
+        # its job failed, and a missing input has to show up in the failure counters,
+        # or the engine simply stops reporting one of its failure modes.
+        logging.error(f"OCR error for job {job_id}: {_MISSING_INPUT_ERROR}")
+        _pkg.redis_client.expire(f"job:{job_id}", 600)
+        _pkg.fire_webhook(job_id, 'FAILURE', {'error': _MISSING_INPUT_ERROR})
+
+        duration = time.time() - start_time
+        conversion_total.labels(format_from=from_format, format_to=to_format, status='failure').inc()
+        conversion_failures_total.labels(format_from=from_format, format_to=to_format, error_type='missing_input').inc()
+        conversion_duration_seconds.labels(format_from=from_format, format_to=to_format).observe(duration)
         worker_tasks_active.dec()
         raise
     except Exception as e:

@@ -42,7 +42,7 @@ def _register_test_only_routes():
     integration test that used to register them first, and every later test using the
     `app` fixture then failed with "The setup method 'route' can no longer be called".
     """
-    from werkzeug.exceptions import TooManyRequests
+    from werkzeug.exceptions import ServiceUnavailable, TooManyRequests
 
     existing = {r.rule for r in web_app.app.url_map.iter_rules()}
     if '/_test_raise_500' in existing:
@@ -55,6 +55,11 @@ def _register_test_only_routes():
     @web_app.app.route('/_test_raise_429')
     def _test_raise_429():
         raise TooManyRequests('slow down')
+
+    @web_app.app.route('/_test_raise_503')
+    def _test_raise_503():
+        # A 5xx HTTPException with a description that must not reach the client.
+        raise ServiceUnavailable('upstream redis at 10.0.0.7 is down')
 
 
 _register_test_only_routes()

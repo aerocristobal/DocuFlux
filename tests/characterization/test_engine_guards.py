@@ -172,6 +172,47 @@ class TestLocalStageRelease:
         with pytest.raises(FileNotFoundError):
             call_engine('convert_with_ocr', job_id)
 
+    def test_ocr_missing_input_still_delivers_the_failure_webhook(self, redis, job_meta,
+                                                                  storage, job_id):
+        """Suppressing the metadata overwrite must not suppress the notification.
+
+        _MissingInput exists so the generic handler does not replace the clean
+        'Input file missing' message with the input path. Everything else that handler
+        does still has to happen — a caller with a registered webhook otherwise never
+        learns its job failed, which is the silent-failure mode this suite exists to
+        catch.
+        """
+        redis.hget.return_value = 'PROCESSING'
+
+        with patch.object(tasks, 'fire_webhook') as fire:
+            with pytest.raises(FileNotFoundError):
+                call_engine('convert_with_ocr', job_id)
+
+        fire.assert_called_once_with(job_id, 'FAILURE', {'error': 'Input file missing'})
+        assert '/uploads/' not in fire.call_args.args[2]['error'], (
+            "the webhook payload must not leak the staging path either"
+        )
+
+    def test_ocr_missing_input_is_counted_as_a_failure(self, redis, job_meta,
+                                                       storage, job_id):
+        """A failure mode that increments no counter is invisible on the dashboards."""
+        import sys
+
+        counter = sys.modules['metrics'].conversion_failures_total
+        counter.reset_mock()
+        redis.hget.return_value = 'PROCESSING'
+
+        with patch.object(tasks, 'fire_webhook'):
+            with pytest.raises(FileNotFoundError):
+                call_engine('convert_with_ocr', job_id)
+
+        error_types = [
+            call.kwargs.get('error_type') for call in counter.labels.call_args_list
+        ]
+        assert 'missing_input' in error_types, (
+            f"no failure counter recorded for a missing input; saw {error_types}"
+        )
+
 
 class TestProvisionalBehaviour:
     """Behaviour that is known-incomplete, pinned so a refactor cannot drift it further."""

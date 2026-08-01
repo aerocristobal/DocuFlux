@@ -56,11 +56,16 @@ jobs:
       # CPU wheel index has one; installing from there takes about three seconds. It is an
       # --extra-index-url, so if that host is unreachable pip falls back to PyPI and the
       # source build: slow, not broken.
+      #
+      # Installed on its own line, mirroring worker/Dockerfile: --extra-index-url applies
+      # to every package in a requirements file, not just the one that needs it, so
+      # scoping it here keeps every other dependency resolving from PyPI alone.
       run: |
         python -m pip install --upgrade pip
         pip install -r web/requirements.txt
         pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
-                    -r worker/requirements-false.txt
+                    llama-cpp-python
+        pip install -r worker/requirements-false.txt
         pip install -r tests/requirements.txt
 
     - name: Run Tests with Coverage

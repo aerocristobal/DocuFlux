@@ -265,6 +265,33 @@ class TestRequirementsCoverImports:
             f"web/requirements.txt does not declare: {missing}"
         )
 
+    def test_extra_index_urls_are_scoped_to_a_single_package(self):
+        """`--extra-index-url` is not per-requirement.
+
+        pip applies it to every package in the file and takes the highest version across
+        both indexes, so pointing it at a requirements file changes resolution for
+        dependencies that have nothing to do with the package that needed the index —
+        and lets any name published there shadow PyPI. The CPU build therefore installs
+        llama-cpp-python on its own line and resolves the rest from PyPI alone.
+
+        The GPU branch is exempt: marker-pdf[full] genuinely needs every torch wheel to
+        come from the CUDA index.
+        """
+        text = (REPO_ROOT / 'worker' / 'Dockerfile').read_text(encoding='utf-8')
+        # Join continuations, then split on `;` so each pip invocation is examined on
+        # its own — a whole `RUN` block joins into one line and would hide the pairing.
+        commands = text.replace('\\\n', ' ').replace('\n', ' ').split(';')
+
+        offenders = [
+            ' '.join(cmd.split())
+            for cmd in commands
+            if 'abetlen.github.io' in cmd and '-r ' in cmd
+        ]
+        assert not offenders, (
+            "the llama-cpp-python wheel index is applied to a whole requirements file, "
+            f"which changes resolution for every package in it: {offenders}"
+        )
+
     def test_dockerfile_requirements_files_exist(self):
         """Every requirements file a Dockerfile COPYs must exist on disk."""
         dockerfile = (REPO_ROOT / 'worker' / 'Dockerfile').read_text(encoding='utf-8')

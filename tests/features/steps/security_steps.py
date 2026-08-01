@@ -16,9 +16,28 @@ def _capture_meta(filename='Internal Doc'):
     }
 
 
-def _index(mock_redis, lists, meta=None):
-    mock_redis.lrange.side_effect = lambda key, start, end: lists.get(key, [])
-    mock_redis.pipeline.return_value.execute.return_value = [meta or _capture_meta()]
+def _index(mock_redis, ctx, lists, meta=None):
+    """Wire lrange to per-key lists and the pipeline to answer one meta per job id.
+
+    Accumulates across Given steps, so a scenario can set up two owners' captures and
+    still have both visible. Answering per job rather than with a fixed list matters
+    once a caller presenting two identities merges two indexes: a single-element return
+    value would silently truncate the result through zip() instead of failing.
+    """
+    known = ctx.setdefault('capture_lists', {})
+    known.update(lists)
+
+    mock_redis.lrange.side_effect = lambda key, start, end: known.get(key, [])
+    pipe = mock_redis.pipeline.return_value
+    requested = []
+    pipe.hgetall.side_effect = lambda key: requested.append(key.split(':', 1)[1])
+
+    def _execute():
+        out = [meta or _capture_meta() for _ in requested]
+        requested.clear()
+        return out
+
+    pipe.execute.side_effect = _execute
 
 
 # ── capture access control ────────────────────────────────────────────────────
@@ -26,21 +45,21 @@ def _index(mock_redis, lists, meta=None):
 
 @given('captures exist belonging to another client')
 def _other_client(mock_redis, ctx):
-    _index(mock_redis, {'capture:all_jobs': ['job-other'],
-                        'capture:jobs:client:someone-else': ['job-other']})
+    _index(mock_redis, ctx, {'capture:all_jobs': ['job-other'],
+                             'capture:jobs:client:someone-else': ['job-other']})
     ctx['expected'] = 'job-other'
 
 
 @given(parsers.parse('captures exist belonging to client "{client}"'))
 def _client_captures(mock_redis, ctx, client):
-    _index(mock_redis, {f'capture:jobs:client:{client}': [f'job-{client}'],
-                        'capture:all_jobs': [f'job-{client}']})
+    _index(mock_redis, ctx, {f'capture:jobs:client:{client}': [f'job-{client}'],
+                             'capture:all_jobs': [f'job-{client}']})
     ctx['expected'] = f'job-{client}'
 
 
 @given('captures exist belonging to my session')
 def _session_captures(mock_redis, session_id, ctx):
-    _index(mock_redis, {f'capture:jobs:session:{session_id}': ['job-mine']})
+    _index(mock_redis, ctx, {f'capture:jobs:session:{session_id}': ['job-mine']})
     ctx['expected'] = 'job-mine'
 
 
@@ -57,6 +76,12 @@ def _client_list(bdd_client, ctx, client):
 @when('I list captures')
 def _i_list(bdd_client, ctx):
     ctx['response'] = bdd_client.get('/api/captures')
+
+
+@when(parsers.parse('I list captures as client "{client}"'))
+def _i_list_as_client(bdd_client, ctx, client):
+    """The web UI: a session cookie *and* the extension's client id."""
+    ctx['response'] = bdd_client.get('/api/captures', headers={'X-Client-ID': client})
 
 
 @when('an admin lists all captures')
@@ -91,6 +116,12 @@ def _client_returned(ctx, client):
 def _session_returned(ctx):
     ids = [j['id'] for j in ctx['response'].get_json()]
     assert ids == ['job-mine'], ids
+
+
+@then(parsers.parse('both my session\'s captures and "{client}"\'s are returned'))
+def _union_returned(ctx, client):
+    ids = sorted(j['id'] for j in ctx['response'].get_json())
+    assert ids == sorted(['job-mine', f'job-{client}']), ids
 
 
 @then('the global capture index is never read')

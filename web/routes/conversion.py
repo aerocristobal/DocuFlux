@@ -16,7 +16,7 @@ from datetime import datetime
 import web.app as _app_mod
 from formats import FORMATS, detect_format_from_extension
 from pandoc_options import validate_pandoc_options
-from web.captures import GLOBAL_INDEX_KEY, capture_owner, owner_index_key, render_capture_jobs
+from web.captures import GLOBAL_INDEX_KEY, capture_owners, read_owner_indexes, render_capture_jobs
 from web.validation import require_valid_uuid, validate_file_content_type
 from job_metadata import build_job_metadata
 
@@ -252,16 +252,20 @@ def list_captures():
     captured document titles and source URLs. The global view now lives on
     GET /api/v1/admin/captures behind the admin secret.
 
+    A caller presenting both identities — the web UI, which has a session and also sends
+    the client id the extension published into the page — sees the union, so neither
+    view hides the other's captures.
+
     CAPTURE_LIST_SCOPE=global restores the legacy behaviour for single-user self-hosts
     where the capture list is not sensitive.
     """
     if _app_mod.app_settings.capture_list_scope == 'global':
         return render_capture_jobs(_app_mod.redis_client.lrange(GLOBAL_INDEX_KEY, 0, 49))
 
-    owner = capture_owner()
-    if not owner:
+    owners = capture_owners()
+    if not owners:
         return jsonify([])
-    return render_capture_jobs(_app_mod.redis_client.lrange(owner_index_key(owner), 0, 49))
+    return render_capture_jobs(read_owner_indexes(owners, 50), limit=50)
 
 
 @conversion_bp.route('/api/cancel/<job_id>', methods=['POST'])

@@ -91,6 +91,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # source. The CPU build takes its wheel from upstream's CPU index instead, which turns
 # minutes of compilation into seconds.
 #
+# It is installed on its own line because --extra-index-url is not per-requirement: pip
+# applies it to every package in the file and picks the highest version across both
+# indexes. Applying it to the whole requirements file would therefore change resolution
+# for dependencies that have nothing to do with llama.cpp, and would let any name
+# published on that index shadow PyPI. Installing it first satisfies the unpinned
+# requirement in requirements-build.txt, so the second command resolves everything else
+# from PyPI alone.
+#
 # The GPU build keeps the PyTorch CUDA index untouched: it installs llama-cpp-python[cuda],
 # and pointing it at the CPU index would silently resolve a CPU-only build, losing GPU
 # acceleration for the SLM. Its CUDA wheel variant has to match this image's CUDA version,
@@ -98,7 +106,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$BUILD_GPU" = "false" ]; then \
         pip3 install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
-            -r requirements-build.txt; \
+            llama-cpp-python; \
+        pip3 install -r requirements-build.txt; \
     else \
         pip3 install --extra-index-url https://download.pytorch.org/whl/cu118 \
             -r requirements-build.txt; \

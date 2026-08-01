@@ -36,3 +36,20 @@ Feature: Keeping one caller's documents away from another
     And captures exist belonging to my session
     When I list captures
     Then the captures belonging to my session are returned
+
+  Scenario: The web UI sees both its own captures and the extension's
+    # The DocuFlux page has a session of its own, and also sends the client id the
+    # extension published into its localStorage. Honouring only one of the two would
+    # hide half the list from the person looking at it.
+    Given I am browsing with a session
+    And captures exist belonging to my session
+    And captures exist belonging to client "alice"
+    When I list captures as client "alice"
+    Then both my session's captures and "alice"'s are returned
+
+  Scenario: A client id that could not have come from the extension is not an identity
+    # X-Client-ID is caller-supplied and lands in a Redis key name, so a caller cannot
+    # use it to mint arbitrary keys.
+    Given captures exist belonging to client "alice"
+    When client "alice with spaces" lists captures
+    Then no captures are returned
