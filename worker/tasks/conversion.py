@@ -26,6 +26,17 @@ class _AlreadyHandledFailure(Exception):
     rather than repeating that accounting a second time."""
 
 
+class _MissingInput(FileNotFoundError):
+    """Input file absent, with the job already marked FAILURE at the raise site.
+
+    Subclasses FileNotFoundError so callers and tests that expect that type still
+    work, while letting the generic handler re-raise without overwriting the clean
+    'Input file missing' message with a path that exposes the container's layout.
+    The other engines get this for free because their generic handler sits in an
+    inner try that begins after the existence check; convert_with_ocr uses a single
+    try, so it needs the marker."""
+
+
 def _score_quality(job_id, markdown_text):
     """Score Markdown output quality and return (quality_meta, report).
 
@@ -872,7 +883,7 @@ def convert_with_ocr(job_id, input_filename, output_filename, from_format, to_fo
     try:
         if not _pkg.storage.file_exists(safe_job_id, safe_input, folder='upload'):
             _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': 'Input file missing'})
-            raise FileNotFoundError(f"Input file not found: {input_path}")
+            raise _MissingInput(f"Input file not found: {input_path}")
 
         _pkg.storage.makedirs(safe_job_id, folder='output')
 
@@ -931,6 +942,11 @@ def convert_with_ocr(job_id, input_filename, output_filename, from_format, to_fo
 
         return {"status": "success", "output_file": os.path.basename(output_path)}
 
+    except _MissingInput:
+        # The job is already marked FAILURE with a clean message; re-raise without
+        # overwriting it with the input path.
+        worker_tasks_active.dec()
+        raise
     except Exception as e:
         logging.error(f"OCR error for job {job_id}: {e}")
         _pkg.update_job_metadata(job_id, {'status': 'FAILURE', 'completed_at': str(time.time()), 'error': str(e)[:500], 'progress': '0', 'stage': 'Failed'})

@@ -10,6 +10,7 @@ from flask import Blueprint, request, jsonify
 
 import web.app as _app_mod
 from formats import FORMATS
+from web.captures import GLOBAL_INDEX_KEY, capture_owner, owner_index_key
 from web.validation import require_valid_uuid, sanitize_string
 from job_metadata import build_job_metadata
 
@@ -43,10 +44,17 @@ def capture_create_session():
         session_id=session_id,
     ))
 
-    captures_list_key = 'capture:all_jobs'
-    _app_mod.redis_client.lpush(captures_list_key, job_id)
-    _app_mod.redis_client.ltrim(captures_list_key, 0, 99)
-    _app_mod.redis_client.expire(captures_list_key, 86400)
+    _app_mod.redis_client.lpush(GLOBAL_INDEX_KEY, job_id)
+    _app_mod.redis_client.ltrim(GLOBAL_INDEX_KEY, 0, 99)
+    _app_mod.redis_client.expire(GLOBAL_INDEX_KEY, 86400)
+
+    # Per-owner index so GET /api/captures can scope its response to the caller.
+    owner = capture_owner()
+    if owner:
+        owner_key = owner_index_key(owner)
+        _app_mod.redis_client.lpush(owner_key, job_id)
+        _app_mod.redis_client.ltrim(owner_key, 0, 99)
+        _app_mod.redis_client.expire(owner_key, 86400)
 
     session_key = f"capture:session:{session_id}"
     _app_mod.redis_client.hset(session_key, mapping={

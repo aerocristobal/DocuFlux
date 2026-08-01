@@ -14,18 +14,29 @@ import pytest
 
 
 def _worker_running():
-    """Return True if the docuflux-worker-1 container is accessible."""
-    result = subprocess.run(
-        ['docker', 'exec', 'docuflux-worker-1', 'true'],
-        capture_output=True
-    )
+    """Return True if the docuflux-worker-1 container is accessible.
+
+    Runs at import time, so it must not raise: an environment without the docker
+    binary at all (a slim CI image, a container running the suite) would otherwise
+    abort collection of the whole suite with FileNotFoundError.
+    """
+    try:
+        result = subprocess.run(
+            ['docker', 'exec', 'docuflux-worker-1', 'true'],
+            capture_output=True
+        )
+    except (FileNotFoundError, OSError):
+        return False
     return result.returncode == 0
 
 
-pytestmark = pytest.mark.skipif(
-    not _worker_running(),
-    reason="docuflux-worker-1 container is not running (skipped in CI)"
-)
+pytestmark = [
+    pytest.mark.docker,
+    pytest.mark.skipif(
+        not _worker_running(),
+        reason="docuflux-worker-1 container is not running (skipped in CI)"
+    ),
+]
 
 
 def test_xelatex_installed():

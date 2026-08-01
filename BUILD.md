@@ -82,8 +82,8 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
 │   └── build.sh              # GPU detection & build automation
 ├── worker/
 │   ├── Dockerfile            # Conditional multi-stage build
-│   ├── requirements-gpu.txt  # GPU dependencies
-│   ├── requirements-cpu.txt  # CPU-only dependencies
+│   ├── requirements-true.txt   # GPU dependencies (BUILD_GPU=true)
+│   ├── requirements-false.txt  # CPU-only dependencies (BUILD_GPU=false)
 │   ├── warmup.py             # Lazy loading + GPU detection
 │   └── tasks.py              # Memory cleanup
 ├── docker-compose.yml        # Base configuration
@@ -125,8 +125,8 @@ docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
 ls worker/requirements-*.txt
 
 # Should show:
-# worker/requirements-gpu.txt
-# worker/requirements-cpu.txt
+# worker/requirements-true.txt
+# worker/requirements-false.txt
 ```
 
 ### Worker Memory Issues

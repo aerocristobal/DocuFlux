@@ -256,6 +256,34 @@ async function detectSiteRecommendations(tabUrl) {
   } catch (e) {}
 }
 
+/**
+ * Publish this browser's capture identity to the DocuFlux page, when that page is the
+ * active tab.
+ *
+ * GET /api/captures is scoped to the caller's identity. The extension is identified by
+ * its X-Client-ID header, but the web UI is a different caller with only a Flask session,
+ * so it cannot see extension-created captures unless it sends the same client id. Writing
+ * it into the page's localStorage lets main.js do that.
+ *
+ * Uses the activeTab permission, which is granted for the current tab when the user opens
+ * the popup — no extra host permission is needed, and nothing is written to any other origin.
+ */
+async function publishClientIdToDocuFlux(tab, serverUrl, clientId) {
+  if (!tab?.id || !tab.url || !clientId) return;
+  try {
+    if (new URL(tab.url).origin !== new URL(serverUrl).origin) return;
+  } catch {
+    return;
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: id => { try { localStorage.setItem('docuflux_client_id', id); } catch { /* storage blocked */ } },
+      args: [clientId],
+    });
+  } catch { /* page not scriptable; the UI simply falls back to session-scoped captures */ }
+}
+
 async function init() {
   const config = await bg('GET_CONFIG');
   els.serverUrl.value = config.serverUrl;
@@ -263,6 +291,7 @@ async function init() {
   updateServerStatusDot(config.serverUrl);
 
   const tab = await getActiveTab().catch(() => null);
+  await publishClientIdToDocuFlux(tab, config.serverUrl, config.clientId);
   // Apply site-specific defaults first, then restore saved settings on top
   await detectSiteRecommendations(tab?.url);
   await restoreAutoCaptureSettings();

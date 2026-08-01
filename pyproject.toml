@@ -1,3 +1,62 @@
+[tool.docuflux.coverage]
+# Per-module coverage floors, enforced by scripts/check_coverage_floors.py.
+# A single project-wide fail_under lets a large well-covered module subsidise an
+# untested one; these stop that.
+#
+# Floors are generated from what the suite actually achieves, rounded down to a
+# multiple of 5 so routine refactoring does not trip them. After adding tests:
+#     pytest && python scripts/check_coverage_floors.py --emit-floors
+# and paste the result below. Raising a floor should be a deliberate line in a diff;
+# so should lowering one.
+#
+# Applied to any file not listed — i.e. new modules must arrive with tests.
+default_floor = 60
+# Whole-project backstop, set from the measured branch coverage less a small margin so
+# ordinary churn does not trip it. Enforced here rather than as coverage.py's fail_under
+# so that partial runs (`pytest -m unit`) do not fail on coverage they never claimed to
+# produce.
+total_floor = 77
+
+[tool.docuflux.coverage.floors]
+"config.py" = 95
+# The gate holds itself to the standard it enforces.
+"scripts/check_coverage_floors.py" = 100
+"shared/encryption.py" = 75
+"shared/formats.py" = 100
+"shared/job_metadata.py" = 100
+"shared/key_manager.py" = 70
+"shared/logging_config.py" = 100
+"shared/pandoc_options.py" = 95
+"shared/quality.py" = 100
+"shared/redis_client.py" = 100
+"shared/redis_encryption.py" = 90
+"shared/secrets_manager.py" = 80
+"shared/settings_loader.py" = 100
+"shared/storage.py" = 80
+"shared/table_postprocess.py" = 95
+"shared/uuid_validation.py" = 100
+"shared/webhook_validation.py" = 85
+"web/__init__.py" = 100
+"web/app.py" = 70
+"web/captures.py" = 95
+"web/routes/__init__.py" = 100
+"web/routes/auth.py" = 90
+"web/routes/capture.py" = 75
+"web/routes/conversion.py" = 85
+"web/routes/health.py" = 95
+"web/routes/webhooks.py" = 100
+"web/validation.py" = 75
+"worker/__init__.py" = 100
+"worker/tasks/__init__.py" = 70
+"worker/tasks/capture.py" = 65
+"worker/tasks/conversion.py" = 75
+"worker/tasks/maintenance.py" = 85
+# Below the default floor, reflecting real gaps rather than an aspiration.
+# Raise these as tests land instead of lowering the bar elsewhere.
+"worker/metrics.py" = 45          # TODO: raise to 60 — Prometheus wiring is barely exercised
+"worker/tasks/metadata.py" = 50   # TODO: raise to 70 — the SLM task body needs task-level tests
+"worker/warmup.py" = 25           # TODO: raise to 50 — model loading is nearly all untested
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"

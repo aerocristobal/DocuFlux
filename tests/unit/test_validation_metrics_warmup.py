@@ -72,7 +72,7 @@ class TestWebhookSSRF:
     def test_public_ip_allowed(self):
         """A public IP that getaddrinfo resolves to passes the guard."""
         v = self._val()
-        with patch("web.validation.socket.getaddrinfo",
+        with patch("webhook_validation.socket.getaddrinfo",
                    return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
             ok, err = v("https://example.com/hook", settings=_Settings())
         assert ok is True and err is None

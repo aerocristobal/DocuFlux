@@ -9,69 +9,14 @@ import io
 from unittest.mock import Mock, patch
 import time
 
-# Story 4.4 deepened validate_file_content_type() to require a real PDF
-# structure (trailer/%%EOF), not just the %PDF header — fixtures that go
-# through the actual upload-validation path need genuinely valid bytes.
-VALID_PDF_BYTES = (
-    b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
-    b"trailer\n<< /Root 1 0 R >>\nstartxref\n0\n%%EOF\n"
+from tests.support.factories import VALID_PDF_BYTES  # noqa: F401
+from tests.support.fixtures import (  # noqa: F401
+    isolated_client as client,
+    mock_redis,
+    mock_celery,
+    mock_disk_space,
+    api_headers,
 )
-
-
-@pytest.fixture
-def client():
-    """Create test client for Flask app."""
-    import os, tempfile
-    import web.app as web_app_mod
-    from storage import LocalStorageBackend
-    from web.app import app, limiter
-    app.config['TESTING'] = True
-    app.config['WTF_CSRF_ENABLED'] = False  # Disable CSRF for testing
-    # Epic 5: Provide real storage with temp dirs
-    _tmpdir = tempfile.mkdtemp(prefix='docuflux_api_test_')
-    _upload = os.path.join(_tmpdir, 'uploads')
-    _output = os.path.join(_tmpdir, 'outputs')
-    os.makedirs(_upload, exist_ok=True)
-    os.makedirs(_output, exist_ok=True)
-    web_app_mod.storage = LocalStorageBackend(upload_folder=_upload, output_folder=_output)
-    web_app_mod.UPLOAD_FOLDER = _upload
-    web_app_mod.OUTPUT_FOLDER = _output
-    app.config['UPLOAD_FOLDER'] = _upload
-    app.config['OUTPUT_FOLDER'] = _output
-    # Disable rate limiting to prevent 429 errors from accumulated test requests
-    original_enabled = limiter.enabled
-    limiter.enabled = False
-    with app.test_client() as client:
-        yield client
-    limiter.enabled = original_enabled
-
-
-@pytest.fixture
-def mock_redis():
-    """Mock Redis client."""
-    with patch('web.app.redis_client') as mock:
-        yield mock
-
-
-@pytest.fixture
-def mock_celery():
-    """Mock Celery client."""
-    with patch('web.app.celery') as mock:
-        yield mock
-
-
-@pytest.fixture
-def mock_disk_space():
-    """Mock disk space check."""
-    with patch('web.app.check_disk_space', return_value=True) as mock:
-        yield mock
-
-
-@pytest.fixture
-def api_headers():
-    """Provide a valid API key header by patching _validate_api_key."""
-    with patch('web.app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'}):
-        yield {'X-API-Key': 'dk_testkey'}
 
 
 # ============================================================================
@@ -1029,7 +974,7 @@ class TestWebhookAuth:
         mock_redis.hgetall = Mock(return_value={'status': 'PENDING'})
         mock_redis.hset = Mock()
 
-        with patch('web.validation.socket.getaddrinfo',
+        with patch('webhook_validation.socket.getaddrinfo',
                    return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('93.184.216.34', 0))]):
             response = client.post('/api/v1/webhooks',
                                    json={'job_id': job_id,
@@ -1068,7 +1013,7 @@ class TestWebhookSSRF:
         mock_redis.hgetall = Mock(return_value={'status': 'PENDING'})
         mock_redis.hset = Mock()
 
-        with patch('web.validation.socket.getaddrinfo',
+        with patch('webhook_validation.socket.getaddrinfo',
                    return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, '', (dns_ip, 0))]):
             return client.post('/api/v1/webhooks',
                                json={'job_id': job_id, 'webhook_url': webhook_url},

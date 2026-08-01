@@ -94,6 +94,11 @@ class Settings(BaseSettings):
 
     # --- Browser Extension Capture Settings ---
     capture_session_ttl: int = Field(86400, validation_alias="CAPTURE_SESSION_TTL")
+    # "owner" scopes GET /api/captures to the calling extension (X-Client-ID) or UI
+    # session. "global" restores the pre-scoping behaviour of returning every capture to
+    # any caller — only appropriate on a single-user self-host where the capture list is
+    # not sensitive. The full index is always available on /api/v1/admin/captures.
+    capture_list_scope: Literal["owner", "global"] = Field("owner", validation_alias="CAPTURE_LIST_SCOPE")
     max_capture_pages: int = Field(500, validation_alias="MAX_CAPTURE_PAGES")
     capture_batch_size: int = Field(50, validation_alias="CAPTURE_BATCH_SIZE")
     capture_allowed_origins: List[str] = Field(

@@ -18,67 +18,14 @@ import time
 from unittest.mock import patch, MagicMock, mock_open
 
 # ============================================================
-# Mock all heavy dependencies before tasks.py imports them.
-# These are local imports inside function bodies, so we mock
-# at sys.modules level to intercept 'from X import Y' calls.
+# Heavy dependencies (marker, torch, PIL, ...) are stubbed at the sys.modules level by
+# tests/support/stubs.py, installed from tests/conftest.py before any test module is
+# imported. Bind the shared mock objects locally — the tests below assert against them.
 # ============================================================
 
-_mock_modules = {
-    'encryption': MagicMock(),
-    'key_manager': MagicMock(),
-    'secrets_manager': MagicMock(),
-    'metrics': MagicMock(),
-    'warmup': MagicMock(),
-    'PIL': MagicMock(),
-    'PIL.Image': MagicMock(),
-    'flask_socketio': MagicMock(),
-    'torch': MagicMock(),
-    'marker': MagicMock(),
-    'marker.models': MagicMock(),
-    'marker.converters': MagicMock(),
-    'marker.converters.pdf': MagicMock(),
-    'marker.output': MagicMock(),
-    'prometheus_client': MagicMock(),
-}
-
-for module_name, mock_mod in _mock_modules.items():
-    sys.modules[module_name] = mock_mod
-
-# secrets_manager: validate_secrets_at_startup returns empty dict
-sys.modules['secrets_manager'].validate_secrets_at_startup.return_value = {}
-
-# metrics: all counters/gauges need label chaining support
-_c = MagicMock()
-_c.labels.return_value = _c
-_g = MagicMock()
-_g.labels.return_value = _g
-
-m = sys.modules['metrics']
-m.conversion_total = _c
-m.conversion_duration_seconds = _c
-m.conversion_failures_total = _c
-m.worker_tasks_active = _g
-m.worker_info = MagicMock()
-m.update_queue_metrics = MagicMock()
-m.update_redis_pool_metrics = MagicMock()
-m.redis_pool_active = MagicMock()
-m.redis_pool_available = MagicMock()
-m.start_metrics_server = MagicMock()
-m.dlq_total = MagicMock()
-
-# encryption/key_manager
-sys.modules['encryption'].EncryptionService = MagicMock()
-sys.modules['key_manager'].create_key_manager = MagicMock()
-
-# warmup
-sys.modules['warmup'].get_slm_model = MagicMock(return_value=None)
-
-# torch.cuda needs to be callable
+_c = sys.modules['metrics'].conversion_total       # counter, with .labels() chaining
+_g = sys.modules['metrics'].worker_tasks_active    # gauge, with .labels() chaining
 _torch = sys.modules['torch']
-_torch.cuda.is_available.return_value = True
-_torch.cuda.empty_cache = MagicMock()
-_torch.cuda.memory_allocated.return_value = 0
-_torch.cuda.memory_reserved.return_value = 0
 
 # Now import tasks (all heavy deps are mocked)
 import tasks
@@ -1441,7 +1388,7 @@ class TestFireWebhook:
         job_id = str(__import__('uuid').uuid4())
 
         with patch.object(tasks.redis_client, 'hget', return_value=b'https://hook.example.com/cb'), \
-             patch('web.validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))]), \
+             patch('webhook_validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))]), \
              patch('tasks.requests.post') as mock_post:
             tasks.fire_webhook(job_id, 'SUCCESS', {'download_url': '/api/v1/download/' + job_id})
 
@@ -1472,7 +1419,7 @@ class TestFireWebhook:
         job_id = str(__import__('uuid').uuid4())
 
         with patch.object(tasks.redis_client, 'hget', return_value=b'https://hook.example.com/cb'), \
-             patch('web.validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))]), \
+             patch('webhook_validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))]), \
              patch('tasks.requests.post', side_effect=ConnectionError('timeout')):
             # Should not raise
             tasks.fire_webhook(job_id, 'FAILURE', {'error': 'oops'})

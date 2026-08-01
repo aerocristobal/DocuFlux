@@ -11,6 +11,18 @@ gevent-websocket==0.10.1
 prometheus-client==0.19.0
 cryptography==48.0.1
 
+# config.py imports pydantic_settings at module scope and worker/tasks/__init__.py
+# imports config, so the worker cannot start without it.
+pydantic-settings==2.2.1
+# shared/storage.py imports boto3 when STORAGE_BACKEND=s3.
+boto3>=1.34.0
+
+# Story 2.1a/2.1b: Tesseract OCR bindings + PDF rasterisation. worker/tasks/conversion.py
+# imports these for the engine=ocr path, which is routed to the default/high_priority
+# queues — a GPU worker subscribed to those queues needs them too.
+pytesseract==0.3.13
+pdf2image==1.17.0
+
 # Marker with full GPU support (includes PyTorch, torchvision, torchaudio with CUDA)
 # Note: marker-pdf[full] automatically installs compatible versions of all ML dependencies
 # Do NOT pin torch/transformers/torchvision/torchaudio - let marker-pdf manage them
