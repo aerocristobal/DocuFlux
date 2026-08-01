@@ -240,7 +240,14 @@ let captureJobs = [];
 
 async function fetchCaptures() {
     try {
-        const r = await fetch('/api/captures');
+        // /api/captures is scoped to the caller. Captures made by the browser extension
+        // are indexed under its client id, which the extension writes here when its popup
+        // is opened on this page. Sending it adds the extension's captures to this
+        // session's own rather than replacing them; without it we still see our own.
+        const clientId = localStorage.getItem('docuflux_client_id');
+        const r = await fetch('/api/captures', {
+            headers: clientId ? { 'X-Client-ID': clientId } : {},
+        });
         captureJobs = await r.json();
         renderCaptures();
     } catch (e) {}

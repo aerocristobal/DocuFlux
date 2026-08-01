@@ -10,6 +10,15 @@ gevent==23.9.1
 gevent-websocket==0.10.1
 prometheus-client==0.19.0
 
+# shared/encryption.py, shared/key_manager.py and shared/redis_encryption.py import
+# cryptography unconditionally — without it the CPU image cannot import shared/ at all.
+cryptography==48.0.1
+# config.py imports pydantic_settings at module scope and worker/tasks/__init__.py
+# imports config, so the worker cannot start without it.
+pydantic-settings==2.2.1
+# shared/storage.py imports boto3 when STORAGE_BACKEND=s3.
+boto3>=1.34.0
+
 # Note: Marker is NOT installed in CPU-only mode
 # The worker will detect GPU unavailable at runtime and skip Marker tasks
 # This significantly reduces image size from ~15GB to <3GB

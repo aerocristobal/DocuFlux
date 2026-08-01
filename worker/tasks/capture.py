@@ -498,7 +498,7 @@ def assemble_capture_session(session_id, job_id):
             merged_content = front_matter + "\n\n---\n\n".join(all_markdown_parts)
             batches_failed = 0
 
-        _pkg.update_job_metadata(job_id, {'progress': '88'})
+        _pkg.update_job_metadata(job_id, {'progress': '85'})
 
         output_filename = f"{safe_title}.md"
         output_path = os.path.join(output_dir, output_filename)
@@ -507,7 +507,7 @@ def assemble_capture_session(session_id, job_id):
 
         _pkg.redis_client.delete(f"capture:session:{session_id}:pages")
 
-        _pkg.update_job_metadata(job_id, {'progress': '85'})
+        _pkg.update_job_metadata(job_id, {'progress': '88'})
 
         if to_format not in ('markdown', 'gfm'):
             format_extensions = {

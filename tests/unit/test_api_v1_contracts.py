@@ -34,62 +34,14 @@ ERROR_SCHEMA = {'error': str}
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def client():
-    """Create test client for Flask app."""
-    import os
-    import tempfile
-    import web.app as web_app_mod
-    from storage import LocalStorageBackend
-    from web.app import app, limiter
-
-    app.config['TESTING'] = True
-    app.config['WTF_CSRF_ENABLED'] = False
-    _tmpdir = tempfile.mkdtemp(prefix='docuflux_contract_test_')
-    _upload = os.path.join(_tmpdir, 'uploads')
-    _output = os.path.join(_tmpdir, 'outputs')
-    os.makedirs(_upload, exist_ok=True)
-    os.makedirs(_output, exist_ok=True)
-    web_app_mod.storage = LocalStorageBackend(upload_folder=_upload, output_folder=_output)
-    web_app_mod.UPLOAD_FOLDER = _upload
-    web_app_mod.OUTPUT_FOLDER = _output
-    app.config['UPLOAD_FOLDER'] = _upload
-    app.config['OUTPUT_FOLDER'] = _output
-    original_enabled = limiter.enabled
-    limiter.enabled = False
-    with app.test_client() as c:
-        yield c
-    limiter.enabled = original_enabled
-
-
-@pytest.fixture
-def mock_redis():
-    with patch('web.app.redis_client') as mock:
-        yield mock
-
-
-@pytest.fixture
-def mock_celery():
-    with patch('web.app.celery') as mock:
-        yield mock
-
-
-@pytest.fixture
-def mock_disk_space():
-    with patch('web.app.check_disk_space', return_value=True):
-        yield
-
-
-@pytest.fixture
-def api_headers():
-    with patch('web.app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'}):
-        yield {'X-API-Key': 'dk_testkey'}
-
-
-@pytest.fixture
-def admin_headers():
-    with patch('web.routes.auth._check_admin_secret', return_value=(None, None)):
-        yield {'Authorization': 'Bearer test-admin-secret'}
+from tests.support.fixtures import (  # noqa: F401
+    isolated_client as client,
+    mock_redis,
+    mock_celery,
+    mock_disk_space,
+    api_headers,
+    admin_headers,
+)
 
 
 # ── Capture session helper ────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ try:
 except ImportError:
     _has_prometheus = False
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from celery import Celery
 from flask_limiter import Limiter
@@ -179,6 +180,25 @@ def internal_server_error(error):
 @app.errorhandler(Exception)
 def handle_unhandled_exception(error):
     rid = getattr(g, 'request_id', '-')
+    # HTTPExceptions carry a deliberate status (404, 405, the 400 from CSRFProtect,
+    # 503 from a health gate, ...). Flask routes them here when no handler is
+    # registered for their specific code, so without this branch every one of them is
+    # reported to the caller as a 500 and the real cause is lost.
+    if isinstance(error, HTTPException) and error.code:
+        if error.code < 500:
+            # 4xx descriptions are werkzeug's own static strings. Nothing in this app
+            # passes a description to abort(); if that changes, check the new one does
+            # not carry user input or internal detail before it is echoed here.
+            logging.warning("HTTP %s [request_id=%s]: %s", error.code, rid, error.description)
+            return jsonify({
+                'error': error.name,
+                'message': error.description,
+                'request_id': rid,
+            }), error.code
+        # 5xx: keep the chosen status — a 503 is not a 500 to a client deciding whether
+        # to retry — but not the description, which can describe internals.
+        logging.exception("HTTP %s [request_id=%s]: %s", error.code, rid, error.description)
+        return jsonify({'error': error.name, 'request_id': rid}), error.code
     logging.exception("Unhandled exception [request_id=%s]: %s", rid, error)
     return jsonify({'error': 'Internal server error', 'request_id': rid}), 500
 

@@ -11,6 +11,9 @@ CLAUDE.md
 .playwright/
 .playwright-cli/
 .coverage
+coverage.json
+coverage-run.json
+coverage.xml
 build.log
 *.log
 *.egg-info/

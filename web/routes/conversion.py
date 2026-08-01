@@ -16,6 +16,7 @@ from datetime import datetime
 import web.app as _app_mod
 from formats import FORMATS, detect_format_from_extension
 from pandoc_options import validate_pandoc_options
+from web.captures import GLOBAL_INDEX_KEY, capture_owners, read_owner_indexes, render_capture_jobs
 from web.validation import require_valid_uuid, validate_file_content_type
 from job_metadata import build_job_metadata
 
@@ -243,38 +244,28 @@ def list_jobs():
 @conversion_bp.route('/api/captures')
 @_app_mod.limiter.exempt
 def list_captures():
-    """Return recent browser-extension capture jobs with status and download URLs."""
-    job_ids = _app_mod.redis_client.lrange('capture:all_jobs', 0, 49)
-    if not job_ids:
+    """Return the caller's own recent capture jobs.
+
+    Scoped to the caller: the extension is identified by X-Client-ID, same-origin UI
+    callers by their Flask session. This endpoint previously returned the global
+    `capture:all_jobs` index to any unauthenticated caller, exposing every user's
+    captured document titles and source URLs. The global view now lives on
+    GET /api/v1/admin/captures behind the admin secret.
+
+    A caller presenting both identities — the web UI, which has a session and also sends
+    the client id the extension published into the page — sees the union, so neither
+    view hides the other's captures.
+
+    CAPTURE_LIST_SCOPE=global restores the legacy behaviour for single-user self-hosts
+    where the capture list is not sensitive.
+    """
+    if _app_mod.app_settings.capture_list_scope == 'global':
+        return render_capture_jobs(_app_mod.redis_client.lrange(GLOBAL_INDEX_KEY, 0, 49))
+
+    owners = capture_owners()
+    if not owners:
         return jsonify([])
-
-    pipe = _app_mod.redis_client.pipeline()
-    for jid in job_ids:
-        pipe.hgetall(f"job:{jid}")
-    results = pipe.execute()
-
-    jobs_data = []
-    for jid, meta in zip(job_ids, results):
-        if not meta:
-            continue
-        is_zip = meta.get('is_zip') == 'true'
-        download_url = None
-        if meta.get('status') == 'SUCCESS':
-            download_url = f"/download_zip/{jid}" if is_zip else f"/download/{jid}"
-        jobs_data.append({
-            'id': jid,
-            'filename': meta.get('filename'),
-            'from': meta.get('from', 'capture'),
-            'to': meta.get('to'),
-            'created_at': float(meta.get('created_at', 0)),
-            'status': meta.get('status', 'PENDING'),
-            'progress': meta.get('progress', '0'),
-            'result': meta.get('error') if meta.get('status') == 'FAILURE' else None,
-            'download_url': download_url,
-            'is_zip': is_zip,
-        })
-    jobs_data.sort(key=lambda x: x['created_at'], reverse=True)
-    return jsonify(jobs_data)
+    return render_capture_jobs(read_owner_indexes(owners, 50), limit=50)
 
 
 @conversion_bp.route('/api/cancel/<job_id>', methods=['POST'])

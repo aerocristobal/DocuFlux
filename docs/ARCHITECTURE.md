@@ -90,7 +90,7 @@ flowchart LR
 
 ### 2.5 `mcp-server` — Playwright automation (`mcp_server/`)
 
-- Node.js HTTP server (internal port 8080) exposing browser actions; authenticated by `MCP_SECRET` bearer token; reachable only from the worker. **Known gaps:** runs as root, no container healthcheck (Backlog 4.5).
+- Node.js HTTP server (internal port 8080) exposing browser actions; authenticated by `MCP_SECRET` bearer token; reachable only from the worker. Runs as `pwuser` with a container healthcheck (Backlog 4.5, done).
 
 ### 2.6 Browser extension (`extension-src/`)
 
@@ -248,7 +248,7 @@ States: `queued → in_progress → completed | failed`. Each `job:{uuid}` hash 
 | `docker-compose.tls.yml` | Redis TLS overlay | **currently inert** — certs not generated (Backlog 4.1) |
 | `docker-compose.cloudflare.yml` | Tunnel ingress | adds cloudflared container |
 
-Build: `scripts/build.sh auto` detects GPU (`nvidia-smi`) and selects `BUILD_GPU`, which switches the worker base image (`nvidia/cuda:11.8.0-cudnn8` vs `ubuntu:22.04`) and requirements file (`requirements-gpu.txt` ~15 GB vs `requirements-false.txt` <3 GB).
+Build: `scripts/build.sh auto` detects GPU (`nvidia-smi`) and selects `BUILD_GPU`, which switches the worker base image (`nvidia/cuda:11.8.0-cudnn8` vs `ubuntu:22.04`) and requirements file (`requirements-true.txt` ~15 GB vs `requirements-false.txt` <3 GB).
 
 ### 5.2 Kubernetes (`deploy/k8s/`)
 
@@ -308,7 +308,7 @@ UUID v4 validation, filename sanitization (path-traversal defense), magic-byte c
 
 ### 6.6 Container hardening
 
-Non-root users in web and worker images; `cap_drop: [ALL]`; `no-new-privileges`; `tmpfs /tmp noexec,nosuid,nodev`; Redis unexposed and password-protected. **Gaps:** `python:3.11-slim` / `ubuntu:22.04` base images unpinned (Backlog 5.2); MCP container runs as root with no healthcheck (Backlog 4.5).
+Non-root users in web and worker images; `cap_drop: [ALL]`; `no-new-privileges`; `tmpfs /tmp noexec,nosuid,nodev`; Redis unexposed and password-protected. Base images are pinned by digest (Backlog 5.2, done) and the MCP container runs non-root with a healthcheck (Backlog 4.5, done).
 
 ### 6.7 OSCAL control mapping
 

@@ -226,9 +226,7 @@ async function offloadLargeImages(sessionId, images) {
 
 async function uploadImageSeparately(sessionId, img) {
   const base = await getServerUrl();
-  const result = await storageGet({ clientId: generateId() });
-  const clientId = result.clientId;
-  await storageSet({ clientId });
+  const clientId = await getClientId();
 
   // Convert base64 data URL to Blob for multipart upload
   const commaIdx = img.b64.indexOf(',');
@@ -284,11 +282,23 @@ async function getServerUrl() {
   return (result.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, '');
 }
 
-async function apiPost(path, body) {
-  const base = await getServerUrl();
+/**
+ * This browser's stable capture identity, generated on first use and persisted.
+ *
+ * Sent as X-Client-ID on every capture request. The server indexes captures by it, and
+ * GET /api/captures returns only the captures belonging to the calling identity — so the
+ * DocuFlux web UI needs this same value to list captures this extension created.
+ */
+async function getClientId() {
   const result = await storageGet({ clientId: generateId() });
   const clientId = result.clientId;
   await storageSet({ clientId });
+  return clientId;
+}
+
+async function apiPost(path, body) {
+  const base = await getServerUrl();
+  const clientId = await getClientId();
 
   const response = await fetch(`${base}${path}`, {
     method: 'POST',
@@ -561,7 +571,10 @@ async function handleMessage(message, sender) {
 
     case 'GET_CONFIG': {
       const result = await storageGet({ serverUrl: DEFAULT_SERVER_URL });
-      return { serverUrl: result.serverUrl || DEFAULT_SERVER_URL };
+      return {
+        serverUrl: result.serverUrl || DEFAULT_SERVER_URL,
+        clientId: await getClientId(),
+      };
     }
 
     case 'SET_CONFIG': {
@@ -958,6 +971,7 @@ function generateId() {
 if (typeof module !== 'undefined') {
   module.exports = {
     generateId,
+    getClientId,
     base64SizeKB,
     DEFAULT_SERVER_URL,
     OUTBOX_DB_NAME,

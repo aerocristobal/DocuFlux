@@ -6,6 +6,7 @@ import time
 from flask import Blueprint, request, jsonify
 
 import web.app as _app_mod
+from web.captures import GLOBAL_INDEX_KEY, render_capture_jobs
 from web.validation import sanitize_string
 
 auth_bp = Blueprint('auth', __name__)
@@ -81,6 +82,23 @@ def api_v1_revoke_key(key):
     if not deleted:
         return jsonify({'error': 'Key not found'}), 404
     return jsonify({'revoked': True}), 200
+
+
+@auth_bp.route('/api/v1/admin/captures', methods=['GET'])
+@_app_mod.csrf.exempt
+@_app_mod.limiter.limit("30 per hour")
+def api_v1_admin_captures():
+    """Return the global capture index across every client.
+
+    GET /api/captures is scoped to the calling client; this is the operator's view of
+    all captures, and requires the admin secret.
+    """
+    err = _check_admin_secret()
+    if err[0] is not None:
+        return err
+    limit = request.args.get('limit', 50, type=int)
+    limit = min(max(limit, 1), 1000)
+    return render_capture_jobs(_app_mod.redis_client.lrange(GLOBAL_INDEX_KEY, 0, limit - 1))
 
 
 @auth_bp.route('/api/v1/admin/dlq', methods=['GET'])

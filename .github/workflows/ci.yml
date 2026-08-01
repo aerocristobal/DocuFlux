@@ -36,7 +36,7 @@ jobs:
         cache: 'pip'
         cache-dependency-path: |
           web/requirements.txt
-          worker/requirements.txt
+          worker/requirements-false.txt
           tests/requirements.txt
 
     - name: Install system dependencies
@@ -45,10 +45,27 @@ jobs:
         sudo apt-get install -y pandoc libmagic1 libmagic1t64 poppler-utils || sudo apt-get install -y pandoc libmagic1 libmagic1t64 poppler-utils
 
     - name: Install Python dependencies
+      # worker/requirements-false.txt is the file the CPU worker image actually
+      # installs. CI previously installed worker/requirements.txt, which no Dockerfile
+      # references — that mismatch is why three container-only defects stayed invisible
+      # here (missing poppler-utils, missing pydantic-settings/boto3/cryptography, and
+      # shared/ importing web/).
+      #
+      # llama-cpp-python publishes no wheel on PyPI, so a plain install compiles llama.cpp
+      # from source — minutes per run, for a package this suite stubs entirely. Upstream's
+      # CPU wheel index has one; installing from there takes about three seconds. It is an
+      # --extra-index-url, so if that host is unreachable pip falls back to PyPI and the
+      # source build: slow, not broken.
+      #
+      # Installed on its own line, mirroring worker/Dockerfile: --extra-index-url applies
+      # to every package in a requirements file, not just the one that needs it, so
+      # scoping it here keeps every other dependency resolving from PyPI alone.
       run: |
         python -m pip install --upgrade pip
         pip install -r web/requirements.txt
-        pip install -r worker/requirements.txt
+        pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+                    llama-cpp-python
+        pip install -r worker/requirements-false.txt
         pip install -r tests/requirements.txt
 
     - name: Run Tests with Coverage
@@ -58,15 +75,99 @@ jobs:
         CELERY_BROKER_URL: redis://localhost:6379/0
         CELERY_RESULT_BACKEND: redis://localhost:6379/0
         SECRET_KEY: testing-key
+      # --cov flags and the config live in pytest.ini; only the xml report is CI-specific.
+      #
+      # Deliberately unfiltered. The container-dependent tests already self-skip when
+      # docuflux-worker-1 is absent, so `-m "not docker"` buys nothing — and it would
+      # make this a filtered run, which the coverage-floors step below refuses to
+      # enforce against, since a filtered run covers less of the tree by construction.
       run: |
-        pytest --cov=web --cov=worker --cov-report=xml --cov-report=term-missing --cov-config=.coveragerc
+        pytest --cov-report=xml
+
+    - name: Enforce per-module coverage floors
+      env:
+        FLASK_ENV: testing
+        SECRET_KEY: testing-key
+      # A single project-wide average lets a large well-covered module subsidise an
+      # untested one. Floors live in pyproject.toml; regenerate with --emit-floors.
+      run: python scripts/check_coverage_floors.py
 
     - name: Upload coverage report
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
-        path: coverage.xml
+        path: |
+          coverage.xml
+          coverage.json
+
+  contracts:
+    # Parses Dockerfiles and requirements files rather than building an image, so the
+    # packaging defects this repo shipped are caught in seconds on every PR. Needs no
+    # system packages and no worker dependencies.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+    - name: Install test dependencies
+      # web/requirements.txt because tests/conftest.py imports web.app before any test
+      # runs, and tests/requirements.txt because pytest imports every test module during
+      # collection even when -m deselects them — without it, pytest-bdd and fakeredis
+      # are missing and collection errors out. No worker dependencies are needed, which
+      # is what keeps this job fast.
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r web/requirements.txt -r tests/requirements.txt
+    - name: Check packaging contracts
+      env:
+        FLASK_ENV: testing
+        SECRET_KEY: testing-key
+      run: pytest -m packaging -q -o addopts="" -p no:cacheprovider
+
+  bdd:
+    # The executable capability specs, run without coverage instrumentation so a red
+    # job means "a documented behaviour broke" rather than "coverage dipped".
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+        cache-dependency-path: |
+          web/requirements.txt
+          tests/requirements.txt
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libmagic1 libmagic1t64 || sudo apt-get install -y libmagic1
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r web/requirements.txt
+        pip install -r tests/requirements.txt
+    - name: Run capability specs
+      env:
+        FLASK_ENV: testing
+        REDIS_METADATA_URL: redis://localhost:6379/1
+        CELERY_BROKER_URL: redis://localhost:6379/0
+        CELERY_RESULT_BACKEND: redis://localhost:6379/0
+        SECRET_KEY: testing-key
+      run: pytest -m bdd -q --no-cov
 
   sast:
     runs-on: ubuntu-latest

@@ -10,6 +10,7 @@ from flask import Blueprint, request, jsonify
 
 import web.app as _app_mod
 from formats import FORMATS
+from web.captures import GLOBAL_INDEX_KEY, capture_owners, client_id_from_request, owner_index_key
 from web.validation import require_valid_uuid, sanitize_string
 from job_metadata import build_job_metadata
 
@@ -26,7 +27,9 @@ def capture_create_session():
     to_format = data.get('to_format', 'markdown')
     source_url = sanitize_string(data.get('source_url', ''), max_length=500)
     force_ocr = data.get('force_ocr', False)
-    client_id = request.headers.get('X-Client-ID', 'unknown')
+    # Validated rather than taken raw: it lands in a Redis key name below, and an
+    # unbounded header would let any caller mint arbitrarily long keys.
+    client_id = client_id_from_request() or 'unknown'
 
     if to_format not in [f['key'] for f in FORMATS]:
         to_format = 'markdown'
@@ -43,10 +46,17 @@ def capture_create_session():
         session_id=session_id,
     ))
 
-    captures_list_key = 'capture:all_jobs'
-    _app_mod.redis_client.lpush(captures_list_key, job_id)
-    _app_mod.redis_client.ltrim(captures_list_key, 0, 99)
-    _app_mod.redis_client.expire(captures_list_key, 86400)
+    _app_mod.redis_client.lpush(GLOBAL_INDEX_KEY, job_id)
+    _app_mod.redis_client.ltrim(GLOBAL_INDEX_KEY, 0, 99)
+    _app_mod.redis_client.expire(GLOBAL_INDEX_KEY, 86400)
+
+    # Per-owner index so GET /api/captures can scope its response to the caller. Indexed
+    # under every identity the creator presented, matching what the listing reads.
+    for owner in capture_owners():
+        owner_key = owner_index_key(owner)
+        _app_mod.redis_client.lpush(owner_key, job_id)
+        _app_mod.redis_client.ltrim(owner_key, 0, 99)
+        _app_mod.redis_client.expire(owner_key, 86400)
 
     session_key = f"capture:session:{session_id}"
     _app_mod.redis_client.hset(session_key, mapping={

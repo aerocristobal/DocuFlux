@@ -23,7 +23,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG TESSERACT_LANGS="eng"
 
 # Install system dependencies: Pandoc, LaTeX (with XeLaTeX), Python, Git-LFS,
-# Tesseract OCR engine, and OpenCV dependencies
+# Tesseract OCR engine, and OpenCV dependencies.
+# poppler-utils provides pdftoppm/pdftocairo, which pdf2image shells out to from
+# worker/tasks/conversion.py (convert_from_path). Without it the engine=ocr path fails
+# at runtime with PDFInfoNotInstalledError.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y \
@@ -44,6 +47,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libgl1 \
     libglib2.0-0 \
     tesseract-ocr \
+    poppler-utils \
     ninja-build \
     && git lfs install \
     && ln -s /usr/bin/python3 /usr/bin/python \
@@ -83,8 +87,31 @@ ENV HF_DATASETS_CACHE=/app/.cache/huggingface/datasets
 COPY worker/requirements-${BUILD_GPU}.txt requirements-build.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --upgrade pip setuptools
+# llama-cpp-python publishes no wheel on PyPI, so a plain install compiles llama.cpp from
+# source. The CPU build takes its wheel from upstream's CPU index instead, which turns
+# minutes of compilation into seconds.
+#
+# It is installed on its own line because --extra-index-url is not per-requirement: pip
+# applies it to every package in the file and picks the highest version across both
+# indexes. Applying it to the whole requirements file would therefore change resolution
+# for dependencies that have nothing to do with llama.cpp, and would let any name
+# published on that index shadow PyPI. Installing it first satisfies the unpinned
+# requirement in requirements-build.txt, so the second command resolves everything else
+# from PyPI alone.
+#
+# The GPU build keeps the PyTorch CUDA index untouched: it installs llama-cpp-python[cuda],
+# and pointing it at the CPU index would silently resolve a CPU-only build, losing GPU
+# acceleration for the SLM. Its CUDA wheel variant has to match this image's CUDA version,
+# which is a separate change that needs a real GPU image build to verify.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --extra-index-url https://download.pytorch.org/whl/cu118 -r requirements-build.txt
+    if [ "$BUILD_GPU" = "false" ]; then \
+        pip3 install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+            llama-cpp-python; \
+        pip3 install -r requirements-build.txt; \
+    else \
+        pip3 install --extra-index-url https://download.pytorch.org/whl/cu118 \
+            -r requirements-build.txt; \
+    fi
 
 # Copy shared root-level modules first, then worker code
 COPY config.py .

@@ -22,50 +22,12 @@ from unittest.mock import Mock, patch, MagicMock
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def ui_client():
-    """Flask test client with real storage, mocked Redis/Celery, rate limiting disabled."""
-    import os
-    import tempfile
-    import web.app as web_app_mod
-    from storage import LocalStorageBackend
-    from web.app import app, limiter
-
-    app.config['TESTING'] = True
-    app.config['WTF_CSRF_ENABLED'] = False
-    _tmpdir = tempfile.mkdtemp(prefix='docuflux_ui_test_')
-    _upload = os.path.join(_tmpdir, 'uploads')
-    _output = os.path.join(_tmpdir, 'outputs')
-    os.makedirs(_upload, exist_ok=True)
-    os.makedirs(_output, exist_ok=True)
-    web_app_mod.storage = LocalStorageBackend(upload_folder=_upload, output_folder=_output)
-    web_app_mod.UPLOAD_FOLDER = _upload
-    web_app_mod.OUTPUT_FOLDER = _output
-    app.config['UPLOAD_FOLDER'] = _upload
-    app.config['OUTPUT_FOLDER'] = _output
-    original_enabled = limiter.enabled
-    limiter.enabled = False
-    with app.test_client() as c:
-        yield c
-    limiter.enabled = original_enabled
-
-
-@pytest.fixture
-def mock_redis():
-    with patch('web.app.redis_client') as mock:
-        yield mock
-
-
-@pytest.fixture
-def mock_celery():
-    with patch('web.app.celery') as mock:
-        yield mock
-
-
-@pytest.fixture
-def mock_disk_space():
-    with patch('web.app.check_disk_space', return_value=True):
-        yield
+from tests.support.fixtures import (  # noqa: F401
+    isolated_client as ui_client,
+    mock_redis,
+    mock_celery,
+    mock_disk_space,
+)
 
 
 def _make_job_meta(status='PENDING', progress='0', **overrides):

@@ -47,20 +47,69 @@ docker-compose up --build worker
 ## Testing
 
 ```bash
-# All tests with coverage
+# Everything, with coverage
 pytest
 
-# Specific test file
+# One tier
+pytest -m unit
+pytest -m bdd                  # executable capability specs
+pytest -m characterization     # tests that pin current behaviour
+
+# One capability, or one priority band
+pytest -m "bdd and security"
+pytest -m "bdd and p0"
+
+# One file
 pytest tests/unit/test_web.py -v
-
-# Integration tests (requires running services)
-pytest tests/integration/ -v
-
-# Syntax check
-python3 -m py_compile web/app.py worker/tasks/conversion.py worker/warmup.py
 ```
 
-Coverage threshold is 70%. The test suite uses `pytest.ini` for configuration.
+Tier markers (`unit`, `integration`, `ui`, `bdd`, `characterization`) are applied
+automatically by directory — you do not decorate tests with them. Every other marker must
+be registered in `pytest.ini`; `--strict-markers` rejects typos.
+
+The suite is fully mocked and needs no running services, apart from the handful of tests
+marked `@pytest.mark.docker`, which CI deselects with `-m "not docker"`.
+
+### Coverage
+
+Coverage is enforced per module, not as one project-wide average, because a large
+well-covered module can otherwise hide an entirely untested one. Floors live in
+`pyproject.toml` and are checked by:
+
+```bash
+pytest && python scripts/check_coverage_floors.py
+```
+
+It only enforces against a complete, passing run — a filtered run (`pytest -m unit`)
+covers less of the tree by construction, and the checker refuses rather than reporting
+breaches that are not real.
+
+After adding tests, raise the floors deliberately:
+
+```bash
+pytest && python scripts/check_coverage_floors.py --emit-floors
+```
+
+and paste the result into `pyproject.toml`. Lowering a floor should be as visible in
+review as raising one. Anything unlisted is held to `default_floor`, so a new module has
+to arrive with tests.
+
+### The three kinds of test here
+
+- **`tests/unit/`, `tests/integration/`, `tests/ui/`** — ordinary tests. Add freely.
+- **`tests/features/capabilities/`** — executable specs of product behaviour, written in
+  the language of the user. See `tests/features/README.md` for how to add a scenario.
+- **`tests/characterization/`** — these pin behaviour *as it is today*, including
+  behaviour that may be undesirable. Do not "fix" a failing one to make it pass. If you
+  changed the behaviour on purpose, change the test in the same commit and say why in the
+  message. `@pytest.mark.provisional` marks behaviour known to be incomplete.
+
+### Packaging contracts
+
+`pytest -m packaging` parses the Dockerfiles and requirements files instead of building
+an image. It catches a dependency an image imports but does not declare, and a system
+package a Python dependency shells out to. When you add a dependency, this is the test
+that tells you which requirements file needs it.
 
 ## Project Structure
 

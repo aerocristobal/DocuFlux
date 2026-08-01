@@ -1,4 +1,35 @@
 [run]
+# Branch coverage: a module can hit every line while never taking the `else`.
+# Most of what this suite guards is error handling, which lives in branches.
+branch = True
+# web/app.py calls eventlet.monkey_patch() at import. Where that succeeds — CI's
+# Python 3.11, and any deployment — coverage loses everything running in a green
+# thread unless told about the concurrency library, and reports code as unrun that
+# demonstrably ran. It silently no-ops where monkey-patching fails (Python 3.14),
+# which is why measuring locally and enforcing in CI disagreed by 1.5 points and
+# put three modules under their floors.
+concurrency = eventlet
+# Required by scripts/check_coverage_floors.py, which keys its table on
+# repo-relative paths.
+relative_files = True
+omit =
+    */__pycache__/*
+    */site-packages/*
 
 [report]
-fail_under = 70
+show_missing = True
+exclude_also =
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    if __name__ == .__main__.:
+# Deliberately 0: enforcement lives in scripts/check_coverage_floors.py, which owns
+# both the per-module floors and the project total.
+#
+# A fail_under here would also fire on partial runs — `pytest -m unit` covers less of
+# the tree by construction, so it would fail on coverage despite every test passing.
+# That punishes exactly the selective runs the marker taxonomy exists to enable. One
+# gate, run against a full suite, is both correct and less confusing.
+fail_under = 0
+
+[json]
+pretty_print = True

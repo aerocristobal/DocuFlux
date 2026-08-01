@@ -442,11 +442,18 @@ class TestCaptureFinishSession:
 # ============================================================
 
 class TestListCaptures:
+    """GET /api/captures is scoped to the caller — see tests/unit/test_capture_scoping.py.
+
+    These tests pass an X-Client-ID so the request has an identity; without one the
+    endpoint short-circuits to [] before reading any capture index.
+    """
+
+    OWNER = {'X-Client-ID': 'test-client'}
 
     @patch('app.redis_client')
     def test_empty_returns_empty_list(self, mock_redis, client):
         mock_redis.lrange.return_value = []
-        response = client.get('/api/captures')
+        response = client.get('/api/captures', headers=self.OWNER)
         assert response.status_code == 200
         assert response.json == []
 
@@ -465,7 +472,7 @@ class TestListCaptures:
             'is_zip': 'false',
         }]
 
-        response = client.get('/api/captures')
+        response = client.get('/api/captures', headers=self.OWNER)
         assert response.status_code == 200
         data = response.json
         assert len(data) == 1
@@ -487,7 +494,7 @@ class TestListCaptures:
             'is_zip': 'true',
         }]
 
-        response = client.get('/api/captures')
+        response = client.get('/api/captures', headers=self.OWNER)
         assert response.status_code == 200
         assert response.json[0]['download_url'] == f'/download_zip/{valid_job_id}'
 
@@ -498,7 +505,7 @@ class TestListCaptures:
         mock_redis.pipeline.return_value = mock_pipe
         mock_pipe.execute.return_value = [{}]  # Empty metadata (job cleaned up)
 
-        response = client.get('/api/captures')
+        response = client.get('/api/captures', headers=self.OWNER)
         assert response.status_code == 200
         assert response.json == []  # Skipped due to empty meta
 
@@ -623,7 +630,7 @@ class TestWebhookApi:
     API_KEY_HEADERS = {'X-API-Key': 'dk_testkey'}
 
     @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
-    @patch('web.validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))])
+    @patch('webhook_validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))])
     @patch('app.redis_client')
     def test_register_webhook_success(self, mock_redis, _mock_dns, _mock_key, client, valid_job_id):
         """Register a valid webhook URL for an existing job returns 201."""
@@ -667,7 +674,7 @@ class TestWebhookApi:
         assert response.status_code == 400
 
     @patch('app._validate_api_key', return_value={'created_at': '1700000000.0', 'label': 'test'})
-    @patch('web.validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))])
+    @patch('webhook_validation.socket.getaddrinfo', return_value=[(2, 1, 0, '', ('93.184.216.34', 0))])
     @patch('app.redis_client')
     def test_register_webhook_job_not_found(self, mock_redis, _mock_dns, _mock_key, client, valid_job_id):
         """Register returns 404 when job does not exist."""
@@ -1065,6 +1072,66 @@ def test_500_returns_json_with_request_id(client):
     assert data is not None, "500 response should be JSON, not HTML"
     assert 'request_id' in data
     assert data['error'] == 'Internal server error'
+
+
+def test_unknown_route_returns_404_not_500(client):
+    """The catch-all Exception handler must not rewrite HTTPExceptions to 500."""
+    resp = client.get('/definitely-not-a-real-route')
+    assert resp.status_code == 404
+    data = resp.get_json()
+    assert data is not None, "404 response should be JSON, not HTML"
+    assert data['error'] == 'Not Found'
+    assert 'request_id' in data
+
+
+def test_wrong_method_returns_405_not_500(client):
+    """A 4xx raised by routing keeps its own status code."""
+    resp = client.post('/')
+    assert resp.status_code == 405
+    assert resp.get_json()['error'] == 'Method Not Allowed'
+
+
+def test_5xx_http_exception_keeps_its_own_status_code(client):
+    """A deliberate 503 must not be flattened to 500.
+
+    A client deciding whether to retry reads the status code: 503 says "try again",
+    500 says "this request is broken". Reporting one as the other is a real
+    behavioural difference, not cosmetics.
+    """
+    resp = client.get('/_test_raise_503')
+    assert resp.status_code == 503
+    assert resp.get_json()['error'] == 'Service Unavailable'
+
+
+def test_5xx_http_exception_does_not_echo_its_description(client):
+    """4xx descriptions are werkzeug's static strings; 5xx ones can describe internals."""
+    resp = client.get('/_test_raise_503')
+    body = resp.get_data(as_text=True)
+    assert '10.0.0.7' not in body, f"a 5xx description reached the client: {body}"
+    assert 'request_id' in resp.get_json()
+
+
+def test_csrf_failure_returns_400_with_reason(app):
+    """A missing CSRF session token surfaces as 400 with the reason, not an opaque 500.
+
+    Regression: the Secure session cookie is dropped when the app is reached over
+    plain HTTP, leaving the session empty; that used to report as 'Internal server
+    error', which hid the real cause of failing uploads.
+    """
+    app.config['WTF_CSRF_ENABLED'] = True
+    try:
+        resp = app.test_client().post(
+            '/convert',
+            data={'file': (io.BytesIO(b'x'), 't.txt'), 'from_format': 'markdown',
+                  'to_format': 'html'},
+            content_type='multipart/form-data',
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert data is not None, "CSRF failure should be JSON, not HTML"
+        assert 'CSRF' in data['message']
+    finally:
+        app.config['WTF_CSRF_ENABLED'] = False
 
 
 # --- Epic 7, Story 7.3: Dead letter queue admin endpoint ---
