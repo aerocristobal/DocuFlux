@@ -81,6 +81,12 @@ BINARY_PACKAGES = {
     'pytesseract': 'tesseract-ocr',  # provides the tesseract binary
 }
 
+# The wheel index the CPU build takes llama-cpp-python from. Matched as a whole
+# --extra-index-url argument rather than searched for as a substring: `'host' in cmd`
+# would also match a URL that merely contains the host somewhere else, and reads to a
+# scanner as URL sanitization (CodeQL py/incomplete-url-substring-sanitization).
+LLAMA_CPP_CPU_INDEX = 'https://abetlen.github.io/llama-cpp-python/whl/cpu'
+
 
 # ── parsing helpers ───────────────────────────────────────────────────────────
 
@@ -282,11 +288,15 @@ class TestRequirementsCoverImports:
         # its own — a whole `RUN` block joins into one line and would hide the pairing.
         commands = text.replace('\\\n', ' ').replace('\n', ' ').split(';')
 
-        offenders = [
-            ' '.join(cmd.split())
-            for cmd in commands
-            if 'abetlen.github.io' in cmd and '-r ' in cmd
-        ]
+        offenders = []
+        for cmd in commands:
+            tokens = cmd.split()
+            indexes = [
+                tokens[i + 1] for i, token in enumerate(tokens[:-1])
+                if token == '--extra-index-url'
+            ]
+            if LLAMA_CPP_CPU_INDEX in indexes and '-r' in tokens:
+                offenders.append(' '.join(tokens))
         assert not offenders, (
             "the llama-cpp-python wheel index is applied to a whole requirements file, "
             f"which changes resolution for every package in it: {offenders}"
