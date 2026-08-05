@@ -12,7 +12,7 @@ prometheus-client==0.19.0
 
 # shared/encryption.py, shared/key_manager.py and shared/redis_encryption.py import
 # cryptography unconditionally — without it the CPU image cannot import shared/ at all.
-cryptography==48.0.1
+cryptography==50.0.0
 # config.py imports pydantic_settings at module scope and worker/tasks/__init__.py
 # imports config, so the worker cannot start without it.
 pydantic-settings==2.2.1

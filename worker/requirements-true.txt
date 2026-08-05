@@ -9,7 +9,7 @@ flask-socketio==5.3.6
 gevent==23.9.1
 gevent-websocket==0.10.1
 prometheus-client==0.19.0
-cryptography==48.0.1
+cryptography==50.0.0
 
 # config.py imports pydantic_settings at module scope and worker/tasks/__init__.py
 # imports config, so the worker cannot start without it.
