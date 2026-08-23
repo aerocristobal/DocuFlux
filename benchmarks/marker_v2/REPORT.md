@@ -5,10 +5,16 @@ marker-pdf **1.10.2** vs **2.0.0**, 10 documents / 213 pages, RTX 3090 (24 GB),
 
 ## Recommendation: PROCEED WITH CAVEATS
 
-v2 is faster, extracts comparably or slightly better, and did not regress on any
-category. One unresolved defect blocks an unguarded rollout: **v2 degenerated
-once into a repetition loop**, producing 14× its normal output. That must be
-bounded before production traffic reaches it.
+v2 is faster and extracts comparably or slightly better. No category lost
+extraction quality: every document scored the same, CJK recovery held at 6/6,
+and `tables_unrepairable` stayed at 0 throughout.
+
+Three things the runner flags as regressions are explained below and are not
+quality losses: the `born_digital/attention` slowdown is vLLM cold start, and
+both table-count swings are v2 segmenting tables differently. One is a real
+defect and blocks an unguarded rollout: **v2 degenerated once into a repetition
+loop**, producing 14× its normal output. That must be bounded before
+production traffic reaches it.
 
 ## Headline results
 
@@ -22,7 +28,7 @@ bounded before production traffic reaches it.
 
 ## Per-document
 
-See `report-raw.txt` for the full table. Extraction volume is within ±6.5% on
+The full per-document table is committed as `report-raw.txt`. Extraction volume is within ±6.5% on
 9 of 10 documents. Both scanned documents — rasterised to remove the text layer
 entirely — improved on v2 (+6.5%, +3.3% chars) *and* ran faster, so the OCR path
 is a genuine win rather than a wash.
@@ -80,12 +86,22 @@ resolving before that story proceeds.
 
 ## Reproducing
 
-    uv venv --python 3.11 envs/v1 && uv pip install --python envs/v1/bin/python "marker-pdf[full]==1.10.2"
-    uv venv --python 3.11 envs/v2 && uv pip install --python envs/v2/bin/python "marker-pdf[full]==2.0.0"
-    python3 harness/fetch_corpus.py && envs/v2/bin/python harness/build_derived.py
-    envs/v1/bin/python harness/run_bench.py v1
-    TORCH_DEVICE=cuda VLLM_GPU_MEMORY_UTILIZATION=0.75 VLLM_GPU_TYPE=3090 envs/v2/bin/python harness/run_bench.py v2
-    python3 harness/compare.py
+    ./benchmarks/marker_v2/run.sh
 
-Python **3.11 is required**: `marker-pdf` pins `pillow<11`, which has no cp314
-wheels, so 3.14 fails to build Pillow from source.
+That is the whole thing: it builds both environments, fetches and derives the
+corpus, runs each version, and writes the per-document table to
+`$MARKER_BENCH_WORK/results/report-raw.txt`. It is idempotent — re-running skips
+environments and documents that already exist. Work lives outside the repo
+(default `~/marker-bench`, override with `MARKER_BENCH_WORK`).
+
+To regenerate the comparison from the committed `v1.json` / `v2.json` without
+re-running any conversions:
+
+    python3 benchmarks/marker_v2/compare.py
+
+Requires `uv`, a CUDA GPU, docker (marker 2 spawns a vLLM server), and
+`pdftoppm`. Python **3.11 is pinned in the runner, not incidental**:
+`marker-pdf` pins `pillow<11`, which has no cp314 wheels, so 3.14 fails to
+build Pillow from source. `VLLM_GPU_MEMORY_UTILIZATION` defaults to 0.75 rather
+than surya's 0.85: on a 24 GB card with a desktop session, 0.85 leaves under
+1 GB of headroom.
