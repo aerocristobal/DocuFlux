@@ -16,12 +16,35 @@ services:
       - REDIS_METADATA_URL=redis://redis:6379/1
       - MARKER_ENABLED=true
       - BUILD_GPU=true
+      - SURYA_INFERENCE_AUTOSTART=false
+      - SURYA_INFERENCE_URL=http://surya-vlm:8000
     command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q high_priority,default
     deploy:
       resources:
         limits:
           cpus: '4.0'
           memory: 18G  # 16GB VRAM + 2GB system (Epic 21.4)
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - gpu
+
+  surya-vlm:
+    image: vllm/vllm-openai
+    environment:
+      - VLLM_GPU_MEMORY_UTILIZATION=0.85
+      - SURYA_MODEL=datalab-to/surya-ocr-2
+    command: python -m vllm.entrypoints.api_server --model SURYA_MODEL --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 24G  # 24GB baseline at VLLM_GPU_MEMORY_UTILIZATION=0.85 (Epic 21.10)
         reservations:
           devices:
             - driver: nvidia

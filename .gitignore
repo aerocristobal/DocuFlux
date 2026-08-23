@@ -23,3 +23,11 @@ dist/
 *.gguf
 *.safetensors
 *.bin
+
+# Gas Town (added by gt)
+.runtime/
+.opencode/
+.logs/
+state.json
+CLAUDE.local.md
+GEMINI.md
