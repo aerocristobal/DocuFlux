@@ -1,0 +1,97 @@
+---
+# Surya VLM Inference Server — dedicated out-of-process service
+# Workers attach via SURYA_INFERENCE_URL; no Docker socket needed (Epic 21.8-21.10)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: surya-vlm
+  namespace: docuflux
+  labels:
+    app: surya-vlm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: surya-vlm
+  template:
+    metadata:
+      labels:
+        app: surya-vlm
+    spec:
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: surya-vlm
+          image: vllm/vllm-openai
+          imagePullPolicy: Always
+          args:
+            - python
+            - -m
+            - vllm.entrypoints.api_server
+            - --model
+            - SURYA_MODEL
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+          env:
+            - name: VLLM_GPU_MEMORY_UTILIZATION
+              value: "0.85"
+            - name: SURYA_MODEL
+              value: datalab-to/surya-ocr-2
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            limits:
+              memory: 24Gi
+              cpu: "8"
+              nvidia.com/gpu: "1"
+            requests:
+              memory: 8Gi
+              cpu: "2"
+              nvidia.com/gpu: "1"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Story 21.11: Mount model artifact at container start so it's
+          # available immediately; no on-demand download from Hugging Face.
+          volumeMounts:
+            - name: model-cache
+              mountPath: /root/.cache/huggingface
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: model-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: surya-vlm
+  namespace: docuflux
+spec:
+  selector:
+    app: surya-vlm
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
