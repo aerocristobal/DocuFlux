@@ -186,7 +186,10 @@ jobs:
       run: bandit -r web worker shared -lll
 
     - name: Generate SBOM (syft)
-      uses: anchore/sbom-action@v0
+      # Pinned to a commit SHA rather than the floating @v0 tag so the action
+      # cannot change under us on a re-run. e22c389 is v0.24.0, which is what
+      # @v0 already resolved to when this was pinned — behaviour is unchanged.
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       with:
         path: .
         format: spdx-json

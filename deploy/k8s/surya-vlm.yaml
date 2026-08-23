@@ -25,14 +25,14 @@ spec:
         runAsUser: 1000
       containers:
         - name: surya-vlm
-          image: vllm/vllm-openai
+          image: vllm/vllm-openai:v0.20.1
           imagePullPolicy: Always
           args:
             - python
             - -m
             - vllm.entrypoints.api_server
             - --model
-            - SURYA_MODEL
+            - $(SURYA_MODEL)
             - --host
             - 0.0.0.0
             - --port

@@ -33,11 +33,11 @@ services:
       - gpu
 
   surya-vlm:
-    image: vllm/vllm-openai
+    image: vllm/vllm-openai:v0.20.1
     environment:
       - VLLM_GPU_MEMORY_UTILIZATION=0.85
       - SURYA_MODEL=datalab-to/surya-ocr-2
-    command: python -m vllm.entrypoints.api_server --model SURYA_MODEL --host 0.0.0.0 --port 8000
+    command: sh -c "python -m vllm.entrypoints.api_server --model $$SURYA_MODEL --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     deploy:
