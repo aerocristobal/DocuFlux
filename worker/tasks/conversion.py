@@ -75,7 +75,9 @@ model_dict = None
 def get_model_dict():
     """Lazily load and cache Marker AI model artifacts."""
     if _pkg.model_dict is None:
-        os.environ["INFERENCE_RAM"] = "16"
+        # No INFERENCE_RAM: marker 2 sets model devices server-side, and
+        # create_model_dict() accepts device/dtype only for call-site
+        # compatibility. The value here never reached the models.
         from marker.models import create_model_dict
         logging.info("Initializing Marker models...")
         _pkg.model_dict = create_model_dict()
@@ -164,7 +166,17 @@ def _save_marker_output(rendered, output_path, images_dir, include_images=True, 
 
 
 def _cleanup_marker_memory(*objects):
-    """Free GPU/CPU memory after a Marker task."""
+    """Release this task's local Marker objects.
+
+    Under marker 2 the model weights live in a shared surya inference server
+    process, not here, so torch.cuda.empty_cache() would free nothing and the
+    old "GPU memory freed" figure described the wrong process. Only the local
+    rendered/images objects are ours to drop.
+
+    This runs after EVERY conversion, so it must never touch the shared
+    server — see shutdown_marker_models() for that, which is bound to
+    worker shutdown instead.
+    """
     import gc
     for obj in objects:
         try:
@@ -172,16 +184,29 @@ def _cleanup_marker_memory(*objects):
         except Exception:
             pass
     gc.collect()
+    logging.info("Marker task cleanup complete (local objects released; "
+                 "model weights live in the inference server process)")
+
+
+def shutdown_marker_models():
+    """Stop the shared inference server, if this process started it.
+
+    marker.models.shutdown_models() stops the server only when this process
+    was the one that spawned it. With the SURYA_INFERENCE_URL topology the
+    worker attaches to a server it does not own, so this is expected to be a
+    no-op — but it is still the correct call to make at shutdown, and it
+    matters for any deployment that does let the worker spawn its own.
+    """
+    if _pkg.model_dict is None:
+        return
     try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            mem_freed = torch.cuda.memory_reserved(0) - torch.cuda.memory_allocated(0)
-            logging.info(f"Memory cleanup complete. GPU memory freed: {mem_freed / 1e9:.2f} GB")
-        else:
-            logging.info("Memory cleanup complete (CPU mode)")
+        from marker.models import shutdown_models
+        shutdown_models(_pkg.model_dict)
+        logging.info("Marker inference server shutdown requested.")
     except Exception as e:
-        logging.warning(f"Memory cleanup failed: {e}")
+        logging.warning(f"Marker model shutdown failed: {e}")
+    finally:
+        _pkg.model_dict = None
 
 
 def _slm_refine_markdown(text, job_id):

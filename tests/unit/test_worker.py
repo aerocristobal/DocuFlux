@@ -815,7 +815,7 @@ class TestSweepOrphanedTempFiles:
 # GPU memory cleanup tests (Epic 21.4)
 # ============================================================
 
-class TestGPUMemoryCleanup:
+class TestMarkerTaskCleanup:
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -828,7 +828,12 @@ class TestGPUMemoryCleanup:
                                                     mock_makedirs, mock_get_models,
                                                     mock_slm, mock_socketio,
                                                     mock_redis, sample_job_id):
-        """torch.cuda.empty_cache() is called after successful Marker conversion."""
+        """A completed conversion must NOT stop the shared inference server.
+
+        Under marker 2 the models live in a shared surya server process that
+        many thin workers attach to. Tearing it down in per-task cleanup would
+        restart it between jobs; shutdown belongs on worker exit instead.
+        """
         mock_exists.return_value = True
         mock_pipe = MagicMock()
         mock_redis.pipeline.return_value = mock_pipe
@@ -842,7 +847,7 @@ class TestGPUMemoryCleanup:
             sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
         )
 
-        _torch.cuda.empty_cache.assert_called()
+        sys.modules['marker.models'].shutdown_models.assert_not_called()
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -853,7 +858,7 @@ class TestGPUMemoryCleanup:
                                                     mock_makedirs, mock_get_models,
                                                     mock_socketio, mock_redis,
                                                     sample_job_id):
-        """torch.cuda.empty_cache() is called even when Marker conversion fails."""
+        """A failed conversion must NOT stop the shared inference server either."""
         mock_exists.return_value = True
         mock_pipe = MagicMock()
         mock_redis.pipeline.return_value = mock_pipe
@@ -869,7 +874,7 @@ class TestGPUMemoryCleanup:
                 sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
             )
 
-        _torch.cuda.empty_cache.assert_called()
+        sys.modules['marker.models'].shutdown_models.assert_not_called()
 
 
 # ============================================================
