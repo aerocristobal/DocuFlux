@@ -61,6 +61,10 @@ spec:
               value: redis://:$(REDIS_PASSWORD)@redis:6379/0
             - name: REDIS_METADATA_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379/1
+            - name: SURYA_INFERENCE_AUTOSTART
+              value: "false"
+            - name: SURYA_INFERENCE_URL
+              value: http://surya-vlm:8000
           resources:
             limits:
               memory: 2Gi
@@ -160,6 +164,10 @@ spec:
               value: redis://:$(REDIS_PASSWORD)@redis:6379/0
             - name: REDIS_METADATA_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379/1
+            - name: SURYA_INFERENCE_AUTOSTART
+              value: "false"
+            - name: SURYA_INFERENCE_URL
+              value: http://surya-vlm:8000
           resources:
             limits:
               memory: 18Gi
@@ -269,6 +277,10 @@ spec:
               value: redis://:$(REDIS_PASSWORD)@redis:6379/0
             - name: REDIS_METADATA_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379/1
+            - name: SURYA_INFERENCE_AUTOSTART
+              value: "false"
+            - name: SURYA_INFERENCE_URL
+              value: http://surya-vlm:8000
           resources:
             limits:
               memory: 256Mi

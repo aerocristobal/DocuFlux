@@ -5,7 +5,7 @@ import time
 import requests
 import logging
 from celery import Celery
-from celery.signals import task_prerun, task_postrun
+from celery.signals import task_prerun, task_postrun, worker_shutdown
 from flask_socketio import SocketIO
 
 from config import settings
@@ -218,6 +218,23 @@ def _eager_marker_warmup():
 
 
 _eager_marker_warmup()
+
+
+@worker_shutdown.connect
+def _shutdown_marker_models(**_kwargs):
+    """Release the shared inference server when this worker exits.
+
+    Bound to worker shutdown deliberately, NOT to per-task cleanup:
+    _cleanup_marker_memory() runs after every conversion, and stopping the
+    shared surya server there would tear it down between jobs — the opposite
+    of marker 2's design, where many thin workers share one long-lived
+    server. Best-effort; a failure here must not block worker exit.
+    """
+    try:
+        conversion.shutdown_marker_models()
+    except Exception as e:  # pragma: no cover - defensive
+        logging.warning(f"Marker shutdown on worker exit failed: {e}")
+
 
 # Beat schedule
 celery.conf.beat_schedule = {
