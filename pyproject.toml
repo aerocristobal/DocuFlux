@@ -15,7 +15,7 @@ default_floor = 60
 # ordinary churn does not trip it. Enforced here rather than as coverage.py's fail_under
 # so that partial runs (`pytest -m unit`) do not fail on coverage they never claimed to
 # produce.
-total_floor = 77
+total_floor = 80
 
 [tool.docuflux.coverage.floors]
 "config.py" = 95
