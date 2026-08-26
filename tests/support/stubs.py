@@ -112,3 +112,8 @@ def install_worker_stubs():
     torch.cuda.empty_cache = MagicMock()
     torch.cuda.memory_allocated.return_value = 0
     torch.cuda.memory_reserved.return_value = 0
+
+    # marker.models.shutdown_models is called on worker exit during v2 shutdown.
+    # It is safe to call multiple times; the real implementation is a no-op when the
+    # worker did not spawn the server. Stub it as a no-op so callers do not crash.
+    sys.modules['marker.models'].shutdown_models = MagicMock()
