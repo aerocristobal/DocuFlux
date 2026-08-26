@@ -77,6 +77,41 @@ def _validate_convert_file(file, from_info):
     return None
 
 
+_VALIDID_MARKER_OPTIONS = {'force_ocr', 'include_images'}
+
+
+def _validate_marker_options(form):
+    """Validate and sanitize the Marker options dict from a form submission.
+
+    Returns (options_dict, error_response). On success, error_response is None
+    and options_dict contains only allowlisted keys. On failure, options_dict is
+    empty and error_response is a (jsonify(...), status_code) tuple.
+    """
+    raw_options = {}
+    for key in form:
+        if key in _VALIDID_MARKER_OPTIONS:
+            raw_options[key] = form.get(key) == 'on'
+
+    # Reject use_llm outright — it triggers outbound LLM calls (Google Gemini,
+    # OpenAI, Anthropic) from a deployment that claims to be privacy-first and
+    # self-hosted. A caller asking for behavior they will not get must get an error.
+    if 'use_llm' in form:
+        return ({}, jsonify({
+            'error': 'use_llm is not supported. This deployment does not offer '
+                     'LLM-assisted Marker conversion. Use the marker engine without '
+                     'LLM post-processing, or configure a local llm_service.'
+        }), 400)
+
+    # Reject any unrecognized keys — they must never reach PdfConverter.
+    # We only accept keys in _VALIDID_MARKER_OPTIONS; anything else is dropped.
+    for key in form:
+        if key not in _VALIDID_MARKER_OPTIONS and key != 'use_llm':
+            # Unknown key — drop it (it will not be included in options)
+            pass
+
+    return (raw_options, None)
+
+
 def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     """Save an uploaded file, record job metadata, and dispatch its Celery task.
 
@@ -92,10 +127,15 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     base_name = os.path.splitext(input_filename)[0]
     output_filename = f"{base_name}.{to_info['extension'].lstrip('.')}"
 
+    # Validate and sanitize Marker options before building metadata and task args
+    options, err = _validate_marker_options(form)
+    if err:
+        return error, None  # Will be handled by caller
+
     _app_mod.update_job_metadata(job_id, build_job_metadata(
         file.filename, from_format, to_format,
-        force_ocr=str(form.get('force_ocr') == 'on'),
-        use_llm=str(form.get('use_llm') == 'on'),
+        force_ocr=options.get('force_ocr', False),
+        use_llm='false',  # explicitly disabled per allowlist policy
     ))
     _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
 
@@ -114,11 +154,9 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     task_args = [job_id, input_filename, output_filename, from_format, to_format]
 
     if from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
-        options = {
-            'force_ocr': form.get('force_ocr') == 'on',
-            'use_llm': form.get('use_llm') == 'on'
-        }
-        task_args.append(options)
+        # Only allowlisted keys reach PdfConverter; use_llm is excluded.
+        options_to_use = {k: v for k, v in options.items() if k in _VALIDID_MARKER_OPTIONS}
+        task_args.append(options_to_use)
 
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
     if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
@@ -127,7 +165,7 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
         target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
     _app_mod.celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
-    return job_id
+    return job_id, options
 
 
 def _respond_convert_success(job_ids):
