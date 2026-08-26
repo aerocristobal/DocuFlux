@@ -167,13 +167,47 @@ def _col_count(row: str) -> int:
     return len([c for c in stripped.split("|")])
 
 
-def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityReport:
+def _detect_repetition(text: str, threshold: float = 0.3) -> bool:
+    """Detect if a document contains excessive repetition.
+
+    Checks whether a significant portion of the text consists of repeated
+    patterns. Uses a simple approach: find the longest repeated n-gram and
+    check if it covers more than ``threshold`` of the total word count.
+
+    Returns True if the document is excessively repetitive.
+    """
+    words = _WORD_RE.findall(text)
+    if len(words) < 10:
+        return False
+
+    # Build n-grams (2-word chunks) and count occurrences
+    ngram_counts: Dict[str, int] = {}
+    for i in range(len(words) - 1):
+        ngram = " ".join(words[i:i + 2])
+        ngram_counts[ngram] = ngram_counts.get(ngram, 0) + 1
+
+    if not ngram_counts:
+        return False
+
+    most_common_ngram = max(ngram_counts.values())
+    # If the most common n-gram appears in more than ``threshold`` fraction
+    # of all possible n-grams positions, flag as repetitive
+    ngram_positions_fraction = most_common_ngram / max(len(words) - 1, 1)
+    return ngram_positions_fraction > threshold
+
+
+def score_markdown(markdown: str, page_count: Optional[int] = None,
+                   per_page_word_counts: Optional[List[int]] = None) -> QualityReport:
     """Score converted Markdown and return a :class:`QualityReport`.
 
     Args:
         markdown: The converted Markdown text.
         page_count: Number of source pages, if known (used for word density and
             empty-page ratio). When ``None`` or ``< 1`` it is treated as 1.
+        per_page_word_counts: Optional per-page word counts (length of list = page_count).
+            When provided, empty_page_ratio uses real page boundaries instead of
+            equal-word-chunk splitting. This enables detecting genuinely empty pages
+            in documents with healthy total word counts.
     """
     text = markdown or ""
     pages = page_count if (page_count and page_count >= 1) else 1
@@ -184,10 +218,18 @@ def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityRe
     has_headings = _has_headings(text)
     malformed_tables = _malformed_table_count(text)
 
-    # Empty-page ratio: split the doc into `pages` equal word-chunks and count
-    # how many fall below the empty threshold. Deterministic given the inputs.
-    words = _WORD_RE.findall(text)
-    if pages > 1:
+    # Compute metrics
+    chars_per_page = len(text) / pages if pages > 0 else 0
+
+    # Empty-page ratio: if per-page word counts are provided, use real boundaries;
+    # otherwise fall back to equal-word-chunk splitting.
+    if per_page_word_counts is not None and len(per_page_word_counts) == pages:
+        # Use actual per-page word counts for empty page detection
+        empty_pages = sum(1 for c in per_page_word_counts if c < EMPTY_PAGE_WORD_THRESHOLD)
+        empty_page_ratio = empty_pages / pages if pages > 0 else 0.0
+    elif pages > 1:
+        # Fall back to equal-word-chunk splitting (previous behavior)
+        words = _WORD_RE.findall(text)
         per = max(1, len(words) // pages)
         chunks = [words[k:k + per] for k in range(0, max(len(words), 1), per)][:pages]
         empty_pages = sum(1 for c in chunks if len(c) < EMPTY_PAGE_WORD_THRESHOLD)
@@ -201,6 +243,7 @@ def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityRe
         "total_words": float(total_words),
         "page_count": float(pages),
         "words_per_page": round(words_per_page, 2),
+        "chars_per_page": round(chars_per_page, 2),
         "garbage_ratio": round(garbage, 4),
         "has_headings": 1.0 if has_headings else 0.0,
         "malformed_tables": float(malformed_tables),
@@ -218,6 +261,16 @@ def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityRe
         reason_codes.append("low_word_density")
         score -= 40
 
+    if words_per_page > MAX_WORDS_PER_PAGE and "empty_output" not in reason_codes:
+        reason_codes.append("excess_output")
+        score -= 15
+
+    if chars_per_page > MAX_CHARS_PER_PAGE and "empty_output" not in reason_codes:
+        # Only add excess_output once even if both word and char thresholds are exceeded
+        if "excess_output" not in reason_codes:
+            reason_codes.append("excess_output")
+            score -= 15
+
     if not has_headings:
         reason_codes.append("no_headings")
         score -= 15
@@ -229,6 +282,10 @@ def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityRe
     if garbage > MAX_GARBAGE_RATIO:
         reason_codes.append("high_garbage_ratio")
         score -= 25
+
+    if _detect_repetition(text):
+        reason_codes.append("repetitive_output")
+        score -= 15
 
     if empty_page_ratio > MAX_EMPTY_PAGE_RATIO and "empty_output" not in reason_codes:
         reason_codes.append("high_empty_page_ratio")
