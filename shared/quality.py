@@ -22,6 +22,8 @@ Reason codes (stable, machine-readable):
     malformed_tables        one or more Markdown tables are malformed
     high_garbage_ratio      too many non-printable / replacement characters
     high_empty_page_ratio   too many pages produced little or no text
+    excess_output           too many words or chars per page
+    repetitive_output       document contains excessive repetition
 
 Grades:
     good   score >= 75 and no blocking reason codes
