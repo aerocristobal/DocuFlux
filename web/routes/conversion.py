@@ -355,7 +355,7 @@ def retry_job(job_id):
     _app_mod.update_job_metadata(new_job_id, build_job_metadata(
         input_filename, job_data.get('from'), job_data.get('to'),
         force_ocr=job_data.get('force_ocr'),
-        use_llm=job_data.get('use_llm'),
+        use_llm='false',  # explicitly disabled per allowlist policy
     ))
     _app_mod.redis_client.zadd('jobs:active', {new_job_id: time.time()})
 
@@ -372,10 +372,10 @@ def retry_job(job_id):
         task_name = 'tasks.convert_document'
     task_args = [new_job_id, input_filename, output_filename, original_from, job_data.get('to')]
 
+    # Build options with only allowlisted keys; use_llm is excluded per policy.
     if original_from in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
         options = {
             'force_ocr': job_data.get('force_ocr') == 'True',
-            'use_llm': job_data.get('use_llm') == 'True'
         }
         task_args.append(options)
 
