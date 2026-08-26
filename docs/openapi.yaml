@@ -376,7 +376,6 @@ paths:
                   description: Force OCR on every page (Marker only)
                   type: boolean
                   default: false
-                  description: Use LLM post-processing (Marker only)
       responses:
         '202':
           description: Job queued
