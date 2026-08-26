@@ -564,26 +564,18 @@ def _resolve_v1_convert_format(filename, from_format, engine):
     return None, from_format, internal_from_format
 
 
-def _validate_v1_marker_options(force_ocr, use_llm, include_images):
-    """Validate v1 Marker options, rejecting use_llm per the allowlist policy.
+def _validate_v1_marker_options(force_ocr, include_images):
+    """Validate v1 Marker options per the allowlist policy.
 
     Returns (options_dict, error_response). On success, error_response is None.
+    Only allowlisted keys (force_ocr, include_images) are included in options.
     """
-    # Reject use_llm — same policy as the web UI: no outbound LLM calls.
-    if use_llm:
-        error_response = jsonify({
-            'error': 'use_llm is not supported. This deployment does not offer '
-                     'LLM-assisted Marker conversion. Use the marker engine without '
-                     'LLM post-processing.'
-        })
-        return ({}, error_response, 422)
-
     options = {'force_ocr': force_ocr, 'include_images': include_images}
     return (options, None)
 
 
 def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
-                             force_ocr, use_llm, include_images, pandoc_options,
+                             force_ocr, include_images, pandoc_options,
                              timestamp):
     """Create the job, save the upload, record metadata, and dispatch the
     Celery task for /api/v1/convert.
@@ -617,7 +609,7 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
 
     # Validate and sanitize Marker options per the allowlist policy.
     if engine == 'marker' or internal_from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
-        options, err = _validate_v1_marker_options(force_ocr, use_llm, include_images)
+        options, err = _validate_v1_marker_options(force_ocr, include_images)
         if err is not None:
             return err
 

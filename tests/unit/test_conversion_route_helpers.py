@@ -133,7 +133,7 @@ class TestEnqueueConvertJob:
         args, kwargs = mock_app_mod.celery.send_task.call_args
         assert args[0] == 'tasks.convert_with_marker'
         assert kwargs['queue'] == 'gpu'
-        assert kwargs['args'][-1] == {'force_ocr': True}  # use_llm excluded per allowlist policy
+        assert kwargs['args'][-1] == {'force_ocr': True}
 
     @patch('web.routes.conversion._app_mod')
     def test_large_file_routes_to_default_queue(self, mock_app_mod, tmp_path):
@@ -275,7 +275,7 @@ class TestEnqueueV1ConvertJob:
     def test_content_type_mismatch_short_circuits(self, mock_app_mod):
         f = _fs(b'not a pdf', 'test.pdf')
         error, job_id = _enqueue_v1_convert_job(
-            f, 'pdf', 'markdown', 'pandoc', False, False, True, None, str(time.time())
+            f, 'pdf', 'markdown', 'pandoc', False, True, None, str(time.time())
         )
         assert error[1] == 422
         assert job_id is None
@@ -288,7 +288,7 @@ class TestEnqueueV1ConvertJob:
         f = _fs(b'# hi', 'test.md')
 
         error, job_id = _enqueue_v1_convert_job(
-            f, 'markdown', 'docx', 'pandoc', False, False, True, {'toc': True}, str(time.time())
+            f, 'markdown', 'docx', 'pandoc', False, True, {'toc': True}, str(time.time())
         )
 
         assert error is None
@@ -305,14 +305,14 @@ class TestEnqueueV1ConvertJob:
         f = _fs(b'%PDF-1.4', 'test.pdf')
 
         error, job_id = _enqueue_v1_convert_job(
-            f, 'pdf_marker', 'markdown', 'marker', True, False, True, None, str(time.time())
+            f, 'pdf_marker', 'markdown', 'marker', True, True, None, str(time.time())
         )
 
         assert error is None
         args, kwargs = mock_app_mod.celery.send_task.call_args
         assert args[0] == 'tasks.convert_with_marker'
         assert kwargs['queue'] == 'gpu'
-        assert kwargs['args'][-1] == {'force_ocr': True, 'include_images': True}  # use_llm excluded per allowlist policy
+        assert kwargs['args'][-1] == {'force_ocr': True, 'include_images': True}
 
     @patch('web.routes.conversion.validate_file_content_type', return_value=(True, None))
     @patch('web.routes.conversion._app_mod')
