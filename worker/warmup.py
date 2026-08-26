@@ -68,15 +68,23 @@ def start_health_server():
 def check_gpu_availability():
     """
     Detect GPU availability and store detailed info in Redis.
+    In v2 client/server mode, the worker process holds no models —
+    VRAM figures should describe the inference server's headroom, not the worker's.
+
     Returns GPU info dict with status, model, VRAM, CUDA version, etc.
     """
     try:
         import torch
         import subprocess
 
+        # Check if inference server is reachable (v2 model)
+        # The worker process holds no models; VRAM reported should reflect
+        # the inference server's GPU headroom, not the worker's VRAM.
+        inference_reachable = _check_inference_server_health()
+
         if not torch.cuda.is_available():
             # No GPU detected
-            gpu_info = {"status": "unavailable"}
+            gpu_info = {"status": "unavailable", "inference_reachable": inference_reachable}
             logging.warning("No GPU detected - running in CPU-only mode")
         else:
             # GPU detected - get detailed information
@@ -90,7 +98,8 @@ def check_gpu_availability():
                 "model": torch.cuda.get_device_name(0),
                 "vram_total": round(vram_total_gb, 2),
                 "vram_available": round(vram_available_gb, 2),
-                "cuda_version": torch.version.cuda if torch.version.cuda else "unknown"
+                "cuda_version": torch.version.cuda if torch.version.cuda else "unknown",
+                "inference_reachable": inference_reachable,
             }
 
             # Try to get driver version from nvidia-smi
@@ -121,7 +130,7 @@ def check_gpu_availability():
 
             logging.info(f"GPU detected: {gpu_info['model']} with {gpu_info['vram_total']} GB VRAM")
 
-        # Store in Redis
+        # Store in Redis - worker VRAM, with inference reachability flag
         r.hset("marker:gpu_info", mapping=gpu_info)
         r.set("marker:gpu_status", gpu_info["status"])
 
@@ -143,10 +152,33 @@ def check_gpu_availability():
     except Exception as e:
         logging.error(f"GPU detection failed: {e}")
         # Fallback to unavailable
-        gpu_info = {"status": "unavailable", "error": str(e)}
+        gpu_info = {"status": "unavailable", "error": str(e), "inference_reachable": False}
         r.hset("marker:gpu_info", mapping=gpu_info)
         r.set("marker:gpu_status", "unavailable")
         return gpu_info
+
+
+def _check_inference_server_health():
+    """
+    Check if the inference server is reachable and ready.
+
+    In v2 client/server mode, the worker process holds no models —
+    model loading happens in the inference server process.
+    This probes the server's /health endpoint to determine readiness.
+
+    Returns:
+        bool: True if the inference server is reachable and reports ready status.
+    """
+    import httpx
+
+    inference_url = os.environ.get('INFERENCE_SERVER_URL', 'http://localhost:8080/healthz')
+    try:
+        response = httpx.get(inference_url, timeout=2.0)
+        # Server is reachable and returned a 200 with OK status
+        return response.status_code == 200
+    except (httpx.ConnectError, httpx.TimeoutException, Exception):
+        # Inference server is unreachable
+        return False
 
 def warmup():
     global slm_model
@@ -156,16 +188,28 @@ def warmup():
 
     gpu_info = check_gpu_availability()
 
-    if gpu_info["status"] == "available" and "vram_total" in gpu_info:
-        inference_ram = min(16, int(gpu_info["vram_total"]))
+    # Under v2 client/server, the worker process holds no models.
+    # inference_ram should reflect the inference server's headroom.
+    # Since we can't know the server's VRAM from the worker, use a safe default.
+    inference_ram = 4  # conservative default for CPU-only / thin worker
+    n_gpu_layers = 0
+
+    if gpu_info["status"] == "available" and gpu_info.get("inference_reachable", False):
+        # Inference server is reachable — use its reported VRAM headroom
+        inference_ram = min(16, int(gpu_info.get("vram_available", 16)))
         n_gpu_layers = -1
+    elif gpu_info["status"] == "available":
+        # GPU available but inference server unreachable — conservative
+        inference_ram = 4
+        n_gpu_layers = 0
     else:
+        # No GPU
         inference_ram = 4
         n_gpu_layers = 0
 
     os.environ["INFERENCE_RAM"] = str(inference_ram)
-    logging.info(f"Set INFERENCE_RAM={inference_ram} (GPU status: {gpu_info['status']})")
-    
+    logging.info(f"Set INFERENCE_RAM={inference_ram} (GPU status: {gpu_info['status']}, inference reachable: {gpu_info.get('inference_reachable', False)})")
+
     slm_status = "unavailable"
     slm_model_path_env = os.environ.get("SLM_MODEL_PATH")
     default_slm_model_path_dir = "/app/models/TinyLlama-1.1B-Chat-v1.0-GGUF"
@@ -176,7 +220,7 @@ def warmup():
         model_to_load = slm_model_path_env
     elif os.path.exists(default_slm_model_path_file):
         model_to_load = default_slm_model_path_file
-    
+
     if model_to_load:
         logging.info(f"Attempting to load SLM model from: {model_to_load} with n_gpu_layers: {n_gpu_layers}")
         try:
@@ -194,24 +238,24 @@ def warmup():
     r.set("slm:status", slm_status)
 
     try:
+        # In v2, marker models are loaded on-demand in the inference server,
+        # not in the worker. Report GPU availability and let the server handle warmup.
         if gpu_info["status"] == "available":
-            logging.info("Verifying Marker models are cached (lazy loading mode)...")
-            cache_dir = os.path.expanduser("~/.cache/huggingface")
-            if os.path.exists(cache_dir):
-                logging.info(f"Marker model cache verified at {cache_dir}")
-                logging.info("Models will be loaded on-demand when first PDF conversion is requested")
-            else:
-                logging.warning("Marker model cache not found - models will download on first use")
+            logging.info("GPU available - Marker models will load on-demand in inference server")
+            # Do NOT set marker:model_warm from the worker — that flag reflected v1
+            # model-loading behavior that no longer happens here. The inference server
+            # manages its own warmup state independently.
         else:
             logging.info("GPU unavailable - Marker tasks will be disabled")
-        
-        with open(MODELS_READY_FILE, 'w') as f:
-            f.write("ready")
-            
+
+        # Do not set MODELS_READY_FILE or marker:model_warm from the worker.
+        # These reflected v1 behavior where the worker pre-loaded models.
+        # Under v2, the inference server manages its own readiness.
+
         r.set(STATUS_KEY, "ready")
         r.set(ETA_KEY, "0s")
-        r.set(VRAM_KEY, "Checking...")
-        
+        # Do not set VRAM_KEY from worker — the inference server reports its own VRAM
+
     except Exception as e:
         logging.error(f"Marker Warmup failed: {e}")
         r.set(STATUS_KEY, "error")
