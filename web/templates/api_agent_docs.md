@@ -65,7 +65,6 @@ Multipart form data:
 | from_format | No | Source format key (auto-detected from extension if omitted) |
 | engine | No | `pandoc` (default) or `marker` |
 | force_ocr | No | Force OCR for Marker engine (default: false) |
-| use_llm | No | Use LLM for Marker engine (default: false) |
 | pandoc_options | No | JSON object of Pandoc options (engine=pandoc only). See [Pandoc Options](#pandoc-options-reference) |
 
 Response (202):

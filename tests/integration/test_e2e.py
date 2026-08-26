@@ -358,8 +358,7 @@ class TestJobManagement:
             'filename': 'test.md',
             'from': 'markdown',
             'to': 'html',
-            'force_ocr': 'False',
-            'use_llm': 'False'
+            'force_ocr': 'False'
         }
         mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
 

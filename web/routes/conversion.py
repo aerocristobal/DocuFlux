@@ -136,7 +136,6 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     _app_mod.update_job_metadata(job_id, build_job_metadata(
         file.filename, from_format, to_format,
         force_ocr=options.get('force_ocr', False),
-        use_llm='false',  # explicitly disabled per allowlist policy
     ))
     _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
 
@@ -355,7 +354,6 @@ def retry_job(job_id):
     _app_mod.update_job_metadata(new_job_id, build_job_metadata(
         input_filename, job_data.get('from'), job_data.get('to'),
         force_ocr=job_data.get('force_ocr'),
-        use_llm='false',  # explicitly disabled per allowlist policy
     ))
     _app_mod.redis_client.zadd('jobs:active', {new_job_id: time.time()})
 
@@ -624,7 +622,6 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
             return err
 
         metadata['force_ocr'] = str(force_ocr)
-        metadata['use_llm'] = 'false'  # explicitly disabled per allowlist policy
 
     _app_mod.update_job_metadata(job_id, metadata)
     _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
@@ -704,7 +701,6 @@ def api_v1_convert():
     from_format = request.form.get('from_format')
     engine = request.form.get('engine', 'pandoc')
     force_ocr = request.form.get('force_ocr', 'false').lower() == 'true'
-    use_llm = request.form.get('use_llm', 'false').lower() == 'true'
     # Story 1.5: text-only consumers can skip extracted images entirely.
     include_images = request.form.get('include_images', 'true').lower() == 'true'
     raw_pandoc = request.form.get('pandoc_options')
@@ -719,7 +715,7 @@ def api_v1_convert():
 
     timestamp = str(time.time())
     error, job_id = _enqueue_v1_convert_job(
-        file, internal_from_format, to_format, engine, force_ocr, use_llm,
+        file, internal_from_format, to_format, engine, force_ocr,
         include_images, pandoc_options, timestamp
     )
     if error:

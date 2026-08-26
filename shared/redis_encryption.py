@@ -32,7 +32,6 @@ PLAINTEXT_FIELDS = {
     'progress',      # Progress percentage
     'encrypted',     # Encryption flag
     'force_ocr',     # Marker option
-    'use_llm',       # Marker option
 }
 
 

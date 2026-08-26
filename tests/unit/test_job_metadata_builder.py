@@ -27,10 +27,9 @@ def test_custom_status():
 def test_extra_fields_pass_through():
     meta = build_job_metadata(
         'doc.pdf', 'pdf_marker', 'markdown',
-        force_ocr='True', use_llm='False', engine='marker',
+        force_ocr='True', engine='marker',
     )
     assert meta['force_ocr'] == 'True'
-    assert meta['use_llm'] == 'False'
     assert meta['engine'] == 'marker'
 
 
