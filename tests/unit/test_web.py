@@ -187,7 +187,6 @@ def test_retry_job(mock_celery, mock_redis, client, valid_job_id):
         'from': 'markdown',
         'to': 'html',
         'force_ocr': 'False',
-        'use_llm': 'False',
     }
     mock_pipe = MagicMock()
     mock_redis.pipeline.return_value = mock_pipe

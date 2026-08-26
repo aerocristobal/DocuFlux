@@ -101,11 +101,11 @@ def _not_gpu(ctx):
     assert _last_dispatch(ctx)[1]['queue'] != 'gpu'
 
 
-@then('the task options include force_ocr and use_llm')
+@then('the task options include force_ocr and include_images')
 def _has_options(ctx):
     args = _last_dispatch(ctx)[1]['args']
     options = args[5]
-    assert 'force_ocr' in options and 'use_llm' in options
+    assert 'force_ocr' in options and 'include_images' in options
 
 
 @then('the task is dispatched with no options')
@@ -173,7 +173,6 @@ def _completed_with_format(bdd_client, mock_redis, ctx, from_format):
         'from': from_format,
         'to': 'markdown',
         'force_ocr': 'False',
-        'use_llm': 'False',
     }
     mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
     web_app.storage.makedirs(job_id, folder='upload')
@@ -188,7 +187,7 @@ def _cleaned_up(mock_redis, ctx):
     job_id = str(uuid.uuid4())
     mock_redis.hgetall.return_value = {
         'filename': 'notes.md', 'from': 'markdown', 'to': 'html',
-        'force_ocr': 'False', 'use_llm': 'False',
+        'force_ocr': 'False',
     }
     ctx['job_id'] = job_id
     return job_id

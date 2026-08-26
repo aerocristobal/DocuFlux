@@ -70,8 +70,7 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
         'file': (io.BytesIO(VALID_PDF_BYTES), 'test.pdf'),
         'to_format': 'markdown',
         'engine': 'marker',
-        'force_ocr': 'true',
-        'use_llm': 'false'
+        'force_ocr': 'true'
     }
 
     response = client.post('/api/v1/convert', data=data, content_type='multipart/form-data', headers=api_headers)
