@@ -62,6 +62,32 @@ This document describes the alerting rules configured for DocuFlux and provides 
 
 ---
 
+### InferenceServerUnreachable
+**Severity**: Critical
+**Trigger**: Inference server unreachable for >2 minutes
+
+**Symptoms**:
+- Marker conversions fail or fall back to CPU
+- GPU headroom alerts may fire
+- Conversion queue backlog builds up
+
+**Investigation Steps**:
+1. **IMMEDIATE**: Check inference server health: `curl http://localhost:8080/healthz`
+2. Verify inference server logs for errors or crashes
+3. Check network connectivity to inference server
+4. Restart inference server if needed
+5. Check `docuflux_inference_server_reachable` metric: `curl http://localhost:9090/metrics | grep docuflux_inference_server_reachable`
+6. Consider circuit breaker patterns if intermittent
+7. View recent failures: `docker-compose logs worker | grep FAILURE`
+
+**Common Causes**:
+- Inference server process crashed or OOM-killed
+- Network connectivity loss between worker and inference server
+- Inference server overloaded or resource-starved
+- Model loading failed in inference server
+- Port mapping or TLS configuration issues
+
+---
 ### Task Performance Alerts
 
 #### HighTaskFailureRate
@@ -181,6 +207,28 @@ This document describes the alerting rules configured for DocuFlux and provides 
 - NVIDIA Container Toolkit misconfigured
 - GPU reserved by another process
 - GPU power management issue
+
+#### GPUHeadroomLow
+**Severity**: Warning
+**Trigger**: inference server GPU headroom below 20% for >5 minutes
+
+**Symptoms**:
+- Inference server approaching VRAM capacity
+- Model loading may fail or be delayed
+- Conversions may slow down or fall back
+
+**Investigation Steps**:
+1. Check GPU metrics: `curl http://localhost:9090/metrics | grep docuflux_gpu_memory`
+2. Compare used vs total VRAM: `(docuflux_gpu_memory_total_bytes - docuflux_gpu_memory_used_bytes) / docuflux_gpu_memory_total_bytes`
+3. Check inference server logs for OOM errors
+4. Consider scaling the inference server or reducing model size
+5. Restart worker: `docker-compose restart worker`
+
+**Common Causes**:
+- Large model loading consuming VRAM
+- Multiple conversions running simultaneously
+- Model size exceeds available headroom
+- GPU memory leak
 
 ---
 

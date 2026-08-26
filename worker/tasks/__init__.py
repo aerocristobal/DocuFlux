@@ -202,22 +202,34 @@ def _eager_marker_warmup():
     The Redis key is left absent when the feature is off, so consumers
     should treat "missing" the same as "false" (cold/lazy).
     """
-    if not app_settings.eager_marker_warmup:
-        return
-    try:
-        logging.info("Story 6.2: eager Marker warmup starting...")
-        conversion.get_model_dict()
-        redis_client.set('marker:model_warm', 'true')
-        logging.info("Story 6.2: eager Marker warmup complete.")
-    except Exception as e:
-        logging.warning(f"Story 6.2: eager Marker warmup failed, falling back to lazy loading: {e}")
+    # Story 6.2: In v2 client/server mode, the worker process holds no models.
+    # Model loading happens in the inference server process, not the worker.
+    # The marker:model_warm flag from v1 is retired — it reflected a process
+    # that loaded models at Celery import time, which no longer happens.
+    # Instead, probe the inference server's health endpoint to determine readiness.
+    if app_settings.eager_marker_warmup:
+        logging.info("Story 6.2: Eager marker warmup is opt-in for v1 compatibility; "
+                     "v2 uses inference server health checks instead. "
+                     "Set EAGER_MARKER_WARMUP=False to suppress this message.")
+        # Do not set marker:model_warm — that v1 flag no longer applies.
+        # The inference server manages its own warmup state independently.
+        # Probe inference server health if URL is configured
+        inference_url = os.environ.get('INFERENCE_SERVER_URL', 'http://localhost:8080/healthz')
         try:
-            redis_client.set('marker:model_warm', 'false')
-        except Exception:
-            pass  # Redis unreachable — don't crash worker startup over a status flag
+            import httpx
+            resp = httpx.get(inference_url, timeout=2.0)
+            if resp.status_code == 200:
+                logging.info("Inference server is reachable and reporting ready")
+            else:
+                logging.warning("Inference server health check returned non-200")
+        except Exception as e:
+            logging.debug(f"Inference server health check skipped: {e}")
 
 
-_eager_marker_warmup()
+# _eager_marker_warmup() call removed — v2 uses inference server health
+# checks instead of worker-side model preloading. The flag marker:model_warm
+# is retired; it reflected v1 behavior where the worker loaded models at
+# import time, which no longer applies under the v2 client/server model.
 
 
 @worker_shutdown.connect
