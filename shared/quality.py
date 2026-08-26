@@ -293,8 +293,13 @@ def score_markdown(markdown: str, page_count: Optional[int] = None,
 
     score = max(0, min(100, score))
 
+    # New reason codes (excess_output, repetitive_output) prevent a "good" grade
+    # since they indicate the scorer has no headroom to detect real quality issues.
+    new_reason_codes = {"excess_output", "repetitive_output"}
+    has_new_reasons = bool(new_reason_codes & set(reason_codes))
+
     blocking = any(rc in BLOCKING_REASON_CODES for rc in reason_codes)
-    if blocking or score < 45:
+    if blocking or has_new_reasons or score < 45:
         grade = GRADE_POOR
     elif score < 75:
         grade = GRADE_FAIR
