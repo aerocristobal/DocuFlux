@@ -85,10 +85,10 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
     assert call_args[0][0] == 'tasks.convert_with_marker'
     assert call_args[1]['args'][3] == 'pdf_marker'  # from_format
 
-    # Verify options were passed (use_llm excluded per allowlist policy)
+    # Verify options were passed (only allowlisted keys: force_ocr and include_images)
     options = call_args[1]['args'][5]
     assert options['force_ocr'] == True
-    assert 'use_llm' not in options  # excluded per allowlist policy
+    assert 'use_llm' not in options  # use_llm excluded per allowlist policy
     assert options['include_images'] == True  # Story 1.5 default
 
 

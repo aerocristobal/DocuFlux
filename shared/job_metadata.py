@@ -10,7 +10,7 @@ def build_job_metadata(filename, from_format, to_format, status='PENDING',
     Consolidates the job-creation shape duplicated across
     web/routes/conversion.py (convert, retry_job, api_v1_convert) and
     web/routes/capture.py. Extra fields specific to a call site
-    (force_ocr, use_llm, engine, session_id, ...) pass through via
+    (force_ocr, engine, session_id, ...) pass through via
     **extra so each caller's existing field set is preserved exactly.
     """
     metadata = {

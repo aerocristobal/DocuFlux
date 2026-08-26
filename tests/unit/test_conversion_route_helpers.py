@@ -322,7 +322,7 @@ class TestEnqueueV1ConvertJob:
         f = _fs(b'%PDF-1.4', 'test.pdf')
 
         error, job_id = _enqueue_v1_convert_job(
-            f, 'pdf_marker', 'markdown', 'marker', False, False, False, None, str(time.time())
+            f, 'pdf_marker', 'markdown', 'marker', False, False, None, str(time.time())
         )
 
         assert error is None
@@ -337,7 +337,7 @@ class TestEnqueueV1ConvertJob:
         f = _fs(b'%PDF-1.4', 'test.pdf')
 
         error, job_id = _enqueue_v1_convert_job(
-            f, 'pdf_ocr', 'markdown', 'ocr', False, False, True, None, str(time.time())
+            f, 'pdf_ocr', 'markdown', 'ocr', False, True, None, str(time.time())
         )
 
         assert error is None
