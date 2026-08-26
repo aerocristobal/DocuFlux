@@ -128,7 +128,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 
 ### 5.2 AI PDF→Markdown
 
-- **FR-2.1** `pdf_marker`: Marker AI conversion with layout awareness, table detection, and image extraction. Page limit 600 (`MAX_MARKER_PAGES`); optional `force_ocr` and `use_llm` flags.
+- **FR-2.1** `pdf_marker`: Marker AI conversion with layout awareness, table detection, and image extraction. Page limit 600 (`MAX_MARKER_PAGES`); optional `force_ocr` and `` flags.
 - **FR-2.2** `pdf_hybrid`: try Pandoc first; if output quality is below threshold (currently 50 words/page — see Backlog Epic 1 for the planned quality-score replacement), fall back to Marker.
 - **FR-2.3** `pdf_marker_slm`: Marker followed by SLM refinement of OCR artifacts in 600-word chunks.
 - **FR-2.4** Extracted images are written to an `images/` subdirectory with Markdown references rewritten accordingly; multi-file outputs are zipped on download.

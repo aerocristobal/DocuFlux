@@ -110,7 +110,6 @@ Submit a document conversion job. Requires API key.
 | `from_format` | String | No | Source format key (auto-detected from extension if omitted) |
 | `engine` | String | No | `pandoc` (default) or `marker` |
 | `force_ocr` | Boolean | No | Force OCR for Marker engine (default: false) |
-| `use_llm` | Boolean | No | Use LLM for Marker engine (default: false) |
 | `pandoc_options` | JSON | No | Pandoc options object (engine=pandoc only). See [Pandoc Options](#pandoc-options) |
 
 **Success Response (202 Accepted)**:
