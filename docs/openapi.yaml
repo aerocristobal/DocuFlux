@@ -374,7 +374,6 @@ paths:
                   type: boolean
                   default: false
                   description: Force OCR on every page (Marker only)
-                use_llm:
                   type: boolean
                   default: false
                   description: Use LLM post-processing (Marker only)

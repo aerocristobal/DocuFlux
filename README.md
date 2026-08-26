@@ -155,7 +155,6 @@ curl -OJ http://localhost:5000/api/v1/download/550e8400-e29b-41d4-a716-446655440
 | `from_format` | No | Source format key (auto-detected from extension) |
 | `engine` | No | `pandoc`, `marker`, or `pdf_hybrid` |
 | `force_ocr` | No | Enable OCR in Marker (default: false) |
-| `use_llm` | No | Use LLM assist in Marker (default: false) |
 | `pandoc_options` | No | JSON object of Pandoc options (engine=pandoc only, see [API docs](docs/API.md#pandoc-options)) |
 
 ### All Endpoints
