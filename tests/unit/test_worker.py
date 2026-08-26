@@ -2029,6 +2029,7 @@ class TestEagerMarkerWarmup:
     def test_inference_server_health_check_succeeds(self):
         """In v2, _eager_marker_warmup probes the inference server's /healthz
         endpoint instead of preloading models in the worker process."""
+        import os
         with patch.object(tasks.app_settings, 'eager_marker_warmup', True), \
              patch.object(tasks, 'redis_client') as mock_redis:
             # The function no longer sets marker:model_warm; it probes inference
@@ -2049,6 +2050,7 @@ class TestEagerMarkerWarmup:
     def test_inference_server_unreachable_handled_gracefully(self):
         """In v2, if the inference server is unreachable, _eager_marker_warmup
         must not raise and must not set the v1 marker:model_warm flag."""
+        import os
         with patch.object(tasks.app_settings, 'eager_marker_warmup', True), \
              patch.object(tasks, 'redis_client') as mock_redis:
             inference_url = os.environ.get('INFERENCE_SERVER_URL', 'http://localhost:8080/healthz')
