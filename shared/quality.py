@@ -39,6 +39,8 @@ from typing import Dict, List, Optional
 
 # --- Tunable thresholds (kept as module constants for documentation/tests) ---
 MIN_WORDS_PER_PAGE = 50          # below this average -> low_word_density
+MAX_WORDS_PER_PAGE = 2000        # above this average -> excess_output
+MAX_CHARS_PER_PAGE = 10000       # above this average -> excess_output
 MAX_GARBAGE_RATIO = 0.10         # >10% garbage chars -> high_garbage_ratio
 MAX_EMPTY_PAGE_RATIO = 0.50      # >50% near-empty pages -> high_empty_page_ratio
 EMPTY_PAGE_WORD_THRESHOLD = 5    # a page with < this many words counts as empty
@@ -49,6 +51,16 @@ GRADE_POOR = "poor"
 
 # Reason codes that force a "poor" grade regardless of numeric score.
 BLOCKING_REASON_CODES = frozenset({"empty_output"})
+
+# Reason codes (stable, machine-readable):
+REASON_CODE_EMPTY_OUTPUT            = "empty_output"        # no usable text at all
+REASON_CODE_LOW_WORD_DENSITY        = "low_word_density"    # too few words per page on average
+REASON_CODE_NO_HEADINGS             = "no_headings"         # document has no Markdown headings
+REASON_CODE_MALFORMED_TABLES         = "malformed_tables"    # one or more Markdown tables are malformed
+REASON_CODE_HIGH_GARBAGE_RATIO      = "high_garbage_ratio"  # too many non-printable / replacement characters
+REASON_CODE_HIGH_EMPTY_PAGE_RATIO   = "high_empty_page_ratio"  # too many pages produced little or no text
+REASON_CODE_EXCESS_OUTPUT           = "excess_output"       # too many words or chars per page
+REASON_CODE_REPETITIVE_OUTPUT       = "repetitive_output"   # document contains excessive repetition
 
 # Characters considered "garbage": C0/C1 control chars (except tab/newline) and
 # the Unicode replacement character produced by bad decodes.
