@@ -86,30 +86,30 @@ def _validate_marker_options(form):
     Returns (options_dict, error_response). On success, error_response is None
     and options_dict contains only allowlisted keys. On failure, options_dict is
     empty and error_response is a (jsonify(...), status_code) tuple.
-    """
-    raw_options = {}
-    for key in form:
-        if key in _VALIDID_MARKER_OPTIONS:
-            raw_options[key] = form.get(key) == 'on'
+    On use_llm rejection, returns (empty_dict, (jsonify_error, 400)).
 
+    The caller is responsible for returning the error_response to the user.
+    """
     # Reject use_llm outright — it triggers outbound LLM calls (Google Gemini,
     # OpenAI, Anthropic) from a deployment that claims to be privacy-first and
     # self-hosted. A caller asking for behavior they will not get must get an error.
     if 'use_llm' in form:
-        return ({}, jsonify({
+        error_response = jsonify({
             'error': 'use_llm is not supported. This deployment does not offer '
                      'LLM-assisted Marker conversion. Use the marker engine without '
-                     'LLM post-processing, or configure a local llm_service.'
-        }), 400)
+                     'LLM post-processing.'
+        })
+        return ({}, error_response, 400)
 
-    # Reject any unrecognized keys — they must never reach PdfConverter.
-    # We only accept keys in _VALIDID_MARKER_OPTIONS; anything else is dropped.
-    for key in form:
-        if key not in _VALIDID_MARKER_OPTIONS and key != 'use_llm':
-            # Unknown key — drop it (it will not be included in options)
-            pass
+    # Build options with only allowlisted keys; drop everything else.
+    options = {}
+    for key in _VALIDID_MARKER_OPTIONS:
+        if key in form:
+            options[key] = form.get(key) == 'on'
 
-    return (raw_options, None)
+    # Any keys not in _VALIDID_MARKER_OPTIONS are silently dropped — they
+    # must never reach PdfConverter.
+    return (options, None)
 
 
 def _enqueue_convert_job(file, from_format, to_format, to_info, form):
@@ -129,8 +129,9 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
 
     # Validate and sanitize Marker options before building metadata and task args
     options, err = _validate_marker_options(form)
-    if err:
-        return error, None  # Will be handled by caller
+    if err is not None:
+        # use_llm was in the form — reject the request
+        return err
 
     _app_mod.update_job_metadata(job_id, build_job_metadata(
         file.filename, from_format, to_format,
@@ -165,7 +166,7 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
         target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
     _app_mod.celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
-    return job_id, options
+    return job_id
 
 
 def _respond_convert_success(job_ids):
@@ -202,6 +203,10 @@ def convert():
             return error
 
         job_id = _enqueue_convert_job(file, from_format, to_format, to_info, request.form)
+        # _enqueue_convert_job may return a Flask Response (err) if use_llm was
+        # in the form; in that case propagate the error immediately.
+        if isinstance(job_id, Response):
+            return job_id
 
         history_key = f"history:{session_id}"
         _app_mod.redis_client.lpush(history_key, job_id)
@@ -561,6 +566,24 @@ def _resolve_v1_convert_format(filename, from_format, engine):
     return None, from_format, internal_from_format
 
 
+def _validate_v1_marker_options(force_ocr, use_llm, include_images):
+    """Validate v1 Marker options, rejecting use_llm per the allowlist policy.
+
+    Returns (options_dict, error_response). On success, error_response is None.
+    """
+    # Reject use_llm — same policy as the web UI: no outbound LLM calls.
+    if use_llm:
+        error_response = jsonify({
+            'error': 'use_llm is not supported. This deployment does not offer '
+                     'LLM-assisted Marker conversion. Use the marker engine without '
+                     'LLM post-processing.'
+        })
+        return ({}, error_response, 422)
+
+    options = {'force_ocr': force_ocr, 'include_images': include_images}
+    return (options, None)
+
+
 def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
                              force_ocr, use_llm, include_images, pandoc_options,
                              timestamp):
@@ -594,9 +617,14 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
         created_at=timestamp, progress='0', engine=engine,
     )
 
-    if engine == 'marker':
+    # Validate and sanitize Marker options per the allowlist policy.
+    if engine == 'marker' or internal_from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
+        options, err = _validate_v1_marker_options(force_ocr, use_llm, include_images)
+        if err is not None:
+            return err
+
         metadata['force_ocr'] = str(force_ocr)
-        metadata['use_llm'] = str(use_llm)
+        metadata['use_llm'] = 'false'  # explicitly disabled per allowlist policy
 
     _app_mod.update_job_metadata(job_id, metadata)
     _app_mod.redis_client.zadd('jobs:active', {job_id: time.time()})
@@ -605,21 +633,18 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
     file_size = _app_mod.storage.get_file_size(job_id, safe_filename, folder='upload')
 
     if internal_from_format == 'pdf_marker':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_hybrid':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_marker_slm':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
