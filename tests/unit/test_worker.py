@@ -2490,8 +2490,15 @@ class TestDLQSignalHandler:
 
 
 # ============================================================
-# New v2 Marker surface tests
+# Test V2 Marker surface
 # ============================================================
+
+class TestV2MarkerSurface:
+    """Tests for the Marker v2 client/server model surface.
+
+    These tests verify the v2 Marker API surface behavior, including
+    inference server lifecycle management and error handling.
+    """
 
     @patch('tasks.redis_client')
     @patch('tasks.socketio')
@@ -2535,6 +2542,7 @@ class TestDLQSignalHandler:
     @patch('tasks.get_model_dict')
     @patch('os.makedirs')
     @patch('os.path.exists')
+    @patch('builtins.open', new_callable=mock_open)
     def test_inference_server_timeout(
         self, mock_file, mock_exists, mock_makedirs, mock_get_models,
         mock_socketio, mock_redis, sample_job_id
