@@ -109,7 +109,7 @@ PENDING → PROCESSING → SUCCESS
 
 | Endpoint | Method | Body | Expected Response |
 |----------|--------|------|-------------------|
-| `POST /convert` | POST | `multipart/form-data` (file, from_format, to_format, force_ocr?, use_llm?) | `{job_ids: [...], status: 'queued'}` |
+| `POST /convert` | POST | `multipart/form-data` (file, from_format, to_format, force_ocr?, force_ocr?) | `{job_ids: [...], status: 'queued'}` |
 
 **Critical contract**: The submitted job MUST appear in `/api/jobs` on the next poll. This requires the job to be added to both `job:{id}` Redis hash AND `history:{session_id}` Redis list.
 
@@ -173,7 +173,6 @@ PENDING → PROCESSING → SUCCESS
 - `#to_format` — Target format select (disabled until source selected)
 - `#marker-options` — Marker checkbox panel (hidden unless pdf_marker)
 - `#force_ocr` — Force OCR checkbox
-- `#use_llm` — Use LLM checkbox
 - `#submit-progress` — Indeterminate progress bar (hidden during idle)
 - `#convert-btn` — Submit button
 
