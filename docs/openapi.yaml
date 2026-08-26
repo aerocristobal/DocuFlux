@@ -1,130 +1,77 @@
 openapi: 3.0.0
 info:
   title: DocuFlux API
-  description: |
-    API for DocuFlux, a containerized document conversion service combining Pandoc
+  description: 'API for DocuFlux, a containerized document conversion service combining
+    Pandoc
+
     (universal converter) with Marker AI (deep-learning PDF processor) and local
+
     SLM metadata extraction.
 
+
     ## Authentication
+
     All `/api/v1/` endpoints (except `/api/v1/formats` and `/api/v1/status`) require
+
     an API key passed via the `X-API-Key` header.
+
 
     Generate a key with `POST /api/v1/auth/keys`.
 
+
     ## Rate limits
+
     - Conversion: 200 requests / hour
+
     - Key creation: 10 requests / hour
+
     - Global: 1000 / day, 200 / hour per IP
+
+    '
   version: 1.1.0
   contact:
     url: https://github.com/aerocristobal/DocuFlux
-
 servers:
-  - url: http://localhost:5000
-    description: Local development server
-
+- url: http://localhost:5000
+  description: Local development server
 security:
-  - ApiKeyAuth: []
-
+- ApiKeyAuth: []
 components:
-  securitySchemes:
-    ApiKeyAuth:
-      type: apiKey
-      in: header
-      name: X-API-Key
-
-  schemas:
-    JobId:
-      type: string
-      format: uuid
-      example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-
-    JobStatus:
-      type: string
-      enum: [pending, processing, success, failure, revoked, capturing, completed-with-warnings]
-      description: |
-        `completed-with-warnings` (Story 1.3): a successfully-converted job
-        whose output scored `poor` on the quality report — surfaced
-        distinctly so degraded output is never reported as silent plain
-        success. The underlying job is otherwise complete; `download_url`
-        is still present.
-
-    QualityReport:
-      type: object
-      description: |
-        Deterministic quality assessment of the converted Markdown (Story
-        1.1/1.2/1.3): word density, heading structure, table
-        well-formedness, garbage-character ratio, and empty-page ratio.
-        Present whenever the output format is Markdown/GFM and the engine
-        ran the scorer (Pandoc, hybrid's accepted Pandoc path, and OCR).
-      properties:
-        grade:
-          type: string
-          enum: [good, fair, poor]
-        score:
-          type: integer
-          minimum: 0
-          maximum: 100
-        reasons:
-          type: array
-          items:
-            type: string
-          example: [low_word_density, no_headings]
-        metrics:
-          type: object
-          description: Per-dimension raw values the grade/score were computed from.
-          properties:
-            total_words: {type: number}
-            page_count: {type: number}
-            words_per_page: {type: number}
-            garbage_ratio: {type: number}
-            has_headings: {type: number}
-            malformed_tables: {type: number}
-            empty_page_ratio: {type: number}
-
-    SlmMetadata:
-      type: object
-      properties:
-        status:
-          type: string
-          enum: [PENDING, PROCESSING, SUCCESS, FAILURE, SKIPPED]
-        title:
-          type: string
-        summary:
-          type: string
-        tags:
-          type: array
-          items:
-            type: string
-
-    Error:
-      type: object
-      required: [error]
-      properties:
-        error:
-          type: string
-          example: "Job not found"
-
+  parameters:
+    JobIdPath:
+      in: path
+      name: job_id
+      required: true
+      schema:
+        $ref: '#/components/schemas/JobId'
+      description: UUID of the job
+    SessionIdPath:
+      in: path
+      name: session_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID of the capture session
 paths:
-
-  # ─────────────────────────────────────────────────────────
-  # Web UI endpoints (session-based, no API key)
-  # ─────────────────────────────────────────────────────────
-
   /convert:
     post:
       summary: Submit conversion (Web UI)
-      description: Uploads a file and queues a conversion task. Session-based, no API key required.
+      description: Uploads a file and queues a conversion task. Session-based, no
+        API key required.
       security: []
-      tags: [Web UI]
+      tags:
+      - Web UI
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
               type: object
-              required: [file, from_format, to_format]
+              required:
+              - file
+              - from_format
+              - to_format
               properties:
                 file:
                   type: string
@@ -157,12 +104,12 @@ paths:
           description: File exceeds 100 MB
         '507':
           description: Server disk full
-
   /api/jobs:
     get:
       summary: List session jobs (Web UI)
       security: []
-      tags: [Web UI]
+      tags:
+      - Web UI
       responses:
         '200':
           description: Jobs for current session
@@ -203,14 +150,14 @@ paths:
                     slm:
                       $ref: '#/components/schemas/SlmMetadata'
                       nullable: true
-
   /api/cancel/{job_id}:
     post:
       summary: Cancel a running job
       security: []
-      tags: [Web UI]
+      tags:
+      - Web UI
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '200':
           description: Cancelled
@@ -219,16 +166,19 @@ paths:
               schema:
                 type: object
                 properties:
-                  status: {type: string, example: cancelled}
-        '400': {description: Invalid job ID}
-
+                  status:
+                    type: string
+                    example: cancelled
+        '400':
+          description: Invalid job ID
   /api/retry/{job_id}:
     post:
       summary: Retry a failed job
       security: []
-      tags: [Web UI]
+      tags:
+      - Web UI
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '200':
           description: New job created
@@ -237,18 +187,23 @@ paths:
               schema:
                 type: object
                 properties:
-                  status: {type: string, example: retried}
-                  new_job_id: {$ref: '#/components/schemas/JobId'}
-        '400': {description: Input file expired or invalid ID}
-        '404': {description: Job not found}
-
+                  status:
+                    type: string
+                    example: retried
+                  new_job_id:
+                    $ref: '#/components/schemas/JobId'
+        '400':
+          description: Input file expired or invalid ID
+        '404':
+          description: Job not found
   /api/delete/{job_id}:
     post:
       summary: Delete a job and its files
       security: []
-      tags: [Web UI]
+      tags:
+      - Web UI
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '200':
           description: Deleted
@@ -257,48 +212,60 @@ paths:
               schema:
                 type: object
                 properties:
-                  status: {type: string, example: deleted}
-        '400': {description: Invalid job ID}
-        '404': {description: Job not found}
-
+                  status:
+                    type: string
+                    example: deleted
+        '400':
+          description: Invalid job ID
+        '404':
+          description: Job not found
   /download/{job_id}:
     get:
       summary: Download converted file
       security: []
-      tags: [Web UI]
+      tags:
+      - Web UI
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '200':
           description: File binary
           content:
             application/octet-stream:
-              schema: {type: string, format: binary}
-        '400': {description: Invalid job ID}
-        '404': {description: File not found or expired}
-
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid job ID
+        '404':
+          description: File not found or expired
   /download_zip/{job_id}:
     get:
       summary: Download multi-file output as ZIP
       description: Returns a ZIP archive for Marker jobs that produce markdown + images.
       security: []
-      tags: [Web UI]
+      tags:
+      - Web UI
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '200':
           description: ZIP archive
           content:
             application/zip:
-              schema: {type: string, format: binary}
-        '400': {description: Invalid job ID}
-        '404': {description: Output not found}
-
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid job ID
+        '404':
+          description: Output not found
   /api/status/services:
     get:
       summary: Service health summary
       security: []
-      tags: [Web UI]
+      tags:
+      - Web UI
       responses:
         '200':
           description: Health of dependent services
@@ -307,51 +274,67 @@ paths:
               schema:
                 type: object
                 properties:
-                  disk_space: {type: string, enum: [ok, low]}
-                  marker: {type: string}
-                  marker_status: {type: string}
-                  models_cached: {type: boolean}
-                  gpu_status: {type: string, enum: [available, unavailable, initializing]}
+                  disk_space:
+                    type: string
+                    enum:
+                    - ok
+                    - low
+                  marker:
+                    type: string
+                  marker_status:
+                    type: string
+                  models_cached:
+                    type: boolean
+                  gpu_status:
+                    type: string
+                    enum:
+                    - available
+                    - unavailable
+                    - initializing
                   gpu_info:
                     type: object
                     additionalProperties: true
-
   /healthz:
     get:
       summary: Liveness probe
       security: []
-      tags: [Health]
+      tags:
+      - Health
       responses:
-        '200': {description: Always OK}
-
+        '200':
+          description: Always OK
   /readyz:
     get:
       summary: Readiness probe
       description: Returns 503 if Redis is unreachable.
       security: []
-      tags: [Health]
+      tags:
+      - Health
       responses:
-        '200': {description: Ready}
-        '503': {description: Not ready — Redis down}
-
-  # ─────────────────────────────────────────────────────────
-  # REST API v1 (API key required)
-  # ─────────────────────────────────────────────────────────
-
+        '200':
+          description: Ready
+        '503':
+          description: "Not ready \u2014 Redis down"
   /api/v1/convert:
     post:
       summary: Submit conversion job
-      description: |
-        Queues a document conversion. Returns `202 Accepted` immediately; poll
+      description: 'Queues a document conversion. Returns `202 Accepted` immediately;
+        poll
+
         `/api/v1/status/{job_id}` for progress.
-      tags: [Conversions]
+
+        '
+      tags:
+      - Conversions
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
               type: object
-              required: [file, to_format]
+              required:
+              - file
+              - to_format
               properties:
                 file:
                   type: string
@@ -363,44 +346,53 @@ paths:
                   example: markdown
                 from_format:
                   type: string
-                  description: Input format key. Auto-detected from file extension if omitted.
+                  description: Input format key. Auto-detected from file extension
+                    if omitted.
                   example: pdf
                 engine:
                   type: string
-                  enum: [pandoc, marker]
+                  enum:
+                  - pandoc
+                  - marker
                   default: pandoc
-                  description: Conversion engine. Use `marker` for high-accuracy PDF→Markdown.
+                  description: "Conversion engine. Use `marker` for high-accuracy\
+                    \ PDF\u2192Markdown."
                 force_ocr:
                   type: boolean
                   default: false
-                  description: Force OCR on every page (Marker only)
-                  type: boolean
-                  default: false
-      responses:
-        '202':
-          description: Job queued
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  job_id: {$ref: '#/components/schemas/JobId'}
-                  status: {type: string, example: queued}
-                  status_url: {type: string, example: /api/v1/status/3fa85f64-...}
-                  created_at: {type: string, format: date-time}
-        '400': {description: Missing file or to_format}
-        '401': {description: Missing or invalid API key}
-        '422': {description: Unsupported format or engine}
-        '507': {description: Server disk full}
-
+                  job_id:
+                    $ref: '#/components/schemas/JobId'
+                  status:
+                    type: string
+                    example: queued
+                  status_url:
+                    type: string
+                    example: /api/v1/status/3fa85f64-...
+                  created_at:
+                    type: string
+                    format: date-time
+        '400':
+          description: Missing file or to_format
+        '401':
+          description: Missing or invalid API key
+        '422':
+          description: Unsupported format or engine
+        '507':
+          description: Server disk full
   /api/v1/status/{job_id}:
     get:
       summary: Get job status
       description: Poll until `status` is `success` or `failure`.
-      tags: [Conversions]
+      tags:
+      - Conversions
       security: []
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '200':
           description: Job status
@@ -409,56 +401,85 @@ paths:
               schema:
                 type: object
                 properties:
-                  job_id: {$ref: '#/components/schemas/JobId'}
-                  status: {$ref: '#/components/schemas/JobStatus'}
-                  filename: {type: string}
-                  from: {type: string}
-                  to: {type: string}
+                  job_id:
+                    $ref: '#/components/schemas/JobId'
+                  status:
+                    $ref: '#/components/schemas/JobStatus'
+                  filename:
+                    type: string
+                  from:
+                    type: string
+                  to:
+                    type: string
                   progress:
                     type: integer
                     minimum: 0
                     maximum: 100
-                  created_at: {type: string, format: date-time}
-                  started_at: {type: string, format: date-time, nullable: true}
-                  completed_at: {type: string, format: date-time, nullable: true}
-                  download_url: {type: string, nullable: true}
-                  is_multifile: {type: boolean}
-                  file_count: {type: integer}
-                  error: {type: string, nullable: true}
+                  created_at:
+                    type: string
+                    format: date-time
+                  started_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  completed_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  download_url:
+                    type: string
+                    nullable: true
+                  is_multifile:
+                    type: boolean
+                  file_count:
+                    type: integer
+                  error:
+                    type: string
+                    nullable: true
                   quality:
                     $ref: '#/components/schemas/QualityReport'
                     nullable: true
                   slm_metadata:
                     $ref: '#/components/schemas/SlmMetadata'
                     nullable: true
-        '400': {description: Invalid job ID format}
-        '404': {description: Job not found}
-
+        '400':
+          description: Invalid job ID format
+        '404':
+          description: Job not found
   /api/v1/download/{job_id}:
     get:
       summary: Download converted output
-      description: |
-        Returns the converted file. If the job produced multiple files
+      description: 'Returns the converted file. If the job produced multiple files
+
         (e.g. Marker PDF with images), returns a ZIP archive.
-      tags: [Conversions]
+
+        '
+      tags:
+      - Conversions
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '200':
           description: File or ZIP
           content:
             application/octet-stream:
-              schema: {type: string, format: binary}
+              schema:
+                type: string
+                format: binary
             application/zip:
-              schema: {type: string, format: binary}
-        '400': {description: Invalid job ID}
-        '404': {description: Output not found or expired}
-
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid job ID
+        '404':
+          description: Output not found or expired
   /api/v1/formats:
     get:
       summary: List supported formats
       security: []
-      tags: [Conversions]
+      tags:
+      - Conversions
       responses:
         '200':
           description: Supported input/output formats and common conversions
@@ -472,48 +493,64 @@ paths:
                     items:
                       type: object
                       properties:
-                        name: {type: string}
-                        key: {type: string}
-                        extension: {type: string}
+                        name:
+                          type: string
+                        key:
+                          type: string
+                        extension:
+                          type: string
                         mime_types:
                           type: array
-                          items: {type: string}
-                        supports_marker: {type: boolean}
-                        supports_pandoc: {type: boolean}
+                          items:
+                            type: string
+                        supports_marker:
+                          type: boolean
+                        supports_pandoc:
+                          type: boolean
                   output_formats:
                     type: array
                     items:
                       type: object
                       properties:
-                        name: {type: string}
-                        key: {type: string}
-                        extension: {type: string}
+                        name:
+                          type: string
+                        key:
+                          type: string
+                        extension:
+                          type: string
                   conversions:
                     type: array
                     items:
                       type: object
                       properties:
-                        from: {type: string}
-                        to: {type: string}
+                        from:
+                          type: string
+                        to:
+                          type: string
                         engines:
                           type: array
-                          items: {type: string}
-                        recommended_engine: {type: string}
-
-  # ─── SLM Metadata ───────────────────────────────────────
-
+                          items:
+                            type: string
+                        recommended_engine:
+                          type: string
   /api/v1/jobs/{job_id}/extract-metadata:
     post:
       summary: Trigger SLM metadata extraction
-      description: |
-        Manually queue SLM (TinyLlama) metadata extraction for a completed job.
+      description: 'Manually queue SLM (TinyLlama) metadata extraction for a completed
+        job.
+
         The job must have a Markdown output file. Extraction runs asynchronously;
+
         poll `/api/v1/status/{job_id}` for `slm_metadata.status`.
 
+
         SLM also runs automatically after every successful Marker conversion.
-      tags: [SLM Metadata]
+
+        '
+      tags:
+      - SLM Metadata
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '202':
           description: Extraction queued
@@ -522,24 +559,29 @@ paths:
               schema:
                 type: object
                 properties:
-                  job_id: {$ref: '#/components/schemas/JobId'}
-                  status: {type: string, example: queued}
-                  message: {type: string}
-        '400': {description: Invalid job ID}
-        '401': {description: Missing or invalid API key}
-        '404': {description: Job not found or no markdown output}
-        '409': {description: Job not in SUCCESS state}
-
-  # ─── Auth ───────────────────────────────────────────────
-
+                  job_id:
+                    $ref: '#/components/schemas/JobId'
+                  status:
+                    type: string
+                    example: queued
+                  message:
+                    type: string
+        '400':
+          description: Invalid job ID
+        '401':
+          description: Missing or invalid API key
+        '404':
+          description: Job not found or no markdown output
+        '409':
+          description: Job not in SUCCESS state
   /api/v1/auth/keys:
     post:
       summary: Create API key
-      description: |
-        Generates a new API key. The key is returned only once — store it securely.
-        No existing key is required to create the first key.
+      description: "Generates a new API key. The key is returned only once \u2014\
+        \ store it securely.\nNo existing key is required to create the first key.\n"
       security: []
-      tags: [Authentication]
+      tags:
+      - Authentication
       requestBody:
         content:
           application/json:
@@ -561,21 +603,25 @@ paths:
                   api_key:
                     type: string
                     example: dk_abc123...
-                  created_at: {type: string}
-                  label: {type: string}
-        '429': {description: Rate limit exceeded (10/hour)}
-
+                  created_at:
+                    type: string
+                  label:
+                    type: string
+        '429':
+          description: Rate limit exceeded (10/hour)
   /api/v1/auth/keys/{key}:
     delete:
       summary: Revoke API key
       security: []
-      tags: [Authentication]
+      tags:
+      - Authentication
       parameters:
-        - in: path
-          name: key
-          required: true
-          schema: {type: string}
-          description: The API key to revoke
+      - in: path
+        name: key
+        required: true
+        schema:
+          type: string
+        description: The API key to revoke
       responses:
         '200':
           description: Key revoked
@@ -584,26 +630,31 @@ paths:
               schema:
                 type: object
                 properties:
-                  revoked: {type: boolean, example: true}
-        '404': {description: Key not found}
-
-  # ─── Webhooks ───────────────────────────────────────────
-
+                  revoked:
+                    type: boolean
+                    example: true
+        '404':
+          description: Key not found
   /api/v1/webhooks:
     post:
       summary: Register job webhook
-      description: |
-        Register a URL to receive a POST notification when the job reaches
+      description: 'Register a URL to receive a POST notification when the job reaches
+
         `SUCCESS` or `FAILURE`. The payload mirrors the `/api/v1/status` response.
+
+        '
       security: []
-      tags: [Webhooks]
+      tags:
+      - Webhooks
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [job_id, webhook_url]
+              required:
+              - job_id
+              - webhook_url
               properties:
                 job_id:
                   $ref: '#/components/schemas/JobId'
@@ -619,19 +670,24 @@ paths:
               schema:
                 type: object
                 properties:
-                  job_id: {$ref: '#/components/schemas/JobId'}
-                  webhook_url: {type: string}
-                  registered: {type: boolean}
-        '400': {description: Invalid job_id or webhook_url}
-        '404': {description: Job not found}
-
+                  job_id:
+                    $ref: '#/components/schemas/JobId'
+                  webhook_url:
+                    type: string
+                  registered:
+                    type: boolean
+        '400':
+          description: Invalid job_id or webhook_url
+        '404':
+          description: Job not found
   /api/v1/webhooks/{job_id}:
     get:
       summary: Get registered webhook
       security: []
-      tags: [Webhooks]
+      tags:
+      - Webhooks
       parameters:
-        - {$ref: '#/components/parameters/JobIdPath'}
+      - $ref: '#/components/parameters/JobIdPath'
       responses:
         '200':
           description: Registered webhook URL
@@ -640,21 +696,25 @@ paths:
               schema:
                 type: object
                 properties:
-                  job_id: {$ref: '#/components/schemas/JobId'}
-                  webhook_url: {type: string}
-        '400': {description: Invalid job ID}
-        '404': {description: Job not found or no webhook registered}
-
-  # ─── Browser Extension Capture ─────────────────────────
-
+                  job_id:
+                    $ref: '#/components/schemas/JobId'
+                  webhook_url:
+                    type: string
+        '400':
+          description: Invalid job ID
+        '404':
+          description: Job not found or no webhook registered
   /api/v1/capture/sessions:
     post:
       summary: Create capture session
-      description: |
-        Opens a new streaming capture session. The browser extension submits
+      description: 'Opens a new streaming capture session. The browser extension submits
+
         pages in batches; call `/finish` when all pages have been sent.
+
+        '
       security: []
-      tags: [Capture]
+      tags:
+      - Capture
       requestBody:
         content:
           application/json:
@@ -673,10 +733,6 @@ paths:
                 force_ocr:
                   type: boolean
                   default: false
-      responses:
-        '201':
-          description: Session created
-          content:
             application/json:
               schema:
                 type: object
@@ -686,33 +742,41 @@ paths:
                     format: uuid
                   job_id:
                     $ref: '#/components/schemas/JobId'
-                  status: {type: string, example: active}
-                  max_pages: {type: integer}
-        '400': {description: Invalid to_format}
-
+                  status:
+                    type: string
+                    example: active
+                  max_pages:
+                    type: integer
+        '400':
+          description: Invalid to_format
   /api/v1/capture/sessions/{session_id}/pages:
     post:
       summary: Submit captured pages
       description: Submit one or more page images (base64 PNG) to the session.
       security: []
-      tags: [Capture]
+      tags:
+      - Capture
       parameters:
-        - {$ref: '#/components/parameters/SessionIdPath'}
+      - $ref: '#/components/parameters/SessionIdPath'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [pages]
+              required:
+              - pages
               properties:
                 pages:
                   type: array
                   items:
                     type: object
-                    required: [page_number, image_data]
+                    required:
+                    - page_number
+                    - image_data
                     properties:
-                      page_number: {type: integer}
+                      page_number:
+                        type: integer
                       image_data:
                         type: string
                         description: Base64-encoded PNG screenshot
@@ -724,24 +788,33 @@ paths:
               schema:
                 type: object
                 properties:
-                  session_id: {type: string}
-                  pages_received: {type: integer}
-                  batch_id: {type: string}
-        '400': {description: Invalid session ID or missing pages}
-        '404': {description: Session not found or expired}
-        '409': {description: Session already finished}
-
+                  session_id:
+                    type: string
+                  pages_received:
+                    type: integer
+                  batch_id:
+                    type: string
+        '400':
+          description: Invalid session ID or missing pages
+        '404':
+          description: Session not found or expired
+        '409':
+          description: Session already finished
   /api/v1/capture/sessions/{session_id}/finish:
     post:
       summary: Finish capture session
-      description: |
-        Signals that all pages have been submitted. Triggers the final
+      description: 'Signals that all pages have been submitted. Triggers the final
+
         assembly and conversion job. The job_id returned can be polled
+
         via `/api/v1/status/{job_id}`.
+
+        '
       security: []
-      tags: [Capture]
+      tags:
+      - Capture
       parameters:
-        - {$ref: '#/components/parameters/SessionIdPath'}
+      - $ref: '#/components/parameters/SessionIdPath'
       responses:
         '200':
           description: Session finished, conversion queued
@@ -750,21 +823,29 @@ paths:
               schema:
                 type: object
                 properties:
-                  session_id: {type: string}
-                  job_id: {$ref: '#/components/schemas/JobId'}
-                  status: {type: string, example: finishing}
-                  total_pages: {type: integer}
-        '400': {description: Invalid session ID}
-        '404': {description: Session not found or expired}
-        '409': {description: Session already finished}
-
+                  session_id:
+                    type: string
+                  job_id:
+                    $ref: '#/components/schemas/JobId'
+                  status:
+                    type: string
+                    example: finishing
+                  total_pages:
+                    type: integer
+        '400':
+          description: Invalid session ID
+        '404':
+          description: Session not found or expired
+        '409':
+          description: Session already finished
   /api/v1/capture/sessions/{session_id}/status:
     get:
       summary: Get capture session status
       security: []
-      tags: [Capture]
+      tags:
+      - Capture
       parameters:
-        - {$ref: '#/components/parameters/SessionIdPath'}
+      - $ref: '#/components/parameters/SessionIdPath'
       responses:
         '200':
           description: Session status
@@ -773,32 +854,27 @@ paths:
               schema:
                 type: object
                 properties:
-                  session_id: {type: string}
-                  status: {type: string, enum: [active, finishing, done, expired]}
-                  job_id: {$ref: '#/components/schemas/JobId'}
-                  page_count: {type: integer}
-                  batches_queued: {type: integer}
-                  batches_done: {type: integer}
-                  batches_failed: {type: integer}
-        '400': {description: Invalid session ID}
-        '404': {description: Session not found}
-
+                  session_id:
+                    type: string
+                  status:
+                    type: string
+                    enum:
+                    - active
+                    - finishing
+                    - done
+                    - expired
+                  job_id:
+                    $ref: '#/components/schemas/JobId'
+                  page_count:
+                    type: integer
+                  batches_queued:
+                    type: integer
+                  batches_done:
+                    type: integer
+                  batches_failed:
+                    type: integer
+        '400':
+          description: Invalid session ID
+        '404':
+          description: Session not found
   parameters: {}
-
-components:
-  parameters:
-    JobIdPath:
-      in: path
-      name: job_id
-      required: true
-      schema:
-        $ref: '#/components/schemas/JobId'
-      description: UUID of the job
-    SessionIdPath:
-      in: path
-      name: session_id
-      required: true
-      schema:
-        type: string
-        format: uuid
-      description: UUID of the capture session
