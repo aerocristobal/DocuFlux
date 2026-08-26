@@ -2487,3 +2487,78 @@ class TestDLQSignalHandler:
         )
 
         m.dlq_total.inc.assert_called_once()
+
+
+# ============================================================
+# New v2 Marker surface tests
+# ============================================================
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks.get_model_dict')
+    @patch('os.makedirs')
+    @patch('os.path.exists')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_inference_server_unreachable(
+        self, mock_file, mock_exists, mock_makedirs, mock_get_models,
+        mock_socketio, mock_redis, sample_job_id
+    ):
+        """An unreachable inference server must produce an operator-facing failure.
+
+        Under marker 2 the models live in a shared surya server process.
+        If the server is down or unreachable, the conversion must fail
+        with a clear error rather than hanging or crashing silently.
+        """
+        mock_exists.return_value = True
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
+        mock_get_models.return_value = {}
+
+        # Make PdfConverter raise a connection error (server unreachable)
+        mock_converter = MagicMock()
+        mock_converter.side_effect = RuntimeError("Connection refused to inference server")
+        sys.modules['marker.converters.pdf'].PdfConverter.return_value = mock_converter
+
+        with pytest.raises(RuntimeError, match="Connection refused to inference server"):
+            tasks.convert_with_marker.run(
+                sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+            )
+
+        # The shared server must not be stopped (worker didn't spawn it)
+        sys.modules['marker.models'].shutdown_models.assert_not_called()
+
+    @patch('tasks.redis_client')
+    @patch('tasks.socketio')
+    @patch('tasks.extract_slm_metadata')
+    @patch('tasks.get_model_dict')
+    @patch('os.makedirs')
+    @patch('os.path.exists')
+    def test_inference_server_timeout(
+        self, mock_file, mock_exists, mock_makedirs, mock_get_models,
+        mock_socketio, mock_redis, sample_job_id
+    ):
+        """A slow/inference server timeout must produce an operator-facing failure.
+
+        Under marker 2 with SURYA_INFERENCE_TIMEOUT_SECONDS, a conversion
+        that exceeds the timeout must be aborted and reported as a failure.
+        """
+        mock_exists.return_value = True
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [1, {}]
+        mock_get_models.return_value = {}
+
+        # Make PdfConverter timeout
+        mock_converter = MagicMock()
+        mock_converter.side_effect = TimeoutError("Inference server timed out")
+        sys.modules['marker.converters.pdf'].PdfConverter.return_value = mock_converter
+
+        with pytest.raises(TimeoutError, match="Inference server timed out"):
+            tasks.convert_with_marker.run(
+                sample_job_id, 'test.pdf', 'test.md', 'pdf', 'markdown'
+            )
+
+        # The shared server must not be stopped (worker didn't spawn it)
+        sys.modules['marker.models'].shutdown_models.assert_not_called()
