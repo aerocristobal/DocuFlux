@@ -245,26 +245,26 @@ def service_status():
             updated_at = float(worker_cache.get('updated_at', 0))
             stale = (time.time() - updated_at) > 300  # >5 min = stale
             if stale:
-                health_status['components']['celery_workers'] = {
+                status['components']['celery_workers'] = {
                     'status': 'unknown', 'reason': 'cached status stale (>5min)'}
             else:
                 count = int(worker_cache.get('worker_count', 0))
-                health_status['components']['celery_workers'] = {
+                status['components']['celery_workers'] = {
                     'status': worker_cache.get('status', 'unknown'),
                     'worker_count': count}
                 if count == 0:
-                    health_status['status'] = 'degraded'
+                    status['status'] = 'degraded'
         else:
-            health_status['components']['celery_workers'] = {
+            status['components']['celery_workers'] = {
                 'status': 'unknown', 'reason': 'no cached worker status'}
     except Exception as e:
         logging.error(f"Health check failed for Celery workers: {e}")
-        health_status['components']['celery_workers'] = {
+        status['components']['celery_workers'] = {
             'status': 'unknown',
             'error': 'Could not read worker status from Redis'}
 
     status_code = 200
-    if health_status['status'] == 'unhealthy':
+    if status['status'] == 'unhealthy':
         status_code = 503
 
-    return jsonify(health_status), status_code
+    return jsonify(status), status_code

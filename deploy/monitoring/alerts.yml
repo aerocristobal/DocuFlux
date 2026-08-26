@@ -11,6 +11,11 @@
 #   - critical: P0 - Immediate action required
 #   - warning: P1 - Investigate soon
 #   - info: P2 - Informational, track trends
+#
+# Epic 21.17: v2 Inference Server Observability
+#   - GPU metrics now reflect the inference server's headroom, not the worker process
+#   - inference_server_reachable flag added for health monitoring
+#   - marker:model_warm flag retired (v1 behavior no longer applicable)
 
 groups:
   - name: docuflux_service_health
@@ -37,6 +42,17 @@ groups:
           summary: "Redis is unreachable"
           description: "Redis connection failed. This will prevent all conversions and job tracking."
           runbook: "https://github.com/your-repo/docs/runbooks/redis-down.md"
+
+      - alert: InferenceServerUnreachable
+        expr: docuflux_inference_server_reachable == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: inference
+        annotations:
+          summary: "Inference server unreachable"
+          description: "The inference server is not responding to health checks. Marker conversions will fall back to CPU or fail. Check inference server logs and connectivity."
+          runbook: "https://github.com/your-repo/docs/runbooks/inference-unreachable.md"
 
   - name: docuflux_task_performance
     interval: 1m
@@ -121,7 +137,7 @@ groups:
           component: gpu
         annotations:
           summary: "GPU appears unavailable"
-          description: "GPU utilization has been 0% for 5 minutes. Check GPU driver and CUDA availability."
+          description: "GPU utilization has been 0% for 5 minutes. In v2, this reflects the inference server's GPU headroom, not the worker process. Check inference server GPU allocation and CUDA availability."
           runbook: "https://github.com/your-repo/docs/runbooks/gpu-unavailable.md"
 
       - alert: GPUMemoryHigh
@@ -132,7 +148,7 @@ groups:
           component: gpu
         annotations:
           summary: "GPU memory usage above 95%"
-          description: "GPU VRAM usage is critically high: {{ $value | humanizePercentage }}. May cause OOM errors."
+          description: "GPU VRAM usage is critically high: {{ $value | humanizePercentage }} (inference server headroom). May cause OOM errors. In v2, VRAM figures describe the inference server's headroom, not the worker process."
           runbook: "https://github.com/your-repo/docs/runbooks/gpu-memory-high.md"
 
       - alert: GPUTemperatureHigh
@@ -143,8 +159,19 @@ groups:
           component: gpu
         annotations:
           summary: "GPU temperature exceeds safe threshold"
-          description: "GPU temperature is {{ $value }}°C. Check cooling and workload."
+          description: "GPU temperature is {{ $value }}°C. Check cooling and workload. In v2, this reflects the inference server's temperature, not the worker process."
           runbook: "https://github.com/your-repo/docs/runbooks/gpu-temperature.md"
+
+      - alert: GPUHeadroomLow
+        expr: (docuflux_gpu_memory_total_bytes - docuflux_gpu_memory_used_bytes) / docuflux_gpu_memory_total_bytes < 0.20
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "GPU headroom below 20%"
+          description: "Inference server GPU headroom is below 20%. Available VRAM is low for model loading. Consider scaling the inference server or reducing model size."
+          runbook: "https://github.com/your-repo/docs/runbooks/gpu-headroom-low.md"
 
   - name: docuflux_queue_health
     interval: 1m
