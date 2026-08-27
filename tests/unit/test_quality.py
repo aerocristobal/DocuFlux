@@ -9,6 +9,8 @@ from quality import (
     GRADE_FAIR,
     GRADE_POOR,
     MIN_WORDS_PER_PAGE,
+    MAX_WORDS_PER_PAGE,
+    MAX_CHARS_PER_PAGE,
 )
 
 
@@ -125,3 +127,86 @@ def test_word_density_thresholds(pages, words_each, expect_low):
     md = ("# H\n\n") + ("\n".join(" ".join(["w"] * words_each) for _ in range(pages)))
     report = score_markdown(md, page_count=pages)
     assert ("low_word_density" in report.reason_codes) == expect_low
+
+
+# ── excess output (do-5wb) ────────────────────────────────────────────────────
+
+
+def test_excess_words_per_page_flags_excess_output():
+    """A degeneration loop emits far more words per page than a real document."""
+    md = "# H\n\n" + ("word " * (MAX_WORDS_PER_PAGE + 500))
+    report = score_markdown(md, page_count=1)
+    assert "excess_output" in report.reason_codes
+    assert "low_word_density" not in report.reason_codes
+
+
+def test_excess_chars_per_page_flags_excess_output():
+    """Long tokens can breach the character ceiling while staying under the word one."""
+    long_token = "x" * 400
+    words = MAX_CHARS_PER_PAGE // len(long_token) + 20
+    md = "# H\n\n" + " ".join([long_token] * words)
+    report = score_markdown(md, page_count=1)
+    assert report.metrics["words_per_page"] <= MAX_WORDS_PER_PAGE
+    assert "excess_output" in report.reason_codes
+
+
+def test_excess_output_is_recorded_once_when_both_ceilings_breach():
+    md = "# H\n\n" + ("supercalifragilistic " * (MAX_WORDS_PER_PAGE + 500))
+    report = score_markdown(md, page_count=1)
+    assert report.reason_codes.count("excess_output") == 1
+
+
+def test_empty_output_suppresses_excess_output():
+    report = score_markdown("   ", page_count=1)
+    assert "empty_output" in report.reason_codes
+    assert "excess_output" not in report.reason_codes
+
+
+# ── repetition detection (do-5wb) ─────────────────────────────────────────────
+
+
+def test_repeated_phrase_flags_repetitive_output():
+    """A degeneration loop repeats a short cycle, so one bigram dominates."""
+    md = "# H\n\n" + ("continued continued " * 300)
+    report = score_markdown(md, page_count=1)
+    assert "repetitive_output" in report.reason_codes
+
+
+def test_repetition_below_threshold_is_not_flagged():
+    """A phrase repeated on a longer cycle stays under the 0.3 bigram share."""
+    md = "# H\n\n" + ("the same phrase over and over " * 200)
+    report = score_markdown(md, page_count=1)
+    assert "repetitive_output" not in report.reason_codes
+
+
+def test_varied_prose_is_not_flagged_repetitive():
+    report = score_markdown(GOOD_MD, page_count=1)
+    assert "repetitive_output" not in report.reason_codes
+
+
+def test_document_under_ten_words_is_not_scanned_for_repetition():
+    report = score_markdown("# H\n\nsame same same", page_count=1)
+    assert "repetitive_output" not in report.reason_codes
+
+
+# ── real page boundaries (do-5wb) ─────────────────────────────────────────────
+
+
+def test_per_page_word_counts_uses_real_page_boundaries():
+    """Given actual per-page counts, empty pages are detected from them."""
+    md = "# H\n\n" + ("word " * 120)
+    report = score_markdown(md, page_count=4, per_page_word_counts=[120, 0, 0, 0])
+    assert "high_empty_page_ratio" in report.reason_codes
+
+
+def test_per_page_word_counts_with_no_empty_pages():
+    md = "# H\n\n" + ("word " * 400)
+    report = score_markdown(md, page_count=4, per_page_word_counts=[100, 100, 100, 100])
+    assert "high_empty_page_ratio" not in report.reason_codes
+
+
+def test_mismatched_per_page_counts_fall_back_to_chunking():
+    """A length that disagrees with page_count must not be trusted."""
+    md = "# H\n\n" + ("word " * 200)
+    report = score_markdown(md, page_count=4, per_page_word_counts=[100, 100])
+    assert isinstance(report, QualityReport)

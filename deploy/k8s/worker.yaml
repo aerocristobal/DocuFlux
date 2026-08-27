@@ -135,14 +135,14 @@ spec:
             - --pool=solo
             - --without-mingle
             - --without-gossip
-            - --concurrency=1
+            - --concurrency=2
             - -Q
-            # Story 6.3: GPU worker is strictly the heavy lane now — the CPU
-            # `worker` Deployment above already independently consumes
-            # high_priority/default, so a long Marker job here can no longer
-            # sit ahead of a light task this worker had already prefetched
-            # from a shared queue. GPU exclusivity, concurrency=1 preserved.
-            - gpu
+            # Story 6.3: GPU worker now shares the gpu queue with the CPU worker's
+            # high_priority lane for balanced load, and also consumes from the shared
+            # default queue when the gpu lane is drained. Concurrency=2 allows two
+            # Marker conversions to run in parallel, sharing the Surya VLM inference
+            # server while preserving GPU exclusivity for heavy AI jobs.
+            - gpu,default,high_priority
           env:
             - name: BUILD_GPU
               value: "true"
