@@ -18,7 +18,7 @@ services:
       - BUILD_GPU=true
       - SURYA_INFERENCE_AUTOSTART=false
       - SURYA_INFERENCE_URL=http://surya-vlm:8000
-    command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q high_priority,default
+    command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q gpu,default,high_priority
     deploy:
       resources:
         limits:
