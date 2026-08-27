@@ -31,3 +31,4 @@ dist/
 state.json
 CLAUDE.local.md
 GEMINI.md
+.beads/
