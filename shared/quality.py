@@ -188,9 +188,6 @@ def _detect_repetition(text: str, threshold: float = 0.3) -> bool:
         ngram = " ".join(words[i:i + 2])
         ngram_counts[ngram] = ngram_counts.get(ngram, 0) + 1
 
-    if not ngram_counts:
-        return False
-
     most_common_ngram = max(ngram_counts.values())
     # If the most common n-gram appears in more than ``threshold`` fraction
     # of all possible n-grams positions, flag as repetitive
