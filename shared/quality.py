@@ -22,6 +22,8 @@ Reason codes (stable, machine-readable):
     malformed_tables        one or more Markdown tables are malformed
     high_garbage_ratio      too many non-printable / replacement characters
     high_empty_page_ratio   too many pages produced little or no text
+    excess_output           too many words or chars per page
+    repetitive_output       document contains excessive repetition
 
 Grades:
     good   score >= 75 and no blocking reason codes
@@ -39,6 +41,8 @@ from typing import Dict, List, Optional
 
 # --- Tunable thresholds (kept as module constants for documentation/tests) ---
 MIN_WORDS_PER_PAGE = 50          # below this average -> low_word_density
+MAX_WORDS_PER_PAGE = 2000        # above this average -> excess_output
+MAX_CHARS_PER_PAGE = 10000       # above this average -> excess_output
 MAX_GARBAGE_RATIO = 0.10         # >10% garbage chars -> high_garbage_ratio
 MAX_EMPTY_PAGE_RATIO = 0.50      # >50% near-empty pages -> high_empty_page_ratio
 EMPTY_PAGE_WORD_THRESHOLD = 5    # a page with < this many words counts as empty
@@ -49,6 +53,16 @@ GRADE_POOR = "poor"
 
 # Reason codes that force a "poor" grade regardless of numeric score.
 BLOCKING_REASON_CODES = frozenset({"empty_output"})
+
+# Reason codes (stable, machine-readable):
+REASON_CODE_EMPTY_OUTPUT            = "empty_output"        # no usable text at all
+REASON_CODE_LOW_WORD_DENSITY        = "low_word_density"    # too few words per page on average
+REASON_CODE_NO_HEADINGS             = "no_headings"         # document has no Markdown headings
+REASON_CODE_MALFORMED_TABLES         = "malformed_tables"    # one or more Markdown tables are malformed
+REASON_CODE_HIGH_GARBAGE_RATIO      = "high_garbage_ratio"  # too many non-printable / replacement characters
+REASON_CODE_HIGH_EMPTY_PAGE_RATIO   = "high_empty_page_ratio"  # too many pages produced little or no text
+REASON_CODE_EXCESS_OUTPUT           = "excess_output"       # too many words or chars per page
+REASON_CODE_REPETITIVE_OUTPUT       = "repetitive_output"   # document contains excessive repetition
 
 # Characters considered "garbage": C0/C1 control chars (except tab/newline) and
 # the Unicode replacement character produced by bad decodes.
@@ -155,13 +169,47 @@ def _col_count(row: str) -> int:
     return len([c for c in stripped.split("|")])
 
 
-def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityReport:
+def _detect_repetition(text: str, threshold: float = 0.3) -> bool:
+    """Detect if a document contains excessive repetition.
+
+    Checks whether a significant portion of the text consists of repeated
+    patterns. Uses a simple approach: find the longest repeated n-gram and
+    check if it covers more than ``threshold`` of the total word count.
+
+    Returns True if the document is excessively repetitive.
+    """
+    words = _WORD_RE.findall(text)
+    if len(words) < 10:
+        return False
+
+    # Build n-grams (2-word chunks) and count occurrences
+    ngram_counts: Dict[str, int] = {}
+    for i in range(len(words) - 1):
+        ngram = " ".join(words[i:i + 2])
+        ngram_counts[ngram] = ngram_counts.get(ngram, 0) + 1
+
+    if not ngram_counts:
+        return False
+
+    most_common_ngram = max(ngram_counts.values())
+    # If the most common n-gram appears in more than ``threshold`` fraction
+    # of all possible n-grams positions, flag as repetitive
+    ngram_positions_fraction = most_common_ngram / max(len(words) - 1, 1)
+    return ngram_positions_fraction > threshold
+
+
+def score_markdown(markdown: str, page_count: Optional[int] = None,
+                   per_page_word_counts: Optional[List[int]] = None) -> QualityReport:
     """Score converted Markdown and return a :class:`QualityReport`.
 
     Args:
         markdown: The converted Markdown text.
         page_count: Number of source pages, if known (used for word density and
             empty-page ratio). When ``None`` or ``< 1`` it is treated as 1.
+        per_page_word_counts: Optional per-page word counts (length of list = page_count).
+            When provided, empty_page_ratio uses real page boundaries instead of
+            equal-word-chunk splitting. This enables detecting genuinely empty pages
+            in documents with healthy total word counts.
     """
     text = markdown or ""
     pages = page_count if (page_count and page_count >= 1) else 1
@@ -172,10 +220,18 @@ def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityRe
     has_headings = _has_headings(text)
     malformed_tables = _malformed_table_count(text)
 
-    # Empty-page ratio: split the doc into `pages` equal word-chunks and count
-    # how many fall below the empty threshold. Deterministic given the inputs.
-    words = _WORD_RE.findall(text)
-    if pages > 1:
+    # Compute metrics
+    chars_per_page = len(text) / pages if pages > 0 else 0
+
+    # Empty-page ratio: if per-page word counts are provided, use real boundaries;
+    # otherwise fall back to equal-word-chunk splitting.
+    if per_page_word_counts is not None and len(per_page_word_counts) == pages:
+        # Use actual per-page word counts for empty page detection
+        empty_pages = sum(1 for c in per_page_word_counts if c < EMPTY_PAGE_WORD_THRESHOLD)
+        empty_page_ratio = empty_pages / pages if pages > 0 else 0.0
+    elif pages > 1:
+        # Fall back to equal-word-chunk splitting (previous behavior)
+        words = _WORD_RE.findall(text)
         per = max(1, len(words) // pages)
         chunks = [words[k:k + per] for k in range(0, max(len(words), 1), per)][:pages]
         empty_pages = sum(1 for c in chunks if len(c) < EMPTY_PAGE_WORD_THRESHOLD)
@@ -189,6 +245,7 @@ def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityRe
         "total_words": float(total_words),
         "page_count": float(pages),
         "words_per_page": round(words_per_page, 2),
+        "chars_per_page": round(chars_per_page, 2),
         "garbage_ratio": round(garbage, 4),
         "has_headings": 1.0 if has_headings else 0.0,
         "malformed_tables": float(malformed_tables),
@@ -206,6 +263,16 @@ def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityRe
         reason_codes.append("low_word_density")
         score -= 40
 
+    if words_per_page > MAX_WORDS_PER_PAGE and "empty_output" not in reason_codes:
+        reason_codes.append("excess_output")
+        score -= 15
+
+    if chars_per_page > MAX_CHARS_PER_PAGE and "empty_output" not in reason_codes:
+        # Only add excess_output once even if both word and char thresholds are exceeded
+        if "excess_output" not in reason_codes:
+            reason_codes.append("excess_output")
+            score -= 15
+
     if not has_headings:
         reason_codes.append("no_headings")
         score -= 15
@@ -218,14 +285,23 @@ def score_markdown(markdown: str, page_count: Optional[int] = None) -> QualityRe
         reason_codes.append("high_garbage_ratio")
         score -= 25
 
+    if _detect_repetition(text):
+        reason_codes.append("repetitive_output")
+        score -= 15
+
     if empty_page_ratio > MAX_EMPTY_PAGE_RATIO and "empty_output" not in reason_codes:
         reason_codes.append("high_empty_page_ratio")
         score -= 20
 
     score = max(0, min(100, score))
 
+    # New reason codes (excess_output, repetitive_output) prevent a "good" grade
+    # since they indicate the scorer has no headroom to detect real quality issues.
+    new_reason_codes = {"excess_output", "repetitive_output"}
+    has_new_reasons = bool(new_reason_codes & set(reason_codes))
+
     blocking = any(rc in BLOCKING_REASON_CODES for rc in reason_codes)
-    if blocking or score < 45:
+    if blocking or has_new_reasons or score < 45:
         grade = GRADE_POOR
     elif score < 75:
         grade = GRADE_FAIR
