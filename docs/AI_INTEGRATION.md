@@ -2,17 +2,19 @@
 
 This project integrates [Marker](https://github.com/VikParuchuri/marker), a high-accuracy PDF-to-Markdown converter powered by deep learning models (OCR, Layout Analysis).
 
-## Architecture
-- **Integration**: Direct library integration via `marker-pdf` Python package
-- **Location**: Installed in the `worker` container
-- **Communication**: Direct Python API call (`PdfConverter`)
-- **GPU**: Shared with worker container (NVIDIA CUDA)
+## Architecture (marker 2 — client/server)
+
+- **Integration**: `marker-pdf` 2.0.0 library, split into a thin worker client and a shared inference server
+- **Location**: client in the `worker` container; server in a dedicated `surya-vlm` service (vLLM serving `datalab-to/surya-ocr-2`)
+- **Communication**: worker calls `PdfConverter` (Python API); the VLM weights live in the `surya-vlm` server, which the worker attaches to via `SURYA_INFERENCE_URL` (`SURYA_INFERENCE_AUTOSTART=false` — the worker never spawns a server)
+- **GPU**: owned by the `surya-vlm` service; the worker holds only small local models
+- **Lifecycle**: model loading is ~1 s (attach), not a per-worker model download; the shared server is stopped at worker exit via `shutdown_marker_models()`, which is a no-op when the worker did not spawn it
 
 ## Usage
 When a user selects **"PDF (High Accuracy)"** (`pdf_marker`) as the input format:
 1. The web app queues a `tasks.convert_with_marker` Celery task.
-2. The worker initializes the Marker models (cached after first use) and runs conversion in-process.
-3. Marker processes the file (GPU accelerated if available).
+2. The worker builds a thin artifact dict (`create_model_dict()`) that attaches to the Surya VLM inference server.
+3. `PdfConverter` processes the file; the VLM does OCR/layout on the server (GPU accelerated).
 4. Marker generates output objects which are serialized to disk (markdown, images, metadata).
 5. The worker organizes these into the final output directory.
 
@@ -23,9 +25,9 @@ Since AI inference is heavy and can fail:
 3. **Error Handling**: Errors are captured and reported to the user with detailed error messages.
 
 ## Technical Details
-- **Models**: Uses `surya` for OCR/Layout. Weights are cached in `/app/models` inside the container.
-- **GPU**: Passed through via `deploy.resources.reservations.devices`.
-- **Memory**: Configured with a high limit (16GB) in `docker-compose.yml` to prevent OOM kills during PyTorch inference.
+- **Models**: The VLM (`datalab-to/surya-ocr-2`) runs in the `surya-vlm` vLLM service and is cached/downloaded by that service, not the worker.
+- **GPU**: Reserved for the `surya-vlm` service (`deploy.resources.reservations.devices` in `docker-compose.gpu.yml`).
+- **Memory**: `surya-vlm` is configured with a 24 GB memory limit at `VLLM_GPU_MEMORY_UTILIZATION=0.85`; the worker itself no longer holds the VLM weights.
 
 ## Troubleshooting
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for specific AI-related issues.

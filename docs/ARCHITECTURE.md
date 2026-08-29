@@ -76,7 +76,7 @@ flowchart LR
 
 - `pool=solo`, concurrency 1, `max_tasks_per_child=50`, `acks_late=True`, `reject_on_worker_lost=True`.
 - 11 tasks across `tasks/conversion.py`, `tasks/capture.py`, `tasks/metadata.py`, `tasks/maintenance.py`.
-- `warmup.py` detects GPU and eagerly loads the SLM; Marker models are lazy-loaded on first use (~30 s penalty — Backlog 6.2).
+- `warmup.py` detects GPU and eagerly loads the SLM; under marker 2 the Marker model weights live in a shared Surya VLM inference server (separate `surya-vlm` service), and the worker attaches to it via `SURYA_INFERENCE_URL` in under a second instead of loading models in-process.
 - Prometheus metrics on port 9090 (`metrics.py`).
 
 ### 2.3 `beat` — Celery Beat
@@ -155,10 +155,10 @@ flowchart TB
     MS --> DONE
     P --> DONE
     SLMQ --> DONE
-    DONE --> CLN[_cleanup_marker_memory<br/>gc + cuda empty_cache]
+    DONE --> CLN[_cleanup_marker_memory<br/>releases local objects only<br/>weights live in the inference server]
 ```
 
-The 50-words/page heuristic (`_assess_pandoc_quality`, `worker/tasks/conversion.py`) is the system's only quality measure — Backlog 1.1/1.2 replaces it with a structured scorer.
+The hybrid fallback decision uses the Story 1.1 quality scorer: Pandoc output passes when its score meets the configured `HYBRID_QUALITY_THRESHOLD` (default 60), otherwise the job falls back to Marker (`_assess_pandoc_quality`, `worker/tasks/conversion.py`).
 
 ---
 
@@ -330,9 +330,9 @@ Single Pydantic Settings class (`config.py`); precedence Docker secrets → envi
 
 ### 7.3 Model lifecycle
 
-- Marker models: lazy `create_model_dict()` on first conversion (~30 s), cached per worker process (recycled every 50 tasks via `max_tasks_per_child`).
+- Marker models: under marker 2 the VLM weights live in the shared `surya-vlm` inference server; `create_model_dict()` in the worker returns a thin artifact dict that attaches to the server via `SURYA_INFERENCE_URL` (no per-worker model load, no `INFERENCE_RAM` tuning — devices are set server-side).
 - SLM (TinyLlama GGUF): eagerly loaded at worker start (`warmup.py`), GPU layers when available.
-- GPU memory: explicit `gc.collect()` + `torch.cuda.empty_cache()` after Marker tasks; fragmentation can still accumulate (Backlog 6.6).
+- GPU memory: owned by the `surya-vlm` server process; per-task `_cleanup_marker_memory()` releases only the worker's local rendered/image objects (`gc.collect()`, never `torch.cuda.empty_cache()` — it would free nothing on the server). The shared server is stopped on worker exit via `shutdown_marker_models()`.
 
 ---
 
@@ -344,9 +344,14 @@ Single Pydantic Settings class (`config.py`); precedence Docker secrets → envi
 **Consequences:** Eventlet is in maintenance mode upstream; CSP needs `unsafe-inline` accommodations; future migration to gevent/threading or ASGI may be required (PRD §10).
 
 ### ADR-002: Celery `pool=solo`, concurrency 1
-**Decision:** One task at a time per worker process.
+**Decision:** One task at a time per worker process (GPU workers run `--concurrency=2` since marker 2 — see ADR-002a).
 **Rationale:** Marker and the SLM contend for a single GPU; serializing avoids VRAM exhaustion and CUDA context conflicts. `max_tasks_per_child=50` bounds memory creep.
 **Consequences:** Head-of-line blocking — a 20-minute Marker job stalls Pandoc and maintenance tasks. Mitigation: queue separation with a light-lane worker (Backlog 6.3).
+
+### ADR-002a: Shared Surya VLM inference server (marker 2)
+**Decision:** Marker 2 model weights live in a dedicated `surya-vlm` service (vLLM serving `datalab-to/surya-ocr-2`); workers attach via `SURYA_INFERENCE_URL=http://surya-vlm:8000` with `SURYA_INFERENCE_AUTOSTART=false`.
+**Rationale:** The VLM owns the GPU once, and many thin workers share it; workers hold no CUDA context for the VLM, so GPU worker concurrency can rise (2 in k8s) without multiplying VRAM.
+**Consequences:** The inference server is a new single point of failure — if it is down, every marker/hybrid job fails at attach time; the server must be healthy before workers can convert. Per-task `torch.cuda.empty_cache()` no longer applies (see §7.3).
 
 ### ADR-003: Redis as the only datastore
 **Decision:** Job metadata, capture sessions, API keys, and rate limits all live in Redis; no RDBMS.
@@ -358,10 +363,10 @@ Single Pydantic Settings class (`config.py`); precedence Docker secrets → envi
 **Rationale:** Confidentiality on shared volumes and in Redis dumps; per-job DEKs limit blast radius; GCM provides integrity.
 **Consequences:** Key management is the critical path (rotation undocumented); crypto code must be test-covered (currently excluded — Backlog 5.1); CPU overhead on every file touch.
 
-### ADR-005: Hybrid engine with words/page heuristic
-**Decision:** `pdf_hybrid` tries Pandoc first and falls back to Marker when output is below 50 words/page.
+### ADR-005: Hybrid engine with quality-score threshold
+**Decision:** `pdf_hybrid` tries Pandoc first and falls back to Marker when the Story 1.1 quality scorer rates the output below `HYBRID_QUALITY_THRESHOLD` (default 60).
 **Rationale:** Pandoc is orders of magnitude cheaper; only pay GPU cost when fast conversion visibly fails.
-**Consequences:** The heuristic misses degradation that preserves word count (mangled tables, shuffled columns, garbage characters) and wastes Marker runs on legitimately sparse documents. Superseded by quality scoring (Backlog 1.1/1.2).
+**Consequences:** The scorer catches degradation the old words/page count missed (mangled tables, shuffled columns, garbage characters). Marker 2 makes the fallback cheaper to run: the VLM server is already warm, so the first fallback no longer pays a ~30 s model load.
 
 ---
 
