@@ -171,10 +171,11 @@ This document describes the alerting rules configured for DocuFlux and provides 
 - No GPU metrics
 
 **Investigation Steps**:
-1. Check GPU visibility: `docker exec docuflux-worker-1 nvidia-smi`
-2. Check CUDA: `docker exec docuflux-worker-1 python3 -c "import torch; print(torch.cuda.is_available())"`
-3. Check container GPU access: `docker inspect docuflux-worker-1 | grep -A10 DeviceRequests`
-4. Restart worker: `docker-compose restart worker`
+1. Check GPU visibility on the VLM server (marker 2 owns the GPU there, not the worker): `docker exec docuflux-surya-vlm-1 nvidia-smi`
+2. Check the inference server health: `curl http://localhost:8000/health`
+3. Check worker attach env: `docker inspect docuflux-worker-1 | grep -A6 SURYA_INFERENCE`
+4. Check CUDA on the worker: `docker exec docuflux-worker-1 python3 -c "import torch; print(torch.cuda.is_available())"`
+5. Restart the VLM server first, then the worker: `docker-compose restart surya-vlm worker`
 
 **Common Causes**:
 - GPU driver crash

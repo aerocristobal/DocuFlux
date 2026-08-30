@@ -58,7 +58,7 @@ DocuFlux solves all three: documents never leave the deployment, AI conversion r
 Runs DocuFlux on a homelab or small-org server via `docker-compose.gpu.yml` or `docker-compose.cpu.yml`.
 
 - **Cares about:** setup friction, hardware requirements, upgrade safety, TLS, resource limits.
-- **Pains (current):** Marker requires a GPU — scanned PDFs are effectively unsupported on CPU-only hardware; Redis TLS is disabled pending certificate generation; first Marker conversion is slow (~30 s lazy model load).
+- **Pains (current):** Marker requires a GPU — scanned PDFs are effectively unsupported on CPU-only hardware; Redis TLS is disabled pending certificate generation; the Marker VLM server must be warm before the first conversion (marker 2's attach is ~1 s once the `surya-vlm` service is ready).
 
 ### 3.2 API Integrator "Ines"
 
@@ -129,7 +129,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 ### 5.2 AI PDF→Markdown
 
 - **FR-2.1** `pdf_marker`: Marker AI conversion with layout awareness, table detection, and image extraction. Page limit 600 (`MAX_MARKER_PAGES`); optional `force_ocr` and `use_llm` flags.
-- **FR-2.2** `pdf_hybrid`: try Pandoc first; if output quality is below threshold (currently 50 words/page — see Backlog Epic 1 for the planned quality-score replacement), fall back to Marker.
+- **FR-2.2** `pdf_hybrid`: try Pandoc first; if the Story 1.1 quality scorer rates the output below `HYBRID_QUALITY_THRESHOLD` (default 60), fall back to Marker.
 - **FR-2.3** `pdf_marker_slm`: Marker followed by SLM refinement of OCR artifacts in 600-word chunks.
 - **FR-2.4** Extracted images are written to an `images/` subdirectory with Markdown references rewritten accordingly; multi-file outputs are zipped on download.
 
@@ -173,7 +173,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 |--------|--------|---------------|
 | Pandoc conversion (typical doc) | < 30 s | Met; 500 s subprocess timeout |
 | Marker PDF→Markdown | < 20 min hard limit | 1200 s task limit; throughput unmeasured (Backlog 6.1) |
-| Time-to-first-conversion (cold worker) | < 60 s | ~30 s Marker lazy model load on first job (Backlog 6.2) |
+| Time-to-first-conversion (cold worker) | < 60 s | Met since marker 2: workers attach to the shared Surya VLM server in ~1 s (benchmark: 0.8 s vs 72 s model load on v1) |
 | Status endpoint latency | p95 < 200 ms | Per `tests/load/locustfile.py` SLA |
 | Conversion request handling | p95 < 2 s (enqueue) | Per locustfile SLA |
 | Error rate under load | < 1% | Per locustfile SLA |
@@ -208,7 +208,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 
 A conversion is *good* when the output preserves: readable body text (no garbage-character runs), document structure (headings at correct levels), tables (well-formed Markdown pipe tables), images (extracted and referenced), and ordering (no shuffled or dropped pages).
 
-**Current state: this bar is not measurable.** The only quality signal in the system is the hybrid engine's 50-words/page heuristic, applied solely to decide Pandoc→Marker fallback. No job carries a quality grade; a degraded output and an excellent output return identical API responses. Making this section enforceable is the purpose of **Backlog Epic 1** (quality scoring in `shared/quality.py`, surfaced through the API).
+**Current state: measurable since Backlog Epic 1.** Every conversion is scored by `shared/quality.py` (word density, headings, table well-formedness, garbage ratio, empty pages, and — since marker 2 — `excess_output` and `repetitive_output` guards against VLM degeneration). The grade and reason codes are persisted in job metadata and surfaced in API responses and webhooks; degraded jobs complete as `completed-with-warnings` rather than plain success. The scorer also drives hybrid routing (`HYBRID_QUALITY_THRESHOLD`).
 
 ---
 
