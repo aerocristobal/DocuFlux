@@ -33,9 +33,10 @@ Environment variables are managed via `docker-compose.yml`. For production, it i
     ```
 
 3.  **GPU Configuration (Optional but Recommended)**
-    To enable fast PDF conversions with Marker, ensure NVIDIA drivers are installed and the container runtime is configured. Marker runs in-process inside the worker container, so GPU resources are shared with the worker. See [BUILD.md](../BUILD.md) for GPU vs CPU build profiles.
+    To enable fast PDF conversions with Marker, ensure NVIDIA drivers are installed and the container runtime is configured. Under Marker v2 the worker is a thin client: model weights live in the shared `surya-vlm` inference server, which owns the GPU. The worker attaches via `SURYA_INFERENCE_URL`. See [BUILD.md](../BUILD.md) for GPU vs CPU build profiles.
     ```yaml
-    # In docker-compose.gpu.yml
+    # In docker-compose.gpu.yml — the surya-vlm service owns the GPU;
+    # the worker also reserves a device for local PDF/SLM processing.
     deploy:
       resources:
         reservations:
@@ -55,7 +56,7 @@ Environment variables are managed via `docker-compose.yml`. For production, it i
     ```bash
     docker-compose up -d --scale worker=3
     ```
-    *Note: Marker runs in-process in each worker, so scaling workers multiplies GPU/RAM requirements. Ensure your hardware can support multiple concurrent AI jobs or stick to 1 worker for AI tasks.*
+    *Note: each scaled worker is a thin Marker client, so worker memory stays modest — but all workers share the single `surya-vlm` inference server, so inference throughput and VRAM are the bottleneck for concurrent AI jobs. Stick to 1 GPU worker for AI tasks or size the server accordingly.*
 
 ## Security Considerations
 - **Network**: The service listens on port `5000` by default. It is recommended to put this behind a reverse proxy (Nginx/Caddy) with SSL termination.
