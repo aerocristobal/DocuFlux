@@ -1,6 +1,15 @@
 ---
 # Surya VLM Inference Server — dedicated out-of-process service
 # Workers attach via SURYA_INFERENCE_URL; no Docker socket needed (Epic 21.8-21.10)
+#
+# Recycling decision (benchmarks/marker_v2/REPORT.md): workers recycle their own
+# process every 50 tasks (max_tasks_per_child=50), but that does NOT recycle this
+# server. State can accumulate in the shared vLLM server over a long run (the
+# observed degeneration was on the 10th document of a sequential batch), so the
+# server is recycled on a bounded deployment schedule, never from the worker.
+# restartPolicy: Always below brings it back on crash; operators recycle it
+# periodically with `kubectl rollout restart deployment/surya-vlm -n docuflux`
+# (see "Inference server recycling" in docs/ARCHITECTURE.md).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +27,7 @@ spec:
       labels:
         app: surya-vlm
     spec:
+      restartPolicy: Always
       nodeSelector:
         nvidia.com/gpu: "true"
       securityContext:
