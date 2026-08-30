@@ -180,7 +180,8 @@ from tasks.metadata import extract_slm_metadata, test_amazon_session, _sample_fo
 # Re-export helpers so @patch('tasks.xxx') in tests still works
 from tasks.conversion import (
     get_model_dict, model_dict, _check_pdf_page_limit, _run_marker,
-    _save_marker_output, _cleanup_marker_memory, _slm_refine_markdown,
+    _save_marker_output, _save_extracted_image, _cleanup_marker_memory,
+    _slm_refine_markdown,
     _assess_pandoc_quality, _postprocess_tables, PageLimitExceeded,
 )
 from tasks.maintenance import (

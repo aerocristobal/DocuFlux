@@ -469,7 +469,7 @@ class TestListCaptures:
             'to': 'markdown',
             'created_at': '1700000000.0',
             'progress': '100',
-            'is_zip': 'false',
+            'file_count': '1',
         }]
 
         response = client.get('/api/captures', headers=self.OWNER)
@@ -477,10 +477,19 @@ class TestListCaptures:
         data = response.json
         assert len(data) == 1
         assert data[0]['status'] == 'SUCCESS'
+        assert data[0]['is_zip'] is False
         assert data[0]['download_url'] == f'/download/{valid_job_id}'
 
     @patch('app.redis_client')
     def test_zip_job_has_zip_download_url(self, mock_redis, client, valid_job_id):
+        """A capture that extracted images must be offered as a ZIP.
+
+        This used to feed `is_zip: 'true'`, a field no worker writes — the listing read
+        it, always saw None, and every image-bearing capture was advertised as a
+        single-file download. assemble_capture_session() writes `file_count` (1 for the
+        Markdown plus one per image), so that is what the listing reads and what this
+        test supplies.
+        """
         mock_redis.lrange.return_value = [valid_job_id]
         mock_pipe = MagicMock()
         mock_redis.pipeline.return_value = mock_pipe
@@ -491,12 +500,35 @@ class TestListCaptures:
             'to': 'markdown',
             'created_at': '1700000000.0',
             'progress': '100',
-            'is_zip': 'true',
+            'file_count': '4',
         }]
 
         response = client.get('/api/captures', headers=self.OWNER)
         assert response.status_code == 200
+        assert response.json[0]['is_zip'] is True
+        assert response.json[0]['file_count'] == 4
         assert response.json[0]['download_url'] == f'/download_zip/{valid_job_id}'
+
+    @patch('app.redis_client')
+    def test_capture_still_running_offers_no_download(self, mock_redis, client,
+                                                      valid_job_id):
+        """file_count is absent until the job succeeds, and must not imply a download."""
+        mock_redis.lrange.return_value = [valid_job_id]
+        mock_pipe = MagicMock()
+        mock_redis.pipeline.return_value = mock_pipe
+        mock_pipe.execute.return_value = [{
+            'status': 'PROCESSING',
+            'filename': 'book.md',
+            'from': 'capture',
+            'to': 'markdown',
+            'created_at': '1700000000.0',
+            'progress': '40',
+        }]
+
+        response = client.get('/api/captures', headers=self.OWNER)
+        assert response.status_code == 200
+        assert response.json[0]['download_url'] is None
+        assert response.json[0]['is_zip'] is False
 
     @patch('app.redis_client')
     def test_skips_missing_metadata(self, mock_redis, client, valid_job_id):

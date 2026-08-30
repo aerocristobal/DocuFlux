@@ -69,6 +69,21 @@ def capture_owners():
     return owners
 
 
+def _file_count(meta):
+    """User-facing output files for a capture job, 0 until it succeeds.
+
+    A malformed value counts as one file: that yields a plain /download link, and
+    /download already redirects to the ZIP when the output has subdirectories, so the
+    user still gets every file either way.
+    """
+    if meta.get('status') != 'SUCCESS':
+        return 0
+    try:
+        return int(meta.get('file_count', 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def render_capture_jobs(job_ids, limit=None):
     """Shape a list of capture job ids into the API's response payload.
 
@@ -88,7 +103,13 @@ def render_capture_jobs(job_ids, limit=None):
     for jid, meta in zip(job_ids, results):
         if not meta:
             continue
-        is_zip = meta.get('is_zip') == 'true'
+        # Multi-file-ness comes from file_count, the field assemble_capture_session()
+        # actually writes (1 for the Markdown plus one per extracted image). This read
+        # `meta.get('is_zip')`, which no worker has ever written, so every capture that
+        # extracted images advertised a single-file download and the ZIP disappeared
+        # from the UI. GET /api/jobs derives it the same way.
+        file_count = _file_count(meta)
+        is_zip = file_count > 1
         download_url = None
         if meta.get('status') == 'SUCCESS':
             download_url = f"/download_zip/{jid}" if is_zip else f"/download/{jid}"
@@ -103,6 +124,7 @@ def render_capture_jobs(job_ids, limit=None):
             'result': meta.get('error') if meta.get('status') == 'FAILURE' else None,
             'download_url': download_url,
             'is_zip': is_zip,
+            'file_count': file_count,
         })
     jobs_data.sort(key=lambda x: x['created_at'], reverse=True)
     if limit is not None:

@@ -127,6 +127,25 @@ def _run_marker(input_path, options):
     return converter, rendered
 
 
+_JPEG_SUFFIXES = ('.jpg', '.jpeg')
+
+
+def _save_extracted_image(image, path):
+    """Write one Marker-extracted image, converting modes JPEG cannot hold.
+
+    Marker names its crops from settings.OUTPUT_IMAGE_FORMAT, which defaults to
+    JPEG, and hands back whatever mode the crop happens to be — a page with
+    transparency yields RGBA. PIL then raises OSError("cannot write mode RGBA as
+    JPEG") and, since this runs inside the conversion task, takes the whole job
+    down with it. Marker's own save_output() guards the same call with
+    convert_if_not_rgb(); this is that guard, scoped to the formats that need it
+    so a PNG keeps its alpha channel.
+    """
+    if path.lower().endswith(_JPEG_SUFFIXES) and image.mode != 'RGB':
+        image = image.convert('RGB')
+    image.save(path)
+
+
 def _save_marker_output(rendered, output_path, images_dir, include_images=True, job_id=None):
     """Extract text and images from a Marker result and write to disk.
 
@@ -142,7 +161,7 @@ def _save_marker_output(rendered, output_path, images_dir, include_images=True, 
     saved_images_count = 0
     if include_images:
         for filename, image in images.items():
-            image.save(os.path.join(images_dir, filename))
+            _pkg._save_extracted_image(image, os.path.join(images_dir, filename))
             saved_images_count += 1
             text = text.replace(f"({filename})", f"(images/{filename})")
         logging.info(f"Saved {saved_images_count} images to {images_dir}")

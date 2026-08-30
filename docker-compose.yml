@@ -106,7 +106,12 @@ services:
       # shared Surya VLM inference server (surya-vlm service below). AUTOSTART=false
       # because the deployment owns the server — the worker must not spawn its own.
       # Matches docker-compose.gpu.yml and deploy/k8s/worker.yaml.
-      - SURYA_INFERENCE_URL=http://surya-vlm:8000
+      # The /v1 suffix is load-bearing: surya uses this value verbatim as the
+      # OpenAI base_url and derives the health probe by stripping a trailing
+      # /v1. Without it, /health still answers 200 so the worker looks healthy,
+      # but every inference POST lands on /chat/completions (404) and Marker
+      # silently emits an empty page — no text, no images, no ZIP.
+      - SURYA_INFERENCE_URL=http://surya-vlm:8000/v1
       - SURYA_INFERENCE_AUTOSTART=false
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-1}
       # Epic 5: Storage backend (default: local filesystem)
