@@ -104,15 +104,42 @@ redis_pool_available = Gauge(
 
 
 def update_redis_pool_metrics(redis_client):
-    """Update Redis connection pool metrics from the client's pool state."""
+    """Update Redis connection pool metrics from the client's pool state.
+
+    redis-py's two pool classes expose completely different internals, and the
+    previous single code path fit neither: ConnectionPool keeps idle connections
+    in a plain list (no .qsize(), so every call raised and both gauges stayed at
+    0), while BlockingConnectionPool has no _created_connections at all, so the
+    guard skipped it entirely. Handle each shape on its own terms, and report
+    nothing rather than a wrong number for anything else.
+    """
     try:
         pool = redis_client.connection_pool
-        if hasattr(pool, '_created_connections'):
-            active = pool._created_connections - pool._available_connections.qsize()
-            redis_pool_active.set(active)
-            redis_pool_available.set(pool._available_connections.qsize())
-            if pool._available_connections.qsize() == 0:
-                logging.warning("Redis connection pool exhausted!")
+        max_connections = getattr(pool, 'max_connections', None)
+        available_connections = getattr(pool, '_available_connections', None)
+        slots = getattr(pool, 'pool', None)
+
+        if isinstance(available_connections, list):
+            # ConnectionPool: a list of idle connections plus a set of
+            # checked-out ones. It opens connections lazily, so an empty idle
+            # list is normal and does not by itself mean exhaustion.
+            available = len(available_connections)
+            active = len(getattr(pool, '_in_use_connections', None) or ())
+        elif hasattr(slots, 'qsize'):
+            # BlockingConnectionPool: a LifoQueue pre-filled with
+            # max_connections slots, where a free slot holds either a
+            # connection or a None placeholder for one not opened yet. Each
+            # checkout removes a slot, so in-use is the difference.
+            available = slots.qsize()
+            active = max_connections - available if max_connections else 0
+        else:
+            return
+
+        redis_pool_active.set(active)
+        redis_pool_available.set(available)
+
+        if max_connections and active >= max_connections:
+            logging.warning("Redis connection pool exhausted!")
     except Exception as e:
         logging.error(f"Error updating Redis pool metrics: {e}")
 

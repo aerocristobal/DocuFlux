@@ -161,6 +161,21 @@ class TestMetrics:
                 sys.modules.pop("metrics", None)
         return mod
 
+    def _gauges(self, m, pool):
+        """Run update_redis_pool_metrics against `pool` with the two pool gauges
+        swapped for separate mocks, and return them.
+
+        The suite stubs prometheus_client, and its Gauge() hands back one shared
+        mock, so redis_pool_active and redis_pool_available would otherwise
+        record their .set() calls on the same object and be indistinguishable.
+        """
+        active, available = MagicMock(), MagicMock()
+        with patch.object(m, "redis_pool_active", active), \
+                patch.object(m, "redis_pool_available", available):
+            m.update_redis_pool_metrics(
+                types.SimpleNamespace(connection_pool=pool))
+        return active, available
+
     def test_counters_exist(self):
         m = self._load()
         assert m.conversion_total is not None
@@ -173,6 +188,73 @@ class TestMetrics:
         fake.connection_pool._available_connections = [1, 2]
         # Should not raise regardless of pool internals.
         m.update_redis_pool_metrics(fake)
+
+    def test_pool_metrics_for_connectionpool_shape(self):
+        """redis.ConnectionPool keeps idle connections in a plain list.
+
+        Regression: the old code called .qsize() on that list, so the call
+        raised on every invocation and both gauges sat at 0 forever. Asserting
+        the values (not just "does not raise") is what catches that.
+        """
+        m = self._load()
+        pool = types.SimpleNamespace(
+            max_connections=10,
+            _available_connections=[object(), object()],
+            _in_use_connections={object(), object(), object()},
+        )
+        active, available = self._gauges(m, pool)
+        active.set.assert_called_once_with(3)
+        available.set.assert_called_once_with(2)
+
+    def test_pool_metrics_for_blocking_connectionpool_shape(self):
+        """redis.BlockingConnectionPool exposes a LifoQueue and no
+        _created_connections, so the old hasattr guard skipped it entirely."""
+        import queue as _queue
+
+        slots = _queue.LifoQueue()
+        for _ in range(4):
+            slots.put(None)
+        m = self._load()
+        pool = types.SimpleNamespace(max_connections=6, pool=slots)
+        active, available = self._gauges(m, pool)
+        available.set.assert_called_once_with(4)
+        active.set.assert_called_once_with(2)
+
+    def test_pool_exhaustion_warns_when_all_connections_in_use(self):
+        m = self._load()
+        pool = types.SimpleNamespace(
+            max_connections=4,
+            _available_connections=[],
+            _in_use_connections={object() for _ in range(4)},
+        )
+        with patch.object(m.logging, "warning") as warn:
+            m.update_redis_pool_metrics(types.SimpleNamespace(connection_pool=pool))
+        warn.assert_called_once_with("Redis connection pool exhausted!")
+
+    def test_empty_idle_list_alone_is_not_exhaustion(self):
+        """A lazily-opening pool holds no idle connections until something asks
+        for one; warning on that would fire constantly on a healthy pool."""
+        m = self._load()
+        pool = types.SimpleNamespace(
+            max_connections=50,
+            _available_connections=[],
+            _in_use_connections=set(),
+        )
+        with patch.object(m.logging, "warning") as warn:
+            m.update_redis_pool_metrics(types.SimpleNamespace(connection_pool=pool))
+        warn.assert_not_called()
+
+    def test_unknown_pool_shape_reports_nothing(self):
+        """Neither gauge is touched and nothing is logged: better no data than
+        a wrong number, and an unrecognised pool must not spam the log every
+        cycle the way the .qsize() crash did."""
+        m = self._load()
+        with patch.object(m.logging, "error") as err:
+            active, available = self._gauges(
+                m, types.SimpleNamespace(max_connections=5))
+        active.set.assert_not_called()
+        available.set.assert_not_called()
+        err.assert_not_called()
 
     def test_update_queue_metrics_with_fake_redis(self):
         import fakeredis

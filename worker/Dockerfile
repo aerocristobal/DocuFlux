@@ -121,7 +121,11 @@ COPY worker/ .
 # Conditional SLM model download (only for GPU builds)
 # TEMPORARILY DISABLED: Model download causing build timeouts
 # Models will be downloaded on first use instead
-RUN mkdir -p /app/models
+# /app/celerybeat is where the beat service mounts its schedule volume. Create
+# it here so the recursive chown below gives it to appuser: a named volume
+# mounted over a path that does not exist in the image is created root-owned,
+# and beat (uid 999) then cannot write its schedule into it.
+RUN mkdir -p /app/models /app/celerybeat
 # RUN if [ "$BUILD_GPU" = "true" ]; then \
 #         echo "Downloading default SLM model for GPU build..."; \
 #         mkdir -p /app/models && \

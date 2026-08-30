@@ -188,7 +188,19 @@ services:
     environment:
       - VLLM_GPU_MEMORY_UTILIZATION=0.85
       - SURYA_MODEL=datalab-to/surya-ocr-2
-    command: sh -c "python -m vllm.entrypoints.api_server --model $$SURYA_MODEL --host 0.0.0.0 --port 8000"
+    # The vllm/vllm-openai image's ENTRYPOINT is already `vllm serve`, so a bare
+    # `command:` is appended as ARGUMENTS to it — the shell form was being parsed
+    # as a model tag plus flags and died on `--compilation-config`. Override the
+    # entrypoint with a shell so SURYA_MODEL/VLLM_GPU_MEMORY_UTILIZATION above
+    # stay the single place the model and memory budget are set.
+    entrypoint: ["/bin/sh", "-c"]
+    # Single list element: a string `command` gets shell-split by Compose, which
+    # would hand `sh -c` only the first word as its script.
+    command:
+      - >
+        vllm serve "$$SURYA_MODEL"
+        --host 0.0.0.0 --port 8000
+        --gpu-memory-utilization "$$VLLM_GPU_MEMORY_UTILIZATION"
     expose:
       - "8000"  # internal only — workers reach it at http://surya-vlm:8000
     deploy:
@@ -208,7 +220,9 @@ services:
       - ALL
     healthcheck:
       # vLLM /health returns 503 until the model is loaded, then 200.
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      # python3, not python — the vllm image ships no `python` on PATH, so the
+      # probe failed to exec and the container never left "health: starting".
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -272,7 +286,11 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    command: celery -A tasks beat --loglevel=info
+    # --schedule puts the shelve DB inside the beat-data volume below. Without
+    # it beat writes celerybeat-schedule.db into its CWD (/app), which is not a
+    # volume, so last-run times were lost on every recreate and periodic tasks
+    # all re-fired on startup. Celery appends the .db suffix itself.
+    command: celery -A tasks beat --loglevel=info --schedule /app/celerybeat/celerybeat-schedule
     volumes:
       - ./data:/app/data
       - beat-data:/app/celerybeat
@@ -296,6 +314,16 @@ services:
       resources:
         limits:
           memory: 256M
+    # beat is built from worker/Dockerfile, whose HEALTHCHECK pings a Celery
+    # *worker* over the broker. Beat is a scheduler, never answers that ping,
+    # and so reported unhealthy while scheduling tasks perfectly well. Probe the
+    # scheduler process itself instead.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'celery -A tasks beat' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   mcp-server:
