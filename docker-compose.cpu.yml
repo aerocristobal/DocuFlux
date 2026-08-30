@@ -26,6 +26,17 @@ services:
     profiles:
       - cpu
 
+  # surya-vlm lives in the base file because the base deployment is the GPU
+  # topology (its worker reserves an NVIDIA device). CPU-only hosts must never
+  # try to allocate a GPU for the inference server, so this override adds a
+  # profile that nothing activates — the union makes the service non-default,
+  # keeping it out of `docker compose up` on CPU-only deployments. The worker
+  # override above keeps MARKER_ENABLED=false, so the SURYA_INFERENCE_* env it
+  # inherits from the base worker is inert.
+  surya-vlm:
+    profiles:
+      - never
+
   beat:
     profiles:
       - cpu

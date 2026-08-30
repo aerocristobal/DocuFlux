@@ -242,9 +242,9 @@ States: `queued → in_progress → completed | failed`. Each `job:{uuid}` hash 
 
 | File | Purpose | Key differences |
 |------|---------|-----------------|
-| `docker-compose.yml` | Base | redis, web, worker, beat, mcp-server; hardening defaults (non-root, cap_drop ALL, no-new-privileges, noexec tmpfs) |
-| `docker-compose.gpu.yml` | GPU overlay | worker 16–18 GB memory, NVIDIA device reservation, `MARKER_ENABLED=true` |
-| `docker-compose.cpu.yml` | CPU overlay | worker 2 GB memory, Marker disabled |
+| `docker-compose.yml` | Base | redis, web, worker, beat, mcp-server, **surya-vlm** (the base deployment is the GPU topology — the worker reserves an NVIDIA device, drains the `gpu` queue, and attaches to the inference server via `SURYA_INFERENCE_URL`); hardening defaults (non-root, cap_drop ALL, no-new-privileges, noexec tmpfs) |
+| `docker-compose.gpu.yml` | GPU overlay | worker 16–18 GB memory, NVIDIA device reservation, `MARKER_ENABLED=true`; same `surya-vlm` image/env/probes as base, gated behind the `gpu` profile |
+| `docker-compose.cpu.yml` | CPU overlay | worker 2 GB memory, Marker disabled; `surya-vlm` removed from the default service set (never-activated profile) so CPU-only hosts never allocate a GPU |
 | `docker-compose.tls.yml` | Redis TLS overlay | **currently inert** — certs not generated (Backlog 4.1) |
 | `docker-compose.cloudflare.yml` | Tunnel ingress | adds cloudflared container |
 
@@ -333,6 +333,14 @@ Single Pydantic Settings class (`config.py`); precedence Docker secrets → envi
 - Marker models: lazy `create_model_dict()` on first conversion (~30 s), cached per worker process (recycled every 50 tasks via `max_tasks_per_child`).
 - SLM (TinyLlama GGUF): eagerly loaded at worker start (`warmup.py`), GPU layers when available.
 - GPU memory: explicit `gc.collect()` + `torch.cuda.empty_cache()` after Marker tasks; fragmentation can still accumulate (Backlog 6.6).
+
+#### Inference server recycling
+
+**Decision:** recycle the shared `surya-vlm` server on a bounded deployment schedule; never from the worker.
+
+Workers already recycle their own process every 50 tasks (`max_tasks_per_child=50`), but that only bounds worker-process memory. The shared vLLM server is a separate long-lived process, and `benchmarks/marker_v2/REPORT.md` observed one silent degeneration (a 14× repetition loop) on the tenth document of a sequential batch — evidence of state accumulating in the shared server rather than in the client. Worker-driven teardown is the wrong tool: many thin workers share one server, and `tests/unit/test_worker.py` pins that a completed conversion must NOT stop it.
+
+**Mechanism:** Compose — `docker compose restart surya-vlm` on a schedule (e.g. daily cron/systemd timer); `restart: unless-stopped` recovers crashes. Kubernetes — `kubectl rollout restart deployment/surya-vlm -n docuflux` on a schedule; `restartPolicy: Always` recovers crashes. The output-quality bound (`excess_output` in `shared/quality.py`) is the first line of defense against a degenerate run, and periodic recycling bounds how long a silent degradation can persist. Rationale is pinned in-manifest in `docker-compose.yml` and `deploy/k8s/surya-vlm.yaml`.
 
 ---
 
