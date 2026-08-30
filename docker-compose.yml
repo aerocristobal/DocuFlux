@@ -286,7 +286,11 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    command: celery -A tasks beat --loglevel=info
+    # --schedule puts the shelve DB inside the beat-data volume below. Without
+    # it beat writes celerybeat-schedule.db into its CWD (/app), which is not a
+    # volume, so last-run times were lost on every recreate and periodic tasks
+    # all re-fired on startup. Celery appends the .db suffix itself.
+    command: celery -A tasks beat --loglevel=info --schedule /app/celerybeat/celerybeat-schedule
     volumes:
       - ./data:/app/data
       - beat-data:/app/celerybeat
