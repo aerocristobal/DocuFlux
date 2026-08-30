@@ -341,3 +341,61 @@ def test_shared_modules_do_not_import_web():
         f"COPYs into the image: {sorted(offenders)}. Move the shared code into shared/, "
         f"or make the worker image ship web/."
     )
+
+
+# ── SURYA_INFERENCE_URL must address the OpenAI-compatible API root ───────────
+
+
+def _surya_inference_urls():
+    """Every SURYA_INFERENCE_URL value declared in a deployment manifest.
+
+    Returns (source, url) pairs. Parsed with regexes rather than a YAML loader so the
+    compose files' `${VAR:-default}` interpolation syntax stays untouched.
+    """
+    found = []
+
+    for name in ('docker-compose.yml', 'docker-compose.gpu.yml', 'docker-compose.cpu.yml',
+                 'docker-compose.tls.yml'):
+        path = REPO_ROOT / name
+        if not path.is_file():
+            continue
+        for match in re.finditer(r'^\s*-\s*SURYA_INFERENCE_URL=(\S+)\s*$',
+                                 path.read_text(encoding='utf-8'), re.MULTILINE):
+            found.append((name, match.group(1)))
+
+    for path in sorted((REPO_ROOT / 'deploy' / 'k8s').glob('*.yaml')):
+        for match in re.finditer(
+            r'^\s*-\s*name:\s*SURYA_INFERENCE_URL\s*\n\s*value:\s*["\']?(\S+?)["\']?\s*$',
+            path.read_text(encoding='utf-8'), re.MULTILINE,
+        ):
+            found.append((str(path.relative_to(REPO_ROOT)), match.group(1)))
+
+    return found
+
+
+def test_surya_inference_url_declared_somewhere():
+    """Guards the parser above: a rename that stops matching must not pass vacuously."""
+    assert _surya_inference_urls(), (
+        "no SURYA_INFERENCE_URL found in any deployment manifest — either the variable "
+        "was renamed or _surya_inference_urls() stopped matching"
+    )
+
+
+def test_surya_inference_url_ends_with_v1():
+    """The URL is surya's OpenAI base_url, so it must include the /v1 path.
+
+    surya passes SURYA_INFERENCE_URL to the OpenAI client verbatim and derives the
+    health probe by stripping a trailing `/v1` (surya/inference/backends/spawn.py).
+    Set to `http://surya-vlm:8000`, the health probe still hits `/health` and answers
+    200 — so the container reports healthy and the worker starts — but every inference
+    request lands on `/chat/completions` instead of `/v1/chat/completions` and 404s.
+    Marker logs those as warnings and leaves the page empty, so conversions "succeed"
+    with empty Markdown, zero extracted images, file_count 1, and therefore no ZIP
+    download for what should be a multi-file result.
+    """
+    offenders = [(source, url) for source, url in _surya_inference_urls()
+                 if not url.rstrip('/').endswith('/v1')]
+    assert not offenders, (
+        "SURYA_INFERENCE_URL must point at the OpenAI API root (…:8000/v1); without "
+        f"the /v1 suffix Marker silently emits empty output: {offenders}"
+    )

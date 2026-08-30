@@ -1467,6 +1467,49 @@ class TestFireWebhook:
             tasks.fire_webhook(job_id, 'FAILURE', {'error': 'oops'})
 
 
+class TestSaveExtractedImage:
+    """Marker hands back crops in whatever mode they are; JPEG cannot hold most of them.
+
+    Marker names its crops from settings.OUTPUT_IMAGE_FORMAT (JPEG by default) but does
+    not convert the mode — its own save_output() does that at write time via
+    convert_if_not_rgb(). _save_marker_output() writes the crops itself, so it needs the
+    same guard: without it a single RGBA crop raises OSError inside the conversion task
+    and fails the whole job.
+    """
+
+    def test_rgba_is_converted_before_a_jpeg_write(self, tmp_path):
+        image = MagicMock()
+        image.mode = 'RGBA'
+        path = str(tmp_path / 'fig.jpeg')
+
+        tasks._save_extracted_image(image, path)
+
+        image.convert.assert_called_once_with('RGB')
+        image.convert.return_value.save.assert_called_once_with(path)
+        image.save.assert_not_called()
+
+    def test_rgb_is_written_untouched(self, tmp_path):
+        image = MagicMock()
+        image.mode = 'RGB'
+        path = str(tmp_path / 'fig.jpeg')
+
+        tasks._save_extracted_image(image, path)
+
+        image.convert.assert_not_called()
+        image.save.assert_called_once_with(path)
+
+    def test_png_keeps_its_alpha_channel(self, tmp_path):
+        """Only JPEG needs the conversion; converting a PNG would discard transparency."""
+        image = MagicMock()
+        image.mode = 'RGBA'
+        path = str(tmp_path / 'fig.png')
+
+        tasks._save_extracted_image(image, path)
+
+        image.convert.assert_not_called()
+        image.save.assert_called_once_with(path)
+
+
 class TestSaveMarkerOutput:
     """Tests for _save_marker_output's include_images option (Story 1.5)."""
 

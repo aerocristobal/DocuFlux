@@ -244,6 +244,31 @@ class TestFinalisation:
 
         assert job_meta.merged[JOB]['file_count'] == '2'
 
+    def test_capture_listing_reads_the_field_the_worker_writes(
+        self, storage, redis, job_meta
+    ):
+        """GET /api/captures must decide ZIP-or-not from real assembly metadata.
+
+        The listing used to read `is_zip`, which assembly has never written, so a
+        capture with extracted images was always advertised as a single-file download
+        and the ZIP button vanished. Both sides only agree by convention, so this runs
+        the real assembly and hands its actual metadata to the real reader.
+        """
+        from web.captures import _file_count
+
+        redis.hgetall.return_value = make_session_meta()
+        redis.lrange.return_value = [make_page(
+            0, '![a](one.png)', images=[{'filename': 'one.png', 'b64': png_b64()}],
+        )]
+
+        tasks.assemble_capture_session(SESSION, JOB)
+
+        written = job_meta.merged[JOB]
+        assert _file_count(written) == 2, (
+            'the capture listing cannot see this job as multi-file; the worker writes '
+            f'{sorted(written)} and the listing reads something else'
+        )
+
     def test_successful_job_metadata_expires_in_two_hours(self, storage, redis, job_meta):
         redis.hgetall.return_value = make_session_meta()
         redis.lrange.return_value = [make_page(0)]

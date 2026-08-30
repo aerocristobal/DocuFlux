@@ -18,6 +18,7 @@ These tests verify:
 import pytest
 import io
 import os
+import zipfile
 import uuid
 import time
 import sys
@@ -425,6 +426,114 @@ class TestDownloadEndpoints:
         assert response.content_type == 'application/zip'
 
         web_app.storage.delete_job(sample_job_id)
+
+
+# ============================================================
+# Multi-file conversions must stay downloadable as a ZIP
+# ============================================================
+
+
+class TestMultiFileDownloadIsOffered:
+    """A Marker PDF->Markdown run that extracted images is a multi-file result.
+
+    The UI decides between /download and /download_zip from `file_count` in the job
+    metadata, so a multi-file job whose extras never reached disk (or never reached
+    Redis) silently degrades to a single-file download and the ZIP disappears from the
+    UI. That is what happened when SURYA_INFERENCE_URL lost its /v1 suffix: every
+    inference call 404'd, Marker emitted an empty page with zero images, and the job
+    completed SUCCESS with file_count 1. The three tests below pin each link in the
+    chain that turns extracted images into a ZIP the user can actually download.
+    """
+
+    @staticmethod
+    def _write_marker_output(job_id, image_count=1):
+        """Lay out the output tree that _save_marker_output() produces."""
+        web_app.storage.save_file(
+            job_id, 'report.md',
+            b'# Report\n\n![](images/_page_0_Picture_0.jpeg)\n', folder='output')
+        web_app.storage.save_file(job_id, 'metadata.json', b'{}', folder='output')
+        web_app.storage.makedirs(job_id, 'images', folder='output')
+        for i in range(image_count):
+            web_app.storage.save_file(
+                job_id, f'images/_page_0_Picture_{i}.jpeg',
+                b'\xff\xd8\xff' + b'\x00' * 64, folder='output')
+        # _save_marker_output's own accounting: the Markdown plus each image,
+        # never metadata.json.
+        return 1 + image_count
+
+    @staticmethod
+    def _job_meta(file_count):
+        return {
+            'status': 'SUCCESS',
+            'filename': 'report.pdf',
+            'from': 'pdf_marker',
+            'to': 'markdown',
+            'created_at': str(time.time() - 30),
+            'completed_at': str(time.time() - 5),
+            'progress': '100',
+            'file_count': str(file_count),
+            'encrypted': 'false',
+        }
+
+    def test_job_listing_offers_the_zip_url(self, client, mock_redis, sample_job_id):
+        """/api/jobs must hand the UI is_zip + the /download_zip URL."""
+        file_count = self._write_marker_output(sample_job_id, image_count=2)
+        meta = self._job_meta(file_count)
+        mock_redis.lrange.return_value = [sample_job_id]
+        mock_redis.pipeline.return_value.execute.return_value = [meta]
+
+        with client.session_transaction() as sess:
+            sess['session_id'] = 'multifile-session'
+        jobs = client.get('/api/jobs').get_json()
+
+        try:
+            assert len(jobs) == 1, jobs
+            job = jobs[0]
+            assert job['file_count'] == 3
+            assert job['is_zip'] is True
+            assert job['download_url'] == f'/download_zip/{sample_job_id}'
+        finally:
+            web_app.storage.delete_job(sample_job_id)
+
+    def test_zip_contains_the_markdown_and_every_image(self, client, mock_redis,
+                                                       sample_job_id):
+        """The archive must carry the images, not just the Markdown."""
+        self._write_marker_output(sample_job_id, image_count=2)
+        mock_redis.hgetall.return_value = self._job_meta(3)
+        mock_redis.pipeline.return_value.execute.return_value = [1, {}]
+
+        response = client.get(f'/download_zip/{sample_job_id}')
+
+        try:
+            assert response.status_code == 200
+            assert response.content_type == 'application/zip'
+            assert 'filename="report.zip"' in response.headers['Content-Disposition']
+            with zipfile.ZipFile(io.BytesIO(response.get_data())) as archive:
+                names = set(archive.namelist())
+            assert names == {
+                'report.md',
+                'images/_page_0_Picture_0.jpeg',
+                'images/_page_0_Picture_1.jpeg',
+            }, names
+        finally:
+            web_app.storage.delete_job(sample_job_id)
+
+    def test_single_file_download_falls_back_to_the_zip(self, client, mock_redis,
+                                                        sample_job_id):
+        """A stale /download link on a multi-file job still yields the whole archive."""
+        self._write_marker_output(sample_job_id, image_count=1)
+        mock_redis.hgetall.return_value = self._job_meta(2)
+        mock_redis.pipeline.return_value.execute.return_value = [1, {}]
+
+        response = client.get(f'/download/{sample_job_id}')
+
+        try:
+            assert response.status_code == 200
+            assert response.content_type == 'application/zip'
+            with zipfile.ZipFile(io.BytesIO(response.get_data())) as archive:
+                assert 'images/_page_0_Picture_0.jpeg' in archive.namelist()
+        finally:
+            web_app.storage.delete_job(sample_job_id)
 
 
 # ============================================================

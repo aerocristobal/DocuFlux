@@ -270,8 +270,11 @@ function renderCaptures() {
         let icon = 'pending', color = 'secondary', label = 'Waiting', actions = '';
         if (j.status === 'SUCCESS') {
             icon = 'check_circle'; color = 'primary'; label = 'Done';
-            const dlUrl = j.download_url || `/download/${j.id}`;
-            actions = `<a href="${dlUrl}" download slot="end" title="Download"><md-icon-button><md-icon>download</md-icon></md-icon-button></a>`;
+            const isZip = parseInt(j.file_count) > 1 || j.is_zip;
+            const dlUrl = j.download_url || (isZip ? `/download_zip/${j.id}` : `/download/${j.id}`);
+            const dlIcon = isZip ? 'folder_zip' : 'download';
+            const dlTitle = isZip ? 'Download ZIP' : 'Download File';
+            actions = `<a href="${dlUrl}" download slot="end" title="${dlTitle}"><md-icon-button><md-icon>${dlIcon}</md-icon></md-icon-button></a>`;
         } else if (j.status === 'FAILURE') {
             icon = 'error'; color = 'error'; label = 'Failed';
         }

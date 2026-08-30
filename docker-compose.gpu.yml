@@ -17,7 +17,12 @@ services:
       - MARKER_ENABLED=true
       - BUILD_GPU=true
       - SURYA_INFERENCE_AUTOSTART=false
-      - SURYA_INFERENCE_URL=http://surya-vlm:8000
+      # The /v1 suffix is load-bearing: surya uses this value verbatim as the
+      # OpenAI base_url and derives the health probe by stripping a trailing
+      # /v1. Without it, /health still answers 200 so the worker looks healthy,
+      # but every inference POST lands on /chat/completions (404) and Marker
+      # silently emits an empty page — no text, no images, no ZIP.
+      - SURYA_INFERENCE_URL=http://surya-vlm:8000/v1
     command: celery -A tasks worker --loglevel=info --pool=solo --without-mingle --without-gossip -Q gpu,default,high_priority
     deploy:
       resources:
