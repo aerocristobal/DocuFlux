@@ -1,0 +1,17 @@
+# The build context is ./mcp_server, so the repo-root .dockerignore does not
+# apply here. Without this file `COPY . .` copies the host's node_modules over
+# the one `npm install` just built, silently pinning the image to whatever
+# playwright version happens to be checked out locally.
+node_modules/
+npm-debug.log*
+
+# Version control and tooling
+.git
+.gitignore
+.vscode/
+.idea/
+*.swp
+
+# Secrets and docs — never bake into the image
+.env*
+*.md
