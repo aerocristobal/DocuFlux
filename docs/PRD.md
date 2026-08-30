@@ -264,6 +264,6 @@ The prioritized improvement backlog — 6 epics, 31 stories across conversion qu
 | 1 | CUDA 11.8 approaching EOL — when to migrate the GPU image to CUDA 12.x? | Marker/PyTorch compatibility work |
 | 2 | Should TinyLlama be replaced by a stronger small model (e.g., Qwen/Phi class) for metadata? | Metadata quality vs CPU/VRAM budget |
 | 3 | Is the 600-page Marker limit right? Large books/manuals exceed it. | Capability ceiling for key use cases |
-| 4 | Marker license/upstream cadence — pinned at 1.10.x; upgrade policy undefined. | Supply-chain and quality drift |
+| 4 | Marker license/upstream cadence — upgraded to 2.0.0 (v2 client/server model); upgrade policy undefined. | Supply-chain and quality drift |
 | 5 | Eventlet is in maintenance mode upstream; Flask-SocketIO async-mode migration may be needed. | Web tier rearchitecture risk |
 | 6 | No SLO ownership: metrics exist but no alert thresholds are enforced as commitments. | Operational ambiguity |
