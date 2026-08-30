@@ -17,7 +17,7 @@ This automatically detects GPU availability and builds the appropriate image.
 ./scripts/build.sh gpu
 ```
 - Image size: ~15GB
-- Includes: CUDA 11.8, PyTorch GPU, Marker AI models
+- Includes: CUDA 12.2 (`nvcr.io/nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04` base), PyTorch GPU, `marker-pdf[full]==2.0.0` (thin client — model weights live in the `surya-vlm` inference server, not in this image)
 - Requires: NVIDIA GPU with 16GB+ VRAM
 
 **CPU Build:**
@@ -35,7 +35,8 @@ This automatically detects GPU availability and builds the appropriate image.
 docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up
 ```
 - Uses worker:gpu image
-- Allocates 18GB memory (16GB VRAM + 2GB system)
+- Worker: 18GB memory (16GB VRAM + 2GB system, `docker-compose.gpu.yml`) + NVIDIA device reservation (local PDF/SLM processing)
+- Starts the shared **`surya-vlm`** inference server (vLLM image, 24GB memory, `VLLM_GPU_MEMORY_UTILIZATION=0.85`) that the worker attaches to via `SURYA_INFERENCE_URL=http://surya-vlm:8000`
 - Enables Marker AI PDF conversion
 - Requires GPU with CUDA support
 
@@ -64,15 +65,15 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
 
 ### Memory Optimization (Epic 21.4)
 
-**Lazy Model Loading:**
-- Models pre-cached during Docker build (GPU images)
-- Not loaded into memory until first Marker task
-- Reduces idle worker memory from 8GB to <1GB
+**Marker v2 thin client:**
+- Model weights live in the `surya-vlm` inference server process, not in the worker — the worker never allocates VRAM for Marker at all
+- The worker only builds a small client-side artifact dict, lazily on first Marker task
+- Worker idle memory stays below 1GB regardless of conversion volume
 
 **Automatic Cleanup:**
-- `gc.collect()` after every task completion
-- `torch.cuda.empty_cache()` for GPU memory
-- Logs memory freed for monitoring
+- `_cleanup_marker_memory()` releases the task's local objects (`gc.collect()`) after every conversion
+- GPU memory belongs to the `surya-vlm` server, sized server-side by `VLLM_GPU_MEMORY_UTILIZATION`
+- The deployment recycles the server on a schedule (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#inference-server-recycling)) — never the worker
 
 ## Files Structure
 
@@ -84,7 +85,7 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
 │   ├── Dockerfile            # Conditional multi-stage build
 │   ├── requirements-true.txt   # GPU dependencies (BUILD_GPU=true)
 │   ├── requirements-false.txt  # CPU-only dependencies (BUILD_GPU=false)
-│   ├── warmup.py             # Lazy loading + GPU detection
+│   ├── warmup.py             # GPU detection, SLM eager load, inference-server probe
 │   └── tasks.py              # Memory cleanup
 ├── docker-compose.yml        # Base configuration
 ├── docker-compose.gpu.yml    # GPU profile overrides
@@ -97,13 +98,17 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
 |----------|-------------|-------------|-------------|
 | `BUILD_GPU` | `true` | `false` | Controls build-time dependencies |
 | `MARKER_ENABLED` | `true` | `false` | Runtime feature flag |
-| `INFERENCE_RAM` | `16` (auto-detected) | `4` | VRAM allocation for Marker |
+| `SURYA_INFERENCE_URL` | `http://surya-vlm:8000` | — (unset) | Shared Surya VLM inference server the worker attaches to |
+| `SURYA_INFERENCE_AUTOSTART` | `false` | — | Deployment owns the server; the worker never spawns its own |
+
+GPU-side sizing knobs live on the `surya-vlm` service itself: `SURYA_MODEL` (default `datalab-to/surya-ocr-2`) and `VLLM_GPU_MEMORY_UTILIZATION` (default `0.85`).
 
 ## Memory Limits
 
 | Service | GPU Profile | CPU Profile |
 |---------|-------------|-------------|
 | Worker | 18GB | 2GB |
+| surya-vlm | 24GB | n/a (not deployed) |
 | Web | 512MB | 512MB |
 | Redis | 300MB | 300MB |
 | Beat | 256MB | 256MB |
@@ -116,7 +121,7 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
 nvidia-smi
 
 # Verify Docker can access GPU
-docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.2.2-base-ubuntu22.04 nvidia-smi
 ```
 
 ### Build Fails with ARG Error
@@ -131,11 +136,16 @@ ls worker/requirements-*.txt
 
 ### Worker Memory Issues
 ```bash
-# Check worker logs for memory cleanup
-docker-compose logs worker | grep "Memory cleanup"
+# Check worker logs for cleanup after Marker tasks
+docker-compose logs worker | grep "cleanup"
 
 # Expected output:
-# "Memory cleanup complete. GPU memory freed: X.XX GB"
+# "Marker task cleanup complete (local objects released; model weights live in the inference server process)"
+
+# If the worker cannot reach the inference server, check its health
+# (port 8000 is internal-only, so query it from inside the Docker network):
+docker compose exec worker python -c "import urllib.request; print(urllib.request.urlopen('http://surya-vlm:8000/health', timeout=5).status)"
+# 503 while the surya-ocr-2 model loads, 200 when ready
 ```
 
 ## Performance Comparison
@@ -143,7 +153,7 @@ docker-compose logs worker | grep "Memory cleanup"
 | Metric | GPU Build | CPU Build | Improvement |
 |--------|-----------|-----------|-------------|
 | Image Size | ~15GB | ~3GB | **5x smaller** |
-| Idle Memory | <1GB | <500MB | **Lazy loading** |
+| Idle Memory | <1GB | <500MB | **Thin client (weights in surya-vlm)** |
 | Build Time | ~15 min | ~5 min | **3x faster** |
 | PDF Conversion | Yes (GPU) | No | **GPU required** |
 

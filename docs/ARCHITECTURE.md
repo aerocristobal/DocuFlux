@@ -23,7 +23,7 @@ flowchart TB
     subgraph External
         S3[(S3-compatible storage<br/>optional backend)]
         WH[Webhook Receivers]
-        MS[Model Artifact Sources<br/>Marker weights, TinyLlama GGUF<br/>build/startup only]
+        MS[Model Artifact Sources<br/>Surya OCR weights (surya-vlm)<br/>TinyLlama GGUF (worker)<br/>fetched at startup only]
         CF[Cloudflare Tunnel<br/>optional ingress]
     end
 
@@ -43,14 +43,15 @@ Trust note: all conversion and metadata extraction is local. The only runtime eg
 
 ## 2. Container View (C4 Level 2)
 
-Five runtime containers plus the distributed browser extension:
+Six runtime containers plus the distributed browser extension:
 
 ```mermaid
 flowchart LR
     subgraph Docker network
         WEB[web<br/>Flask 3.1 + eventlet<br/>SocketIO, Gunicorn<br/>:5000]
         RED[(redis 7-alpine<br/>DB0 Celery broker<br/>DB1 job metadata, encrypted)]
-        WRK[worker<br/>Celery, pool=solo<br/>Pandoc · Marker · SLM<br/>metrics :9090]
+        WRK[worker<br/>Celery, pool=solo<br/>Pandoc · Marker thin client · SLM<br/>metrics :9090]
+        SVLM[surya-vlm<br/>vLLM serving datalab-to/surya-ocr-2<br/>:8000 internal]
         BEAT[beat<br/>Celery Beat<br/>cleanup + metrics every 120s]
         MCP[mcp-server<br/>Node.js + Playwright<br/>:8080 internal]
     end
@@ -62,6 +63,7 @@ flowchart LR
     WRK <-->|tasks + metadata| RED
     BEAT --> RED
     WRK -->|MCP_SECRET bearer| MCP
+    WRK -->|SURYA_INFERENCE_URL<br/>OCR/layout inference| SVLM
     WEB <--> VOL
     WRK <--> VOL
 ```
@@ -76,7 +78,7 @@ flowchart LR
 
 - `pool=solo`, concurrency 1, `max_tasks_per_child=50`, `acks_late=True`, `reject_on_worker_lost=True`.
 - 11 tasks across `tasks/conversion.py`, `tasks/capture.py`, `tasks/metadata.py`, `tasks/maintenance.py`.
-- `warmup.py` detects GPU and eagerly loads the SLM; Marker models are lazy-loaded on first use (~30 s penalty — Backlog 6.2).
+- `warmup.py` detects GPU, eagerly loads the SLM, and probes the shared Surya inference server (`check_inference_server()`); Marker model weights live in the `surya-vlm` process — the worker is a thin client whose artifact dict is lazily created on first conversion (fast, ~1 s).
 - Prometheus metrics on port 9090 (`metrics.py`).
 
 ### 2.3 `beat` — Celery Beat
@@ -104,6 +106,7 @@ flowchart LR
 | Queue routing | Marker/SLM/hybrid → `gpu` queue; Pandoc < 5 MB → `high_priority`; Pandoc ≥ 5 MB → `default` |
 | Redis key schema | `job:{uuid}` (hash), `capture:session:{uuid}`, `jobs:active`, `workers:status`, `dlq:tasks` |
 | Worker→MCP | HTTP POST `http://mcp-server:8080/execute`, `Authorization: Bearer ${MCP_SECRET}` |
+| Worker→inference server | Marker v2 thin client → `SURYA_INFERENCE_URL` (default `http://surya-vlm:8000`), `SURYA_INFERENCE_AUTOSTART=false`; server exposes internal port 8000 with `/health` |
 
 ---
 
@@ -144,7 +147,7 @@ flowchart TB
 flowchart TB
     REQ[job dequeued] --> Q{engine?}
     Q -->|pandoc formats| P[convert_document<br/>pandoc subprocess, 500s timeout<br/>hard limit 600s]
-    Q -->|pdf_marker| M[convert_with_marker<br/>page limit check via pypdfium2<br/>PdfConverter, hard limit 1200s]
+    Q -->|pdf_marker| M[convert_with_marker<br/>page limit check via pypdfium2<br/>Marker v2 client → surya-vlm, hard limit 1200s]
     Q -->|pdf_marker_slm| MS[convert_with_marker_slm<br/>Marker + SLM refine in 600-word chunks<br/>hard limit 1500s]
     Q -->|pdf_hybrid| H[convert_with_hybrid]
     H --> HP[try Pandoc]
@@ -155,7 +158,7 @@ flowchart TB
     MS --> DONE
     P --> DONE
     SLMQ --> DONE
-    DONE --> CLN[_cleanup_marker_memory<br/>gc + cuda empty_cache]
+    DONE --> CLN[_cleanup_marker_memory<br/>releases local objects only<br/>weights live in surya-vlm]
 ```
 
 The 50-words/page heuristic (`_assess_pandoc_quality`, `worker/tasks/conversion.py`) is the system's only quality measure — Backlog 1.1/1.2 replaces it with a structured scorer.
@@ -330,9 +333,9 @@ Single Pydantic Settings class (`config.py`); precedence Docker secrets → envi
 
 ### 7.3 Model lifecycle
 
-- Marker models: lazy `create_model_dict()` on first conversion (~30 s), cached per worker process (recycled every 50 tasks via `max_tasks_per_child`).
+- Marker (v2, `marker-pdf 2.0.0`): the worker is a thin client attaching to the shared `surya-vlm` inference server via `SURYA_INFERENCE_URL` (`SURYA_INFERENCE_AUTOSTART=false` — the deployment owns the server). A lazy `create_model_dict()` builds the client-side artifact dict on first conversion per worker process (~1 s; the ~30 s in-process weight load of v1 is gone); it is cached for the process's lifetime (recycled every 50 tasks via `max_tasks_per_child`). Model weights live in the server process, sized by `VLLM_GPU_MEMORY_UTILIZATION`.
 - SLM (TinyLlama GGUF): eagerly loaded at worker start (`warmup.py`), GPU layers when available.
-- GPU memory: explicit `gc.collect()` + `torch.cuda.empty_cache()` after Marker tasks; fragmentation can still accumulate (Backlog 6.6).
+- GPU memory: `_cleanup_marker_memory()` after every Marker task releases only the worker's local objects (`gc.collect()`); `torch.cuda.empty_cache()` would act on a worker-local CUDA context that no longer holds model weights, so it is not used. Weights live in the `surya-vlm` process, whose VRAM footprint is managed server-side; `shutdown_marker_models()` at worker shutdown is a no-op when attached to a remote server. Residual risk (server-side state) is addressed by the recycling decision below.
 
 #### Inference server recycling
 
