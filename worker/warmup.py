@@ -3,6 +3,8 @@ import time
 import threading
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+import requests
 from llama_cpp import Llama
 
 from config import settings
@@ -16,6 +18,7 @@ MODELS_READY_FILE = "/tmp/models_ready"
 STATUS_KEY = "service:marker:status"
 ETA_KEY = "service:marker:eta"
 VRAM_KEY = "service:marker:gpu_vram_free"
+INFERENCE_SERVER_KEY = "marker:inference_server"
 
 slm_model = None
 
@@ -40,18 +43,32 @@ class HealthHandler(BaseHTTPRequestHandler):
             except Exception:
                 marker_warm = False
 
+            # Marker 2 topology: report the shared Surya inference server's
+            # reachability too. 'marker:inference_server' is refreshed by
+            # check_inference_server() below; 'unknown' just means the probe
+            # has not run yet. Informational only — it never flips this
+            # endpoint's 200/503, because the worker attaches lazily and a
+            # momentarily unreachable server is not a broken sidecar.
+            try:
+                inference_server = r.get(INFERENCE_SERVER_KEY) or 'unknown'
+            except Exception:
+                inference_server = 'unknown'
+
+            payload = '{"status": "%s", "marker_warm": %s, "inference_server": "%s"}'
+            warm_json = 'true' if marker_warm else 'false'
+
             if os.path.exists(MODELS_READY_FILE):
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(('{"status": "OK", "marker_warm": %s}' %
-                                   ('true' if marker_warm else 'false')).encode())
+                self.wfile.write((payload %
+                                   ('OK', warm_json, inference_server)).encode())
             else:
                 self.send_response(503)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(('{"status": "Initializing", "marker_warm": %s}' %
-                                   ('true' if marker_warm else 'false')).encode())
+                self.wfile.write((payload %
+                                   ('Initializing', warm_json, inference_server)).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -148,6 +165,37 @@ def check_gpu_availability():
         r.set("marker:gpu_status", "unavailable")
         return gpu_info
 
+def check_inference_server():
+    """Probe the shared Surya inference server (marker 2 topology).
+
+    Under marker 2 the worker is a thin client: model weights live in the
+    surya-vlm process addressed by SURYA_INFERENCE_URL, so "Marker is warm"
+    really means "the shared server is reachable". This probes its /health
+    endpoint with a short timeout, stores the result in Redis for the web
+    tier's service status, and returns it for /healthz. Best-effort — any
+    failure degrades to 'unreachable', never raises.
+
+    When SURYA_INFERENCE_URL is not set the deployment lets the worker manage
+    models in-process; there is nothing external to probe, so the status is
+    'not_configured'.
+    """
+    url = os.environ.get("SURYA_INFERENCE_URL")
+    if not url:
+        status = "not_configured"
+    else:
+        try:
+            resp = requests.get(f"{url.rstrip('/')}/health", timeout=2)
+            status = "reachable" if resp.status_code == 200 else "unreachable"
+        except Exception as e:
+            logging.warning(f"Inference server probe failed ({url}): {e}")
+            status = "unreachable"
+    try:
+        r.set(INFERENCE_SERVER_KEY, status)
+    except Exception as e:
+        logging.debug(f"Inference server status not persisted: {e}")
+    return status
+
+
 def warmup():
     global slm_model
     logging.info("Starting Marker and SLM warmup...")
@@ -156,15 +204,18 @@ def warmup():
 
     gpu_info = check_gpu_availability()
 
+    # INFERENCE_RAM is gone under marker 2: create_model_dict() ignores it
+    # (device placement happens in the surya inference server process, sized
+    # by VLLM_GPU_MEMORY_UTILIZATION server-side), so the old env write was
+    # dead config. The GPU check below only decides SLM layer offload now.
     if gpu_info["status"] == "available" and "vram_total" in gpu_info:
-        inference_ram = min(16, int(gpu_info["vram_total"]))
         n_gpu_layers = -1
     else:
-        inference_ram = 4
         n_gpu_layers = 0
 
-    os.environ["INFERENCE_RAM"] = str(inference_ram)
-    logging.info(f"Set INFERENCE_RAM={inference_ram} (GPU status: {gpu_info['status']})")
+    inference_server_status = check_inference_server()
+    logging.info(f"Inference server status: {inference_server_status} "
+                 f"(GPU status: {gpu_info['status']})")
     
     slm_status = "unavailable"
     slm_model_path_env = os.environ.get("SLM_MODEL_PATH")
@@ -228,6 +279,9 @@ if __name__ == "__main__":
     # Run warmup
     warmup()
     
-    # Keep alive to serve health checks
+    # Keep alive to serve health checks; refresh the inference-server probe
+    # so /healthz and the web tier's service status track the shared surya
+    # server even long after startup.
     while True:
         time.sleep(10)
+        check_inference_server()
