@@ -7,7 +7,7 @@ Containerized document conversion service combining **Pandoc** (universal conver
 
 ## Features
 
-- **AI-Powered PDF Conversion**: Marker (deep learning) converts PDFs to clean Markdown with GPU acceleration, falling back to CPU automatically.
+- **AI-Powered PDF Conversion**: Marker 2.0 (deep learning) converts PDFs to clean Markdown, delegating OCR/layout inference to a shared GPU-accelerated Surya VLM inference server.
 - **Hybrid PDF Reconstruction**: `pdf_hybrid` engine tries Pandoc first (fast), then falls back to Marker AI if quality is poor — best of both worlds.
 - **Local Document Intelligence**: Built-in Small Language Model (`llama-cpp-python`) extracts titles, summaries, and tags without external API calls. Models load eagerly at worker startup via `warmup.py`.
 - **Browser Extension Capture API**: Capture sessions let Chrome/Firefox extensions POST page screenshots and HTML in batches, which are assembled asynchronously into a single document.
@@ -58,7 +58,8 @@ Containerized document conversion service combining **Pandoc** (universal conver
 | Service | Description |
 |---------|-------------|
 | **`web`** | Flask frontend: uploads, UI, REST API, WebSocket server |
-| **`worker`** | Celery worker: Pandoc, Marker AI, SLM, capture assembly (11 tasks) |
+| **`worker`** | Celery worker: Pandoc, Marker AI (thin client), SLM, capture assembly (11 tasks) |
+| **`surya-vlm`** | Shared Surya VLM inference server (vLLM, port 8000 internal) — hosts the model weights Marker uses |
 | **`mcp-server`** | Playwright server for vision-based and agentic extraction |
 | **`redis`** | Celery broker + job metadata store |
 | **`beat`** | Celery Beat scheduler for cleanup and metrics tasks |
@@ -98,7 +99,7 @@ docker-compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose
 docker-compose -f docker-compose.yml -f docker-compose.tls.yml up -d
 ```
 
-Open `http://localhost:5000`. GPU models are pre-cached during build; first run is fast.
+Open `http://localhost:5000`. On GPU deployments the `surya-vlm` inference server pulls and loads the Surya OCR weights at startup (allow a few minutes on first boot); the worker attaches to it automatically.
 
 ## REST API
 
@@ -221,7 +222,7 @@ curl -X POST http://localhost:5000/api/v1/capture/sessions/$SESSION/finish
 
 ## Kubernetes
 
-Five manifests are provided under `deploy/k8s/`. The web deployment uses an HPA (1–10 replicas).
+Seven manifests are provided under `deploy/k8s/`, including `surya-vlm.yaml` for the shared inference server. The web deployment uses an HPA (1–10 replicas).
 
 ```bash
 kubectl apply -f deploy/k8s/namespace.yaml
@@ -229,6 +230,7 @@ kubectl apply -f deploy/k8s/secrets.yaml
 kubectl apply -f deploy/k8s/redis.yaml
 kubectl apply -f deploy/k8s/web.yaml    # 2 initial replicas + HPA
 kubectl apply -f deploy/k8s/worker.yaml # CPU + GPU worker deployments
+kubectl apply -f deploy/k8s/surya-vlm.yaml
 ```
 
 ## Observability

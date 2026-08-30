@@ -102,6 +102,12 @@ services:
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
       - MCP_SECRET=${MCP_SECRET}
+      # Marker v2: the worker is a thin client that sends OCR/layout work to the
+      # shared Surya VLM inference server (surya-vlm service below). AUTOSTART=false
+      # because the deployment owns the server — the worker must not spawn its own.
+      # Matches docker-compose.gpu.yml and deploy/k8s/worker.yaml.
+      - SURYA_INFERENCE_URL=http://surya-vlm:8000
+      - SURYA_INFERENCE_AUTOSTART=false
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-1}
       # Epic 5: Storage backend (default: local filesystem)
       # - STORAGE_BACKEND=s3
@@ -155,6 +161,58 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    restart: unless-stopped
+
+  # Shared Surya VLM inference server (Marker v2).
+  #
+  # marker-pdf 2.0.0 is a thin client: the OCR/layout weights live in THIS
+  # process, not the worker's. The base deployment is the GPU topology (the
+  # worker above reserves an NVIDIA device and drains the `gpu` queue), so the
+  # server lives here unprofiled — plain `docker compose up` must start it or
+  # the GPU worker has no inference server to attach to. docker-compose.cpu.yml
+  # gates it out of CPU-only deployments; the k8s twin is deploy/k8s/surya-vlm.yaml.
+  #
+  # Recycling decision (benchmarks/marker_v2/REPORT.md): the worker recycles
+  # itself every 50 tasks (max_tasks_per_child=50 in worker/tasks/__init__.py),
+  # but that only bounds worker-process memory — this server is a separate
+  # long-lived process, and state can accumulate in the shared vLLM server over
+  # a long run (the observed degeneration was on the 10th document of a
+  # sequential batch). Decision: recycle THIS server on a bounded deployment
+  # schedule, never from the worker (workers must not tear down the shared
+  # server between jobs — tests/unit/test_worker.py pins that). Operators
+  # restart it periodically (`docker compose restart surya-vlm`, or a
+  # cron/systemd timer), and the restart policy below brings it back on crash.
+  # See "Inference server recycling" in docs/ARCHITECTURE.md.
+  surya-vlm:
+    image: vllm/vllm-openai:v0.20.1
+    environment:
+      - VLLM_GPU_MEMORY_UTILIZATION=0.85
+      - SURYA_MODEL=datalab-to/surya-ocr-2
+    command: sh -c "python -m vllm.entrypoints.api_server --model $$SURYA_MODEL --host 0.0.0.0 --port 8000"
+    expose:
+      - "8000"  # internal only — workers reach it at http://surya-vlm:8000
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 24G  # 24GB baseline at VLLM_GPU_MEMORY_UTILIZATION=0.85 (Epic 21.10)
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Epic 21.8: Container security hardening (mirrors the rest of the stack)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # vLLM /health returns 503 until the model is loaded, then 200.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s  # surya-ocr-2 model load can take minutes on first start
     restart: unless-stopped
 
   # Story 6.3: light lane — Pandoc, OCR, metadata, and maintenance tasks run

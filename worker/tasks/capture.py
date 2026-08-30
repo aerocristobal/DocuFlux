@@ -446,6 +446,12 @@ def assemble_capture_session(session_id, job_id):
 
             markdown_text, _, marker_images = text_from_rendered(rendered)
 
+            # Marker 2 lifecycle: release this task's local converter/rendered
+            # objects the same way process_capture_batch does — never the
+            # shared inference server, which belongs to worker shutdown.
+            _pkg._cleanup_marker_memory(converter, rendered)
+            converter = rendered = None
+
             image_count = 0
             for img_name, img_obj in (marker_images or {}).items():
                 safe_img_name = secure_filename(img_name) or f"image_{image_count}.png"

@@ -32,14 +32,17 @@ services:
     profiles:
       - gpu
 
+  # Canonical definition lives in docker-compose.yml (the base deployment IS the
+  # GPU topology). This override keeps the same image/env/probes so overlay-only
+  # runs behave identically, and adds the gpu profile like worker/beat above.
   surya-vlm:
     image: vllm/vllm-openai:v0.20.1
     environment:
       - VLLM_GPU_MEMORY_UTILIZATION=0.85
       - SURYA_MODEL=datalab-to/surya-ocr-2
     command: sh -c "python -m vllm.entrypoints.api_server --model $$SURYA_MODEL --host 0.0.0.0 --port 8000"
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"  # internal only — workers reach it at http://surya-vlm:8000
     deploy:
       resources:
         limits:
@@ -50,6 +53,13 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    healthcheck:
+      # vLLM /health returns 503 until the model is loaded, then 200.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s  # surya-ocr-2 model load can take minutes on first start
     profiles:
       - gpu
 

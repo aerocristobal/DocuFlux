@@ -1,9 +1,9 @@
 # DocuFlux — Marker AI v1 → v2 Upgrade Epic
 
-**Status:** In progress (waves 1–2 merged; two follow-ups open) · **Last updated:** 2026-08-29
-**Related docs:** [BACKLOG.md](BACKLOG.md) · [SPRINT-BACKLOG.md](SPRINT-BACKLOG.md) · [PRD.md](../PRD.md) · [ARCHITECTURE.md](../ARCHITECTURE.md) · [AI_INTEGRATION.md](../AI_INTEGRATION.md) · [benchmark report](../benchmarks/marker_v2/REPORT.md)
+**Status:** In progress (waves 1–2 merged; one follow-up open) · **Last updated:** 2026-08-30
+**Related docs:** [BACKLOG.md](BACKLOG.md) · [SPRINT-BACKLOG.md](SPRINT-BACKLOG.md) · [PRD.md](../PRD.md) · [ARCHITECTURE.md](../ARCHITECTURE.md) · [AI_INTEGRATION.md](../AI_INTEGRATION.md) · [benchmark report](../../benchmarks/marker_v2/REPORT.md)
 
-Stories use BDD framing per the project's BDD conventions. Each story carries the acceptance criteria it was (or must be) validated against, the files it touches, and the tests that pin it. Stories M2.1–M2.4 and M2.7 are merged; M2.5–M2.6 are open follow-ups for a future dispatch.
+Stories use BDD framing per the project's BDD conventions. Each story carries the acceptance criteria it was (or must be) validated against, the files it touches, and the tests that pin it. Stories M2.1–M2.5 and M2.7 are merged; M2.6 is an open follow-up for a future dispatch.
 
 ---
 
@@ -36,7 +36,7 @@ Feature: Marker AI v2 upgrade
 | M2.2 | Migrate Marker call sites to the v2 client/server model | ✅ Done (PR #142) | Migration | M2.1 |
 | M2.3 | Benchmark v1 vs v2 and decide rollout | ✅ Done (PR #143, #144) | Evidence | M2.2 |
 | M2.4 | Bound v2 degeneration in the quality scorer + re-tune GPU concurrency | ✅ Done (PR #145) | Hardening | M2.3 |
-| M2.5 | Decide inference-server recycling for long-lived workers | ⏳ Open | Ops | M2.4 |
+| M2.5 | Decide inference-server recycling for long-lived workers | ✅ Done (PR #147, #151) | Ops | M2.4 |
 | M2.6 | Make the k8s Surya VLM model cache writable by the container UID | ⏳ Open | Ops | M2.1 |
 | M2.7 | Refresh v1-era docs for the v2 topology | ✅ Done (this PR) | Docs | M2.1–M2.4 |
 
@@ -87,7 +87,7 @@ I want all Marker call sites using the v2 API and the new lifecycle
 **Validated by**
 - `tests/unit/test_worker.py`: `TestConvertWithMarker` (PdfConverter + text_from_rendered used; images saved; quality persisted; failure paths), `TestShutdownMarkerModels` (no-op when nothing loaded; stops server and clears cache; cache cleared even when shutdown raises), `TestMarkerTaskCleanup` (per-task cleanup must NOT call `shutdown_models` on success or failure).
 - `tests/unit/test_capture_api.py` / capture characterization tests (capture batch OCR path unchanged).
-- Static audit against marker-pdf 2.0.0 docs: `PdfConverter.__init__(artifact_dict, config=None, ...)`, `text_from_rendered` triple-return, `marker.models.shutdown_models(model_dict)` all match the v2 API; `get_model_dict()` no longer sets `INFERENCE_RAM` in the conversion path (`worker/warmup.py` still sets it in its own sidecar process, which has no effect on the Celery worker).
+- Static audit against marker-pdf 2.0.0 docs: `PdfConverter.__init__(artifact_dict, config=None, ...)`, `text_from_rendered` triple-return, `marker.models.shutdown_models(model_dict)` all match the v2 API; `get_model_dict()` no longer sets `INFERENCE_RAM` in the conversion path (the knob was dropped from `worker/warmup.py` as dead in PR #148 — `create_model_dict()` ignores it under marker 2).
 - All touched modules pass `python -m py_compile`.
 
 **Files:** `worker/tasks/conversion.py`, `worker/tasks/__init__.py`, `worker/tasks/capture.py`, `tests/unit/test_worker.py`.
@@ -142,7 +142,7 @@ And the GPU worker concurrency re-tuned for the shared-server model
 
 ---
 
-### Story M2.5 — Decide inference-server recycling for long-lived workers (open)
+### Story M2.5 — Decide inference-server recycling for long-lived workers
 
 ```gherkin
 In order to eliminate the silent degeneration mode observed in the benchmark
@@ -152,12 +152,14 @@ I want a decision on whether the shared VLM server should recycle periodically
 
 **Problem:** The benchmark's single degeneration event happened on the tenth document of a sequential batch, never in isolation, pointing at state accumulating in the long-lived shared vLLM server. The scorer now catches the symptom (M2.4) but does not cure the cause; a document that degenerates still consumes its full task budget before being flagged.
 
-**Acceptance criteria (needs an ops decision — starts as a discussion)**
-- Decide between: (a) periodically recycle the `surya-vlm` server (e.g. `SURYA_INFERENCE_KEEP_ALIVE` semantics or a cron restart) so accumulated state cannot produce a loop, or (b) accept the scorer guard as sufficient and document the residual risk.
-- If recycling is chosen, add it to compose/k8s manifests and note the failure mode + mitigation in `docs/ALERTING.md`.
-- Consider a mid-conversion abort (hard per-page output cap in the task, not only post-hoc scoring) so a degenerate job fails fast instead of exhausting its time limit.
+**Decision:** recycle the shared `surya-vlm` server on a bounded deployment schedule, never from the worker (`docker compose restart surya-vlm` / `kubectl rollout restart deployment/surya-vlm`). Worker-driven teardown is the wrong tool — many thin workers share one server, and `tests/unit/test_worker.py` pins that a completed conversion must NOT stop it. The `excess_output` bound from M2.4 remains the first line of defense; periodic recycling bounds how long a silent degradation can persist.
 
-**Files:** `docker-compose.gpu.yml`, `deploy/k8s/surya-vlm.yaml`, `worker/tasks/conversion.py` (if aborting), `docs/ALERTING.md`.
+**Acceptance criteria**
+- ✅ The decision and its rationale are recorded in ["Inference server recycling" in ARCHITECTURE.md](../ARCHITECTURE.md#inference-server-recycling).
+- ✅ The rationale is pinned in-manifest in `docker-compose.yml` and `deploy/k8s/surya-vlm.yaml`, with `restart: unless-stopped` / `restartPolicy: Always` covering crash recovery.
+- ⏳ Not taken: a mid-conversion abort (hard per-page output cap in the task, not only post-hoc scoring) so a degenerate job fails fast instead of exhausting its time limit. Left as a future bead — post-hoc scoring is the accepted guard for now.
+
+**Files:** `docker-compose.yml`, `deploy/k8s/surya-vlm.yaml`, `docs/ARCHITECTURE.md`.
 
 ---
 
@@ -211,4 +213,4 @@ The upgrade was validated against its acceptance criteria as follows:
 | Docs reflect v2 | ✅ | M2.7 (this PR) |
 | Full suite green on CI | ⏳ CI runs on the PR | `pytest` (all tiers + coverage floors), `pytest -m bdd`, `pytest -m packaging`, ruff/mypy (non-blocking), bandit, eslint, vitest |
 
-Open items for future beads: **M2.5** (server recycling decision) and **M2.6** (k8s model-cache writability).
+Open item for a future bead: **M2.6** (k8s model-cache writability). M2.5's recycling decision landed on `main` in PR #147/#151; the optional mid-conversion abort it considered was not taken.

@@ -295,6 +295,119 @@ class TestWarmup:
 
         assert body['marker_warm'] is False
 
+    def test_healthz_reports_inference_server_reachability(self):
+        """Marker 2: /healthz must report the shared Surya inference server's
+        reachability (marker:inference_server, refreshed by
+        check_inference_server) alongside the marker warm/cold signal."""
+        import http.client
+        import json as json_module
+
+        w = self._load()
+        mock_redis = MagicMock()
+
+        def _get(key):
+            return 'true' if key == 'marker:model_warm' else 'reachable'
+
+        mock_redis.get.side_effect = _get
+
+        with patch.object(w, 'r', mock_redis), \
+                patch('os.path.exists', return_value=True):
+            server = w.HTTPServer(('127.0.0.1', 0), w.HealthHandler)
+            port = server.server_address[1]
+            t = threading.Thread(target=server.handle_request, daemon=True)
+            t.start()
+            try:
+                conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+                conn.request('GET', '/healthz')
+                resp = conn.getresponse()
+                body = json_module.loads(resp.read())
+                status_code = resp.status
+                conn.close()
+            finally:
+                t.join(timeout=5)
+                server.server_close()
+
+        assert status_code == 200
+        assert body['marker_warm'] is True
+        assert body['inference_server'] == 'reachable'
+
+    def test_check_inference_server_not_configured_without_url(self):
+        """No SURYA_INFERENCE_URL means the deployment manages models
+        in-process — there is nothing external to probe."""
+        w = self._load()
+        mock_redis = MagicMock()
+        env = {k: v for k, v in os.environ.items() if k != "SURYA_INFERENCE_URL"}
+        with patch.object(w, 'r', mock_redis), \
+                patch.dict(os.environ, env, clear=True):
+            status = w.check_inference_server()
+        assert status == "not_configured"
+        mock_redis.set.assert_called_once_with(w.INFERENCE_SERVER_KEY, "not_configured")
+
+    def test_check_inference_server_reachable(self):
+        """A 200 from the server's /health endpoint reports 'reachable'."""
+        w = self._load()
+        mock_redis = MagicMock()
+        with patch.object(w, 'r', mock_redis), \
+                patch.dict(os.environ, {"SURYA_INFERENCE_URL": "http://surya-vlm:8000"}), \
+                patch("requests.get", return_value=MagicMock(status_code=200)) as mock_get:
+            status = w.check_inference_server()
+        assert status == "reachable"
+        mock_get.assert_called_once_with("http://surya-vlm:8000/health", timeout=2)
+        mock_redis.set.assert_called_once_with(w.INFERENCE_SERVER_KEY, "reachable")
+
+    def test_check_inference_server_unreachable_on_non_200(self):
+        w = self._load()
+        mock_redis = MagicMock()
+        with patch.object(w, 'r', mock_redis), \
+                patch.dict(os.environ, {"SURYA_INFERENCE_URL": "http://surya-vlm:8000"}), \
+                patch("requests.get", return_value=MagicMock(status_code=503)):
+            status = w.check_inference_server()
+        assert status == "unreachable"
+        mock_redis.set.assert_called_once_with(w.INFERENCE_SERVER_KEY, "unreachable")
+
+    def test_check_inference_server_unreachable_on_connection_error(self):
+        """A dead server must degrade to 'unreachable', never raise."""
+        w = self._load()
+        mock_redis = MagicMock()
+        with patch.object(w, 'r', mock_redis), \
+                patch.dict(os.environ, {"SURYA_INFERENCE_URL": "http://surya-vlm:8000"}), \
+                patch("requests.get", side_effect=ConnectionError("refused")):
+            status = w.check_inference_server()
+        assert status == "unreachable"
+
+    def test_check_inference_server_tolerates_redis_outage(self):
+        """The probe result must be returned even if Redis persistence fails."""
+        w = self._load()
+        mock_redis = MagicMock()
+        mock_redis.set.side_effect = ConnectionError("redis down")
+        env = {k: v for k, v in os.environ.items() if k != "SURYA_INFERENCE_URL"}
+        with patch.object(w, 'r', mock_redis), \
+                patch.dict(os.environ, env, clear=True):
+            status = w.check_inference_server()
+        assert status == "not_configured"
+
+    def test_warmup_reports_inference_server_and_never_sets_inference_ram(self):
+        """Marker 2: warmup() must not resurrect the dead INFERENCE_RAM knob
+        (create_model_dict() ignores it; device placement is server-side) and
+        must record the shared inference server's reachability instead."""
+        w = self._load()
+        mock_redis = MagicMock()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("INFERENCE_RAM", "SLM_MODEL_PATH")}
+        env["SURYA_INFERENCE_URL"] = "http://surya-vlm:8000"
+        with patch.object(w, 'r', mock_redis), \
+                patch.dict(os.environ, env, clear=True), \
+                patch("requests.get", return_value=MagicMock(status_code=200)) as mock_get, \
+                patch('os.path.exists', return_value=False), \
+                patch('builtins.open') as mock_open:
+            w.warmup()
+
+        assert 'INFERENCE_RAM' not in os.environ
+        mock_get.assert_called_once()
+        persisted = {call.args[0]: call.args[1]
+                     for call in mock_redis.set.call_args_list if call.args}
+        assert persisted.get(w.INFERENCE_SERVER_KEY) == "reachable"
+
     def test_redis_client_created_via_tls_aware_factory(self):
         """Story 4.1b: warmup.py must route through create_redis_client (which
         wires ssl_cert_reqs/ca_certs/certfile/keyfile for rediss:// URLs)
