@@ -22,6 +22,12 @@ from job_metadata import build_job_metadata
 
 conversion_bp = Blueprint('conversion', __name__)
 
+# Allowlist of marker config keys that may be passed to PdfConverter.
+# Default posture: closed. Only keys listed here are permitted; any other key
+# must be rejected before reaching PdfConverter to prevent unintended egress
+# (e.g. use_llm triggering outbound calls to Google/Azure/Anthropic APIs).
+ALLOWED_MARKER_OPTIONS = frozenset({'force_ocr', 'use_llm', 'include_images'})
+
 
 @conversion_bp.route('/api')
 @_app_mod.csrf.exempt
@@ -75,6 +81,26 @@ def _validate_convert_file(file, from_info):
     if not is_valid_content:
         return jsonify({'error': content_error}), 400
     return None
+
+
+def _validate_marker_options(form):
+    """Validate marker options against the allowlist.
+
+    Returns (options_dict, error_response).
+    error_response is None on success; otherwise a (jsonify(...), status_code)
+    tuple to return as-is.  The caller is responsible for returning the
+    appropriate HTTP response — this helper only builds the result tuple.
+    """
+    errors = []
+    options = {}
+    for key in form:
+        if key not in ALLOWED_MARKER_OPTIONS:
+            errors.append(f"Unrecognized marker config key: {key}")
+        else:
+            options[key] = form.get(key) == 'on'
+    if errors:
+        return ({}, jsonify({'error': '; '.join(errors)}), 400)
+    return (options, None)
 
 
 def _enqueue_convert_job(file, from_format, to_format, to_info, form):
