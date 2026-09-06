@@ -101,11 +101,16 @@ def _not_gpu(ctx):
     assert _last_dispatch(ctx)[1]['queue'] != 'gpu'
 
 
-@then('the task options include force_ocr and use_llm')
-def _has_options(ctx):
+@then('the task options include force_ocr')
+def _has_ocr_options(ctx):
     args = _last_dispatch(ctx)[1]['args']
     options = args[5]
-    assert 'force_ocr' in options and 'use_llm' in options
+    assert 'force_ocr' in options
+
+
+@then('the response status is 400')
+def _status_is_400(ctx):
+    assert ctx['response'].status_code == 400
 
 
 @then('the task is dispatched with no options')

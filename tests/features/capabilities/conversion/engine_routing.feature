@@ -49,10 +49,9 @@ Feature: Routing conversions to the right engine and queue
     When I submit "scan.pdf" converting pdf_marker to markdown
     Then the task options include force_ocr
 
-  Scenario: use_llm is only included when explicitly allowed by the allowlist
-    When I submit "scan.pdf" converting pdf_marker to markdown
-    And the allowlist permits use_llm
-    Then the task options include use_llm
+  Scenario: use_llm is rejected from the public surface
+    When I submit "scan.pdf" converting pdf_marker to markdown with use_llm enabled
+    Then the response status is 400
 
   Scenario: Pandoc conversions carry no engine options
     When I submit "notes.md" converting markdown to html
