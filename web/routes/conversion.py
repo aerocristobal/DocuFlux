@@ -26,7 +26,10 @@ conversion_bp = Blueprint('conversion', __name__)
 # Default posture: closed. Only keys listed here are permitted; any other key
 # must be rejected before reaching PdfConverter to prevent unintended egress
 # (e.g. use_llm triggering outbound calls to Google/Azure/Anthropic APIs).
-ALLOWED_MARKER_OPTIONS = frozenset({'force_ocr', 'use_llm', 'include_images'})
+# use_llm has been removed from the public surface per the security upgrade:
+# requests carrying use_llm are rejected with a 400 explaining that LLM-assisted
+# conversion is not available on this deployment.
+ALLOWED_MARKER_OPTIONS = frozenset({'force_ocr', 'include_images'})
 
 
 @conversion_bp.route('/api')
@@ -140,10 +143,12 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     task_args = [job_id, input_filename, output_filename, from_format, to_format]
 
     if from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
-        options = {
-            'force_ocr': form.get('force_ocr') == 'on',
-            'use_llm': form.get('use_llm') == 'on'
-        }
+        options, err = _validate_marker_options(form)
+        if err:
+            return err  # 400 with explanatory message, no task dispatched
+        # Filter to only allowlisted keys — any key not in ALLOWED_MARKER_OPTIONS
+        # has already been rejected by _validate_marker_options.
+        options = {k: v for k, v in options.items() if k in ALLOWED_MARKER_OPTIONS}
         task_args.append(options)
 
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
@@ -592,22 +597,29 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
     file_size = _app_mod.storage.get_file_size(job_id, safe_filename, folder='upload')
 
+    # Build options dict and validate against the allowlist.
+    # use_llm is only permitted when a local LLM service is configured;
+    # otherwise the request is rejected with 400.
+    if engine == 'marker' and use_llm:
+        return (jsonify({'error': 'use_llm is not configured on this deployment; '
+                         'no outbound LLM calls will be made'}), 400), None
+    options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
+    # Filter to only allowlisted keys.
+    options = {k: v for k, v in options.items() if k in ALLOWED_MARKER_OPTIONS}
+
     if internal_from_format == 'pdf_marker':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_hybrid':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_marker_slm':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
