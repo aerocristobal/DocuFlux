@@ -382,12 +382,25 @@ def retry_job(job_id):
         task_name = 'tasks.convert_document'
     task_args = [new_job_id, input_filename, output_filename, original_from, job_data.get('to')]
 
+    # Validate marker options against the allowlist before retry.
+    # Build a form-like dict from the stored job data so _validate_marker_options
+    # can reject unrecognised keys (e.g. use_llm) with a 400 rather than silently
+    # passing them through to PdfConverter on retry.
+    _form = {
+        'force_ocr': 'true' if job_data.get('force_ocr') else 'false',
+        'use_llm': 'true' if job_data.get('use_llm') else 'false',
+        'include_images': 'true',  # default for retry
+    }
     if original_from in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
+        options, err = _validate_marker_options(_form)
+        if err is not None:
+            return err
+    else:
         options = {
             'force_ocr': job_data.get('force_ocr') == 'True',
-            'use_llm': job_data.get('use_llm') == 'True'
+            'use_llm': job_data.get('use_llm') == 'True',
+            'include_images': True,
         }
-        task_args.append(options)
 
     # GPU tasks go to gpu queue; CPU tasks go to default
     if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
