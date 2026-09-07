@@ -45,9 +45,15 @@ Feature: Routing conversions to the right engine and queue
     When I retry that job
     Then the task is dispatched to the default queue
 
-  Scenario: AI engines receive the OCR and LLM options
+  Scenario: AI engines receive the OCR options
     When I submit "scan.pdf" converting pdf_marker to markdown
-    Then the task options include force_ocr and use_llm
+    Then the task options include force_ocr
+
+  Scenario: use_llm is rejected when present in the request
+    When I submit "scan.pdf" converting pdf_marker to markdown
+    And the request includes use_llm
+    Then the response status code is 400
+    And the response body contains "Unrecognized marker config key"
 
   Scenario: Pandoc conversions carry no engine options
     When I submit "notes.md" converting markdown to html

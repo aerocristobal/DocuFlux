@@ -168,10 +168,9 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     task_args = [job_id, input_filename, output_filename, from_format, to_format]
 
     if from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
-        options = {
-            'force_ocr': form.get('force_ocr') == 'on',
-            'use_llm': form.get('use_llm') == 'on'
-        }
+        options, err = _validate_marker_options(form)
+        if err is not None:
+            return err
         task_args.append(options)
 
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
@@ -620,22 +619,35 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
     file_size = _app_mod.storage.get_file_size(job_id, safe_filename, folder='upload')
 
-    if internal_from_format == 'pdf_marker':
+    # Validate marker options against the allowlist before dispatch.
+    # We build a form-like dict from the parsed parameters so _validate_marker_options
+    # can reject unrecognised keys (e.g. use_llm) with a 400 rather than silently
+    # passing them through to PdfConverter.
+    _form = {
+        'force_ocr': 'true' if force_ocr else 'false',
+        'use_llm': 'true' if use_llm else 'false',
+        'include_images': 'true' if include_images else 'false',
+    }
+    if internal_from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
+        options, err = _validate_marker_options(_form)
+        if err is not None:
+            return err
+    else:
         options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
+
+    if internal_from_format == 'pdf_marker':
         _app_mod.celery.send_task(
             'tasks.convert_with_marker',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_hybrid':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_marker_slm':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
