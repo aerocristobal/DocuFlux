@@ -100,20 +100,22 @@ def _validate_marker_options(form):
     The form is iterated by known marker option keys only — not all submitted
     fields — so normal conversion fields (file, from_format, to_format, etc.)
     do not trigger false rejections.
+
+    Note: the BDD test submission sends only file/from_format/to_format without
+    force_ocr/include_images, so we always seed the options dict with these keys
+    defaulting to their conventional defaults (force_ocr=False, include_images=True)
+    so that downstream step assertions like 'force_ocr in options' remain valid.
     """
     # Known marker config keys that the UI / API may submit.
     marker_option_keys = {'force_ocr', 'use_llm', 'include_images'}
 
-    # Build options dict from only the known marker keys present in the form,
-    # rejecting use_llm since it is not in ALLOWED_MARKER_OPTIONS.
-    options = {}
-    for key in marker_option_keys:
-        if key in form:
-            if key == 'force_ocr':
-                options['force_ocr'] = form.get('force_ocr') == 'on'
-            elif key == 'include_images':
-                options['include_images'] = form.get('include_images') == 'on'
-            # use_llm is handled below — we do NOT add it to options
+    # Seed options with conventional defaults so that callers can always rely on
+    # force_ocr and include_images being present (the original code always built
+    # them, and the BDD _submit helper sends only file/from_format/to_format).
+    options = {
+        'force_ocr': form.get('force_ocr') == 'on' if 'force_ocr' in form else False,
+        'include_images': form.get('include_images') == 'on' if 'include_images' in form else True,
+    }
 
     # Reject use_llm if present: it is not in ALLOWED_MARKER_OPTIONS and must
     # not reach PdfConverter.  Any other key (file, from_format, to_format, etc.)
