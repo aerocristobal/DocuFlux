@@ -110,11 +110,10 @@ def _has_force_ocr_options(ctx):
 
 @then('use_llm is rejected when present in the request')
 def _use_llm_rejected(ctx):
-    """New step: the most recent response was a 400 with 'Unrecognized marker config key'."""
-    ctx['response'] = _last_dispatch(ctx)  # not quite right — need response object
-    # Actually this step needs the response body, not the dispatch call.
-    # Let me use a different approach — check ctx response status.
-    pass
+    """The most recent /convert response was 400 with 'Unrecognized marker config key'."""
+    assert ctx['response'].status_code == 400, f"expected 400, got {ctx['response'].status_code}"
+    body = ctx['response'].get_json()
+    assert body and 'Unrecognized marker config key' in str(body), f"expected error body, got {body}"
 
 
 @then('the task is dispatched with no options')
