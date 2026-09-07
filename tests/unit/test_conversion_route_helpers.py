@@ -114,8 +114,9 @@ class TestEnqueueConvertJob:
         f = _fs(b'# hi', 'test.md')
         to_info = {'key': 'docx', 'extension': '.docx'}
 
-        job_id = _enqueue_convert_job(f, 'markdown', 'docx', to_info, {})
+        error, job_id = _enqueue_convert_job(f, 'markdown', 'docx', to_info, {})
 
+        assert error is None
         assert job_id
         args, kwargs = mock_app_mod.celery.send_task.call_args
         assert args[0] == 'tasks.convert_document'
@@ -133,7 +134,8 @@ class TestEnqueueConvertJob:
         args, kwargs = mock_app_mod.celery.send_task.call_args
         assert args[0] == 'tasks.convert_with_marker'
         assert kwargs['queue'] == 'gpu'
-        assert kwargs['args'][-1] == {'force_ocr': True, 'use_llm': False}  # options dict appended
+        # do-wqr.6: options carry only allowlisted keys; use_llm is gone.
+        assert kwargs['args'][-1] == {'force_ocr': True, 'include_images': True}
 
     @patch('web.routes.conversion._app_mod')
     def test_large_file_routes_to_default_queue(self, mock_app_mod, tmp_path):
@@ -312,7 +314,8 @@ class TestEnqueueV1ConvertJob:
         args, kwargs = mock_app_mod.celery.send_task.call_args
         assert args[0] == 'tasks.convert_with_marker'
         assert kwargs['queue'] == 'gpu'
-        assert kwargs['args'][-1] == {'force_ocr': True, 'use_llm': False, 'include_images': True}
+        # do-wqr.6: use_llm is not passed through, even as False.
+        assert kwargs['args'][-1] == {'force_ocr': True, 'include_images': True}
 
     @patch('web.routes.conversion.validate_file_content_type', return_value=(True, None))
     @patch('web.routes.conversion._app_mod')

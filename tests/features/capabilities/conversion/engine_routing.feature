@@ -50,10 +50,8 @@ Feature: Routing conversions to the right engine and queue
     Then the task options include force_ocr
 
   Scenario: use_llm is rejected when present in the request
-    When I submit "scan.pdf" converting pdf_marker to markdown
-    And the request includes use_llm
-    Then the response status code is 400
-    And the response body contains "Unrecognized marker config key"
+    When I submit "scan.pdf" converting pdf_marker to markdown with use_llm
+    Then the request is rejected with "Unrecognized marker config key"
 
   Scenario: Pandoc conversions carry no engine options
     When I submit "notes.md" converting markdown to html

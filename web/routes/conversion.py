@@ -136,7 +136,11 @@ def _validate_marker_options(form):
 def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     """Save an uploaded file, record job metadata, and dispatch its Celery task.
 
-    Returns the new job_id.
+    Returns (error, job_id) — the same shape as _enqueue_v1_convert_job, so a
+    rejected request is signalled in-band rather than by returning a value of a
+    different type. error is None on success; on failure it is a
+    (response, status_code) tuple for the caller to return as-is, and job_id is
+    None.
     """
     job_id = str(uuid.uuid4())
     _app_mod.storage.makedirs(job_id, folder='upload')
@@ -172,7 +176,7 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     if from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
         options, err = _validate_marker_options(form)
         if err is not None:
-            return err
+            return err, None
         task_args.append(options)
 
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
@@ -182,7 +186,7 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
         target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
     _app_mod.celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
-    return job_id
+    return None, job_id
 
 
 def _respond_convert_success(job_ids):
@@ -218,7 +222,10 @@ def convert():
         if error:
             return error
 
-        job_id = _enqueue_convert_job(file, from_format, to_format, to_info, request.form)
+        enqueue_error, job_id = _enqueue_convert_job(
+            file, from_format, to_format, to_info, request.form)
+        if enqueue_error:
+            return enqueue_error
 
         history_key = f"history:{session_id}"
         _app_mod.redis_client.lpush(history_key, job_id)
@@ -388,11 +395,20 @@ def retry_job(job_id):
     # Build a form-like dict from the stored job data so _validate_marker_options
     # can reject unrecognised keys (e.g. use_llm) with a 400 rather than silently
     # passing them through to PdfConverter on retry.
+    # _validate_marker_options reads form values with the HTML checkbox
+    # convention ("on" means set), so a synthesised form must use it too —
+    # any other truthy string reads as False and silently drops the option.
+    # job_data stores these as the strings 'True'/'False', so compare explicitly —
+    # a bare truthiness check treats the string 'False' as set.
     _form = {
-        'force_ocr': 'true' if job_data.get('force_ocr') else 'false',
-        'use_llm': 'true' if job_data.get('use_llm') else 'false',
-        'include_images': 'true',  # default for retry
+        'force_ocr': 'on' if job_data.get('force_ocr') == 'True' else 'off',
+        'include_images': 'on',  # default for retry
     }
+    # Only surface use_llm when the stored job actually requested it: the
+    # validator rejects on the key being present at all, so an unconditional
+    # key would 400 every retry.
+    if job_data.get('use_llm') == 'True':
+        _form['use_llm'] = 'on'
     if original_from in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
         options, err = _validate_marker_options(_form)
         if err is not None:
@@ -638,11 +654,13 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
     # We build a form-like dict from the parsed parameters so _validate_marker_options
     # can reject unrecognised keys (e.g. use_llm) with a 400 rather than silently
     # passing them through to PdfConverter.
+    # Checkbox convention, and conditional use_llm — see the retry path above.
     _form = {
-        'force_ocr': 'true' if force_ocr else 'false',
-        'use_llm': 'true' if use_llm else 'false',
-        'include_images': 'true' if include_images else 'false',
+        'force_ocr': 'on' if force_ocr else 'off',
+        'include_images': 'on' if include_images else 'off',
     }
+    if use_llm:
+        _form['use_llm'] = 'on'
     if internal_from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
         options, err = _validate_marker_options(_form)
         if err is not None:
