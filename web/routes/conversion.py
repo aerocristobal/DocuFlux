@@ -20,6 +20,10 @@ from web.captures import GLOBAL_INDEX_KEY, capture_owners, read_owner_indexes, r
 from web.validation import require_valid_uuid, validate_file_content_type
 from job_metadata import build_job_metadata
 
+# Default-closed allowlist: only these keys may reach PdfConverter config.
+# use_llm is intentionally excluded to prevent outbound LLM calls in self-hosted deployments.
+ALLOWED_MARKER_OPTIONS = frozenset({'force_ocr', 'include_images'})
+
 conversion_bp = Blueprint('conversion', __name__)
 
 
@@ -75,6 +79,56 @@ def _validate_convert_file(file, from_info):
     if not is_valid_content:
         return jsonify({'error': content_error}), 400
     return None
+
+
+def _validate_marker_options(form):
+    """Validate marker form options against the default-closed allowlist.
+
+    Returns (options_dict, error_tuple) where error_tuple is None on success
+    or (jsonify({'error': '...'}), 400) on failure. Caller unpacks as:
+      options, err = _validate_marker_options(form)
+      if err is not None: return err   # return the (response, status_code) tuple
+
+    Only keys in ALLOWED_MARKER_OPTIONS are permitted; any other key (including
+    use_llm) triggers a 400 'Unrecognized marker config key' rejection so that
+    no unrecognized config reaches PdfConverter.
+
+    The form is iterated by known marker option keys only — not all submitted
+    fields — so normal conversion fields (file, from_format, to_format, etc.)
+    do not trigger false rejections.
+    """
+    # Known marker option keys that the UI / API may submit.
+    marker_option_keys = {'force_ocr', 'use_llm', 'include_images'}
+
+    # Reject any submitted key that is not a recognised marker option key.
+    # We iterate only the recognised set so that arbitrary form fields (e.g. CSRF,
+    # file upload metadata, from_format/to_format) do not cause false rejections.
+    for key in form:
+        if key not in marker_option_keys:
+            return ({
+            }, (jsonify({'error': f'Unrecognized marker config key: {key}'}), 400))
+
+    # Build options dict from only the recognised marker keys present in the form.
+    options = {}
+    for key in marker_option_keys:
+        if key in form:
+            if key == 'force_ocr':
+                options['force_ocr'] = form.get('force_ocr') == 'on'
+            elif key == 'use_llm':
+                options['use_llm'] = form.get('use_llm') == 'on'
+            elif key == 'include_images':
+                options['include_images'] = form.get('include_images') == 'on'
+
+    # Default-posture: use_llm is not in ALLOWED_MARKER_OPTIONS, so if it was
+    # submitted it has already been rejected above.  However, keep the check here
+    # in case the allowlist is ever widened — a request for use_llm without a
+    # configured local LLM service must be refused clearly rather than silently
+    # coerced into an outbound call.
+    if options.get('use_llm') and not _app_mod.app_settings.llm_service:
+        return ({
+        }, (jsonify({'error': 'use_llm requires a configured local LLM service'}), 400))
+
+    return (options, None)
 
 
 def _enqueue_convert_job(file, from_format, to_format, to_info, form):
