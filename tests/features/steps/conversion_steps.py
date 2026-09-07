@@ -101,11 +101,19 @@ def _not_gpu(ctx):
     assert _last_dispatch(ctx)[1]['queue'] != 'gpu'
 
 
-@then('the task options include force_ocr and use_llm')
-def _has_options(ctx):
+@then('the task options include force_ocr')
+def _has_force_ocr_options(ctx):
     args = _last_dispatch(ctx)[1]['args']
     options = args[5]
-    assert 'force_ocr' in options and 'use_llm' in options
+    assert 'force_ocr' in options, f"expected force_ocr in options, got {options}"
+
+
+@then('use_llm is rejected when present in the request')
+def _use_llm_rejected(ctx):
+    """The most recent /convert response was 400 with 'Unrecognized marker config key'."""
+    assert ctx['response'].status_code == 400, f"expected 400, got {ctx['response'].status_code}"
+    body = ctx['response'].get_json()
+    assert body and 'Unrecognized marker config key' in str(body), f"expected error body, got {body}"
 
 
 @then('the task is dispatched with no options')
