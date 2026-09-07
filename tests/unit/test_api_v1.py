@@ -89,8 +89,10 @@ def test_api_v1_convert_success_marker(client, mock_redis, mock_celery, mock_dis
     # Verify options were passed
     options = call_args[1]['args'][5]
     assert options['force_ocr'] == True
-    assert options['use_llm'] == False
     assert options['include_images'] == True  # Story 1.5 default
+    # do-wqr.6: use_llm is no longer part of the marker options surface. The
+    # allowlist is default-closed, so the key must not reach PdfConverter at all.
+    assert 'use_llm' not in options
 
 
 def test_api_v1_convert_include_images_false_reaches_task_options(

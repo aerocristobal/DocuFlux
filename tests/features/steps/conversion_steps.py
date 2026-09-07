@@ -16,7 +16,7 @@ def _payload_for(filename):
 
 
 def _submit(bdd_client, mock_redis, mock_celery, ctx, filenames, from_format, to_format,
-            size_bytes=None):
+            size_bytes=None, extra_form=None):
     from unittest.mock import patch
 
     mock_redis.pipeline.return_value.execute.return_value = [1, {'status': 'PENDING'}]
@@ -25,6 +25,8 @@ def _submit(bdd_client, mock_redis, mock_celery, ctx, filenames, from_format, to
         'from_format': from_format,
         'to_format': to_format,
     }
+    if extra_form:
+        data.update(extra_form)
     with patch('web.app.storage.get_file_size', return_value=size_bytes or 1024):
         ctx['response'] = bdd_client.post('/convert', data=data,
                                           content_type='multipart/form-data')
@@ -38,6 +40,15 @@ def _submit(bdd_client, mock_redis, mock_celery, ctx, filenames, from_format, to
 @when(parsers.parse('I submit "{filename}" converting {from_format} to {to_format}'))
 def _submit_one(bdd_client, mock_redis, mock_celery, ctx, filename, from_format, to_format):
     _submit(bdd_client, mock_redis, mock_celery, ctx, [filename], from_format, to_format)
+
+
+@when(parsers.parse(
+    'I submit "{filename}" converting {from_format} to {to_format} with use_llm'))
+def _submit_with_use_llm(bdd_client, mock_redis, mock_celery, ctx, filename,
+                         from_format, to_format):
+    """do-wqr.6: a caller explicitly asking for LLM-assisted conversion."""
+    _submit(bdd_client, mock_redis, mock_celery, ctx, [filename], from_format, to_format,
+            extra_form={'use_llm': 'on'})
 
 
 @when(parsers.parse('I submit {count:d} markdown files converting {from_format} to {to_format}'))
@@ -101,11 +112,20 @@ def _not_gpu(ctx):
     assert _last_dispatch(ctx)[1]['queue'] != 'gpu'
 
 
-@then('the task options include force_ocr and use_llm')
-def _has_options(ctx):
+@then('the task options include force_ocr')
+def _has_force_ocr_options(ctx):
     args = _last_dispatch(ctx)[1]['args']
     options = args[5]
-    assert 'force_ocr' in options and 'use_llm' in options
+    assert 'force_ocr' in options, f"expected force_ocr in options, got {options}"
+
+
+@then(parsers.parse('the request is rejected with "{message}"'))
+def _request_rejected_with(ctx, message):
+    """do-wqr.6: a refused option must produce an explicit 400, never a silent drop."""
+    resp = ctx['response']
+    assert resp.status_code == 400, f"expected 400, got {resp.status_code}: {resp.get_data(as_text=True)[:200]}"
+    body = resp.get_json()
+    assert body and message in str(body), f"expected {message!r} in body, got {body}"
 
 
 @then('the task is dispatched with no options')

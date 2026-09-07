@@ -20,6 +20,10 @@ from web.captures import GLOBAL_INDEX_KEY, capture_owners, read_owner_indexes, r
 from web.validation import require_valid_uuid, validate_file_content_type
 from job_metadata import build_job_metadata
 
+# Default-closed allowlist: only these keys may reach PdfConverter config.
+# use_llm is intentionally excluded to prevent outbound LLM calls in self-hosted deployments.
+ALLOWED_MARKER_OPTIONS = frozenset({'force_ocr', 'include_images'})
+
 conversion_bp = Blueprint('conversion', __name__)
 
 
@@ -77,10 +81,66 @@ def _validate_convert_file(file, from_info):
     return None
 
 
+def _validate_marker_options(form):
+    """Validate marker form options against the default-closed allowlist.
+
+    Returns (options_dict, error_tuple) where error_tuple is None on success
+    or (jsonify({'error': '...'}), 400) on failure. Caller unpacks as:
+      options, err = _validate_marker_options(form)
+      if err is not None: return err   # return the (response, status_code) tuple
+
+    Only the three known marker config keys (force_ocr, use_llm, include_images)
+    are examined; all other form fields (file, from_format, to_format, etc.) are
+    ignored by this function — they are validated earlier in the pipeline.
+
+    use_llm is intentionally excluded from ALLOWED_MARKER_OPTIONS so that a
+    request including use_llm is rejected with a clear 400 rather than silently
+    passing an outbound LLM call through to PdfConverter.
+
+    The form is iterated by known marker option keys only — not all submitted
+    fields — so normal conversion fields (file, from_format, to_format, etc.)
+    do not trigger false rejections.
+
+    Note: the BDD test submission sends only file/from_format/to_format without
+    force_ocr/include_images, so we always seed the options dict with these keys
+    defaulting to their conventional defaults (force_ocr=False, include_images=True)
+    so that downstream step assertions like 'force_ocr in options' remain valid.
+    """
+    # Known marker config keys that the UI / API may submit.
+    marker_option_keys = {'force_ocr', 'use_llm', 'include_images'}
+
+    # Seed options with conventional defaults so that callers can always rely on
+    # force_ocr and include_images being present (the original code always built
+    # them, and the BDD _submit helper sends only file/from_format/to_format).
+    options = {
+        'force_ocr': form.get('force_ocr') == 'on' if 'force_ocr' in form else False,
+        'include_images': form.get('include_images') == 'on' if 'include_images' in form else True,
+    }
+
+    # Reject use_llm if present: it is not in ALLOWED_MARKER_OPTIONS and must
+    # not reach PdfConverter.  Any other key (file, from_format, to_format, etc.)
+    # is ignored by this function since those are handled earlier in the pipeline.
+    if 'use_llm' in form:
+        return ({
+        }, (jsonify({'error': 'Unrecognized marker config key: use_llm'}), 400))
+
+    # Default-posture safety net: if the allowlist is ever widened and use_llm
+    # ends up in options, refuse silently-coerced outbound calls.
+    if options.get('use_llm') and not _app_mod.app_settings.llm_service:
+        return ({
+        }, (jsonify({'error': 'use_llm requires a configured local LLM service'}), 400))
+
+    return (options, None)
+
+
 def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     """Save an uploaded file, record job metadata, and dispatch its Celery task.
 
-    Returns the new job_id.
+    Returns (error, job_id) — the same shape as _enqueue_v1_convert_job, so a
+    rejected request is signalled in-band rather than by returning a value of a
+    different type. error is None on success; on failure it is a
+    (response, status_code) tuple for the caller to return as-is, and job_id is
+    None.
     """
     job_id = str(uuid.uuid4())
     _app_mod.storage.makedirs(job_id, folder='upload')
@@ -114,10 +174,9 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     task_args = [job_id, input_filename, output_filename, from_format, to_format]
 
     if from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
-        options = {
-            'force_ocr': form.get('force_ocr') == 'on',
-            'use_llm': form.get('use_llm') == 'on'
-        }
+        options, err = _validate_marker_options(form)
+        if err is not None:
+            return err, None
         task_args.append(options)
 
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
@@ -127,7 +186,7 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
         target_queue = 'high_priority' if file_size < 5 * 1024 * 1024 else 'default'
 
     _app_mod.celery.send_task(task_name, args=task_args, task_id=job_id, queue=target_queue)
-    return job_id
+    return None, job_id
 
 
 def _respond_convert_success(job_ids):
@@ -163,7 +222,10 @@ def convert():
         if error:
             return error
 
-        job_id = _enqueue_convert_job(file, from_format, to_format, to_info, request.form)
+        enqueue_error, job_id = _enqueue_convert_job(
+            file, from_format, to_format, to_info, request.form)
+        if enqueue_error:
+            return enqueue_error
 
         history_key = f"history:{session_id}"
         _app_mod.redis_client.lpush(history_key, job_id)
@@ -329,12 +391,34 @@ def retry_job(job_id):
         task_name = 'tasks.convert_document'
     task_args = [new_job_id, input_filename, output_filename, original_from, job_data.get('to')]
 
+    # Validate marker options against the allowlist before retry.
+    # Build a form-like dict from the stored job data so _validate_marker_options
+    # can reject unrecognised keys (e.g. use_llm) with a 400 rather than silently
+    # passing them through to PdfConverter on retry.
+    # _validate_marker_options reads form values with the HTML checkbox
+    # convention ("on" means set), so a synthesised form must use it too —
+    # any other truthy string reads as False and silently drops the option.
+    # job_data stores these as the strings 'True'/'False', so compare explicitly —
+    # a bare truthiness check treats the string 'False' as set.
+    _form = {
+        'force_ocr': 'on' if job_data.get('force_ocr') == 'True' else 'off',
+        'include_images': 'on',  # default for retry
+    }
+    # Only surface use_llm when the stored job actually requested it: the
+    # validator rejects on the key being present at all, so an unconditional
+    # key would 400 every retry.
+    if job_data.get('use_llm') == 'True':
+        _form['use_llm'] = 'on'
     if original_from in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
+        options, err = _validate_marker_options(_form)
+        if err is not None:
+            return err
+    else:
         options = {
             'force_ocr': job_data.get('force_ocr') == 'True',
-            'use_llm': job_data.get('use_llm') == 'True'
+            'use_llm': job_data.get('use_llm') == 'True',
+            'include_images': True,
         }
-        task_args.append(options)
 
     # GPU tasks go to gpu queue; CPU tasks go to default
     if task_name in ('tasks.convert_with_marker', 'tasks.convert_with_marker_slm', 'tasks.convert_with_hybrid'):
@@ -566,22 +650,37 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
     # GPU tasks go to gpu queue; CPU tasks use size-based routing
     file_size = _app_mod.storage.get_file_size(job_id, safe_filename, folder='upload')
 
-    if internal_from_format == 'pdf_marker':
+    # Validate marker options against the allowlist before dispatch.
+    # We build a form-like dict from the parsed parameters so _validate_marker_options
+    # can reject unrecognised keys (e.g. use_llm) with a 400 rather than silently
+    # passing them through to PdfConverter.
+    # Checkbox convention, and conditional use_llm — see the retry path above.
+    _form = {
+        'force_ocr': 'on' if force_ocr else 'off',
+        'include_images': 'on' if include_images else 'off',
+    }
+    if use_llm:
+        _form['use_llm'] = 'on'
+    if internal_from_format in ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'):
+        options, err = _validate_marker_options(_form)
+        if err is not None:
+            return err
+    else:
         options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
+
+    if internal_from_format == 'pdf_marker':
         _app_mod.celery.send_task(
             'tasks.convert_with_marker',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_hybrid':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_hybrid',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
             queue='gpu'
         )
     elif internal_from_format == 'pdf_marker_slm':
-        options = {'force_ocr': force_ocr, 'use_llm': use_llm, 'include_images': include_images}
         _app_mod.celery.send_task(
             'tasks.convert_with_marker_slm',
             args=[job_id, safe_filename, output_filename, internal_from_format, to_format, options],
