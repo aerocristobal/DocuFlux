@@ -2052,6 +2052,80 @@ class TestConvertWithOcr:
         assert any(c.get('status') == 'FAILURE' for c in fail_calls)
 
 
+@patch('tasks.redis_client')
+@patch('tasks.socketio')
+@patch('os.path.exists')
+def test_conversion_fails_when_inference_server_unreachable(self, mock_exists, mock_socketio, mock_redis):
+    """Given the inference server is unreachable, when a conversion is attempted, then a test asserts the operator-facing failure."""
+    import tasks, tempfile, os
+    mock_exists.return_value = True
+    mock_redis.hget.return_value = None
+    mock_redis.expire.return_value = True
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tasks.OUTPUT_FOLDER = tmpdir
+        old_storage = tasks.storage
+        from storage import LocalStorageBackend
+        tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+        job_id = str(uuid.uuid4())
+        os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+        with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+            f.write(b'%PDF-1.4 fake pdf content')
+        # Make the PdfConverter raise RuntimeError when inference server is unreachable
+        mock_converter = MagicMock()
+        mock_converter.side_effect = RuntimeError("Connection refused to inference server")
+        sys.modules['marker.converters.pdf'].PdfConverter.return_value = mock_converter
+
+        with pytest.raises(RuntimeError, match="Connection refused to inference server"):
+            tasks.convert_with_marker.run(
+                job_id, 'doc.pdf', 'doc.md', 'pdf', 'markdown'
+            )
+
+        # FAILURE metadata must be recorded in Redis
+        fail_calls = [c.kwargs['mapping'] for c in mock_redis.hset.call_args_list]
+        assert any(c.get('status') == 'FAILURE' for c in fail_calls)
+
+        tasks.storage = old_storage
+        tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+
+@patch('tasks.redis_client')
+@patch('tasks.socketio')
+@patch('os.path.exists')
+def test_conversion_times_out_when_inference_server_slow(self, mock_exists, mock_socketio, mock_redis):
+    """Given the inference server is slow (SURYA_INFERENCE_TIMEOUT_SECONDS), when a conversion is attempted, then a test asserts the timeout failure."""
+    import tasks, tempfile, os
+    mock_exists.return_value = True
+    mock_redis.hget.return_value = None
+    mock_redis.expire.return_value = True
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tasks.OUTPUT_FOLDER = tmpdir
+        old_storage = tasks.storage
+        from storage import LocalStorageBackend
+        tasks.storage = LocalStorageBackend(upload_folder=tmpdir, output_folder=tmpdir)
+        job_id = str(uuid.uuid4())
+        os.makedirs(os.path.join(tmpdir, job_id), exist_ok=True)
+        with open(os.path.join(tmpdir, job_id, 'doc.pdf'), 'wb') as f:
+            f.write(b'%PDF-1.4 fake pdf content')
+        # Make the PdfConverter raise TimeoutError when inference server is slow
+        mock_converter = MagicMock()
+        mock_converter.side_effect = TimeoutError("Inference server timed out")
+        sys.modules['marker.converters.pdf'].PdfConverter.return_value = mock_converter
+
+        with pytest.raises(TimeoutError, match="Inference server timed out"):
+            tasks.convert_with_marker.run(
+                job_id, 'doc.pdf', 'doc.md', 'pdf', 'markdown'
+            )
+
+        # FAILURE metadata must be recorded in Redis
+        fail_calls = [c.kwargs['mapping'] for c in mock_redis.hset.call_args_list]
+        assert any(c.get('status') == 'FAILURE' for c in fail_calls)
+
+        tasks.storage = old_storage
+        tasks.OUTPUT_FOLDER = tasks.app_settings.output_folder
+
+
 # ============================================================
 # _eager_marker_warmup tests (Story 6.2)
 # ============================================================
