@@ -108,7 +108,7 @@ def test_check_inference_server_unreachable():
         assert status == "unreachable"
 
 
-def test_check_inference_server_reachable(self):
+def test_check_inference_server_reachable():
     """Check that inference server reachable returns 'reachable'."""
     from warmup import check_inference_server
     import os
@@ -122,7 +122,7 @@ def test_check_inference_server_reachable(self):
             assert status == "reachable"
 
 
-def test_gpu_detection_unavailable(self):
+def test_gpu_detection_unavailable():
     """Test GPU detection when no GPU is available."""
     from warmup import check_gpu_availability
     import os
@@ -133,7 +133,7 @@ def test_gpu_detection_unavailable(self):
                 assert gpu_info["status"] == "unavailable"
 
 
-def test_slm_content_sampling(self):
+def test_slm_content_sampling():
     """Test SLM content sampling for long documents."""
     from warmup import _sample_for_slm_context  # noqa: F811
     short_content = "This is short text"
@@ -147,7 +147,7 @@ def test_slm_content_sampling(self):
     assert len(sampled_result.split()) <= 512
 
 
-def test_slm_model_loading_error(self):
+def test_slm_model_loading_error():
     """Test SLM model loading failure handling."""
     from warmup import get_slm_model
     with patch("warmup.Llama", side_effect=Exception("Model not found")):
@@ -157,14 +157,14 @@ def test_slm_model_loading_error(self):
                 assert model is None
 
 
-def test_to_metadata_is_string_valued(self):
+def test_to_metadata_is_string_valued():
     report = score_markdown(GOOD_MD, page_count=1)
     meta = report.to_metadata()
     assert set(meta) == {"quality_grade", "quality_score", "quality_reasons", "quality_metrics"}
     assert all(isinstance(v, str) for v in meta.values())
 
 
-def test_to_metadata_quality_metrics_is_json_of_the_per_dimension_metrics(self):
+def test_to_metadata_quality_metrics_is_json_of_the_per_dimension_metrics():
     """Story 1.3: quality_metrics carries the per-dimension breakdown as JSON,
     so API responses can surface it without a second scoring pass."""
     import json
@@ -174,7 +174,7 @@ def test_to_metadata_quality_metrics_is_json_of_the_per_dimension_metrics(self):
     assert parsed == report.metrics
 
 
-def test_page_count_none_defaults_to_one(self):
+def test_page_count_none_defaults_to_one():
     md = "word " * 200
     r_none = score_markdown(md, page_count=None)
     r_one = score_markdown(md, page_count=1)
@@ -187,7 +187,7 @@ def test_page_count_none_defaults_to_one(self):
     (5, 3, True),      # sparse multi-page
     (2, 200, False),   # dense multi-page
 ])
-def test_word_density_thresholds(self, pages, words_each, expect_low):
+def test_word_density_thresholds(pages, words_each, expect_low):
     md = ("# H\n\n") + ("\n".join(" ".join(["w"] * words_each) for _ in range(pages)))
     report = score_markdown(md, page_count=pages)
     assert ("low_word_density" in report.reason_codes) == expect_low
@@ -196,7 +196,7 @@ def test_word_density_thresholds(self, pages, words_each, expect_low):
 # ── excess output (do-5wb) ────────────────────────────────────────────────────
 
 
-def test_excess_words_per_page_flags_excess_output(self):
+def test_excess_words_per_page_flags_excess_output():
     """A degeneration loop emits far more words per page than a real document."""
     md = "# H\n\n" + ("word " * (MAX_WORDS_PER_PAGE + 500))
     report = score_markdown(md, page_count=1)
@@ -204,7 +204,7 @@ def test_excess_words_per_page_flags_excess_output(self):
     assert "low_word_density" not in report.reason_codes
 
 
-def test_excess_chars_per_page_flags_excess_output(self):
+def test_excess_chars_per_page_flags_excess_output():
     """Long tokens can breach the character ceiling while staying under the word one."""
     long_token = "x" * 400
     words = MAX_CHARS_PER_PAGE // len(long_token) + 20
@@ -214,7 +214,7 @@ def test_excess_chars_per_page_flags_excess_output(self):
     assert "excess_output" in report.reason_codes
 
 
-def test_excess_output_is_recorded_once_when_both_ceilings_breach(self):
+def test_excess_output_is_recorded_once_when_both_ceilings_breach():
     md = "# H\n\n" + ("supercalifragilistic " * (MAX_WORDS_PER_PAGE + 500))
     report = score_markdown(md, page_count=1)
     assert report.reason_codes.count("excess_output") == 1
