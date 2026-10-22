@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     # worker startup.
     eager_marker_warmup: bool = Field(False, validation_alias="EAGER_MARKER_WARMUP")
 
+    # On-demand Surya VLM lifecycle (epic pfm). "cpu_only" never starts the
+    # GPU Surya container (Marker formats are rejected, Tesseract is used);
+    # "on_demand" starts it for Marker jobs and unloads it after idling.
+    # ocr_mode and the idle timeout seed settings:ocr in Redis, where an
+    # admin can override them at runtime (see shared/surya_state.py).
+    ocr_mode: Literal["cpu_only", "on_demand"] = Field("on_demand", validation_alias="OCR_MODE")
+    surya_idle_timeout_minutes: int = Field(15, ge=1, validation_alias="SURYA_IDLE_TIMEOUT_MINUTES")
+    surya_cold_start_timeout_seconds: int = Field(600, ge=1, validation_alias="SURYA_COLD_START_TIMEOUT_SECONDS")
+
     # Story 4.3: default lifetime for newly-created API keys. Overridable
     # per-key via POST /api/v1/auth/keys's expires_in_days.
     api_key_default_ttl_days: int = Field(90, validation_alias="API_KEY_DEFAULT_TTL_DAYS")

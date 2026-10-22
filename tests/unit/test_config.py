@@ -28,7 +28,8 @@ def clear_env_and_reset_settings():
         'FLASK_LIMITER_DEFAULT_LIMITS', 'FLASK_LIMITER_STORAGE_URI',
         'SOCKETIO_ASYNC_MODE', 'SOCKETIO_MESSAGE_QUEUE', 'SOCKETIO_CORS_ALLOWED_ORIGINS',
         'SECRET_KEY', 'MASTER_ENCRYPTION_KEY', 'CLOUDFLARE_TUNNEL_TOKEN',
-        'FLASK_ENV', 'MARKER_ENABLED', 'BUILD_GPU', 'P_SETTINGS' # P_SETTINGS is for pydantic_settings base configuration
+        'FLASK_ENV', 'OCR_MODE', 'SURYA_IDLE_TIMEOUT_MINUTES', 'SURYA_COLD_START_TIMEOUT_SECONDS',
+        'MARKER_ENABLED', 'BUILD_GPU', 'P_SETTINGS' # P_SETTINGS is for pydantic_settings base configuration
     ]
     for key in keys_to_clear:
         if key in os.environ:
@@ -205,3 +206,35 @@ def test_default_socketio_message_queue_logic():
     os.environ['SOCKETIO_MESSAGE_QUEUE'] = 'redis://my-mq:6379/1'
     s = Settings(_env_file=None)
     assert s.socketio_message_queue == 'redis://my-mq:6379/1'
+
+def test_ocr_lifecycle_defaults():
+    s = Settings(_env_file=None)
+    assert s.ocr_mode == "on_demand"
+    assert s.surya_idle_timeout_minutes == 15
+    assert s.surya_cold_start_timeout_seconds == 600
+
+
+def test_ocr_lifecycle_env_override():
+    os.environ['OCR_MODE'] = 'cpu_only'
+    os.environ['SURYA_IDLE_TIMEOUT_MINUTES'] = '5'
+    os.environ['SURYA_COLD_START_TIMEOUT_SECONDS'] = '120'
+    s = Settings(_env_file=None)
+    assert s.ocr_mode == "cpu_only"
+    assert s.surya_idle_timeout_minutes == 5
+    assert s.surya_cold_start_timeout_seconds == 120
+
+
+def test_ocr_mode_rejects_unknown_value():
+    from pydantic import ValidationError
+    os.environ['OCR_MODE'] = 'gpu_always'
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("var", ['SURYA_IDLE_TIMEOUT_MINUTES', 'SURYA_COLD_START_TIMEOUT_SECONDS'])
+@pytest.mark.parametrize("value", ['0', '-1'])
+def test_surya_timeouts_must_be_positive(var, value):
+    from pydantic import ValidationError
+    os.environ[var] = value
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
