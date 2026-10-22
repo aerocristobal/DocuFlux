@@ -1,4 +1,4 @@
-@ocr_lifecycle @p2 @pending
+@ocr_lifecycle @p2
 Feature: Showing AI engine controls only where they can work
   In order to avoid offering controls that cannot work on this machine
   As a self-hoster

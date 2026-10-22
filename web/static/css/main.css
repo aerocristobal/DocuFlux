@@ -327,6 +327,11 @@ md-filled-select {
 #no-captures-msg { text-align: center; padding: 32px; }
 .no-captures-text { opacity: 0.6; }
 .gpu-modal-content { min-width: 380px; max-width: 480px; }
+#surya-section { margin-top: 16px; }
+#surya-modal-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+#surya-modal-table td { padding: 6px 0; }
+.surya-actions { display: flex; gap: 8px; margin-top: 8px; }
+.surya-hint { margin-top: 16px; font-size: 0.8rem; color: var(--md-sys-color-on-surface-variant); }
 
 /* Job/capture list rows rendered client-side in main.js */
 .job-progress { width: 100px; margin-top: 8px; }

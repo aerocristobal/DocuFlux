@@ -315,6 +315,15 @@ paths:
                   gpu_info:
                     type: object
                     additionalProperties: true
+                  surya_state:
+                    type: string
+                    enum: [stopped, starting, running, stopping, error]
+                    description: Observed state of the on-demand Surya VLM server
+                  ocr_mode: {type: string, enum: [cpu_only, on_demand]}
+                  idle_timeout_min: {type: integer, description: Minutes idle before Surya is unloaded}
+                  surya_supported:
+                    type: boolean
+                    description: True when a GPU with enough VRAM for Surya is present
 
   /healthz:
     get:

@@ -128,3 +128,37 @@ class TestOcrSettings:
 
     def test_put_non_object_400(self, client, r):
         assert client.put('/api/v1/admin/ocr-settings', json=[1], headers=AUTH).status_code == 400
+
+
+class TestSocketEmit:
+    """Admin writes push a surya_state_update so open dashboards refresh at once."""
+
+    @pytest.fixture
+    def emitted(self, r, monkeypatch):
+        calls = []
+        monkeypatch.setattr(web_app.socketio, 'emit', lambda *a, **kw: calls.append((a, kw)))
+        return calls
+
+    def test_load_emits_snapshot(self, client, r, emitted):
+        _gpu(r)
+        client.post('/api/v1/admin/surya', json={'action': 'load'}, headers=AUTH)
+        (args, _), = emitted
+        assert args[0] == 'surya_state_update'
+        assert set(args[1]) == {'surya_state', 'ocr_mode', 'idle_timeout_min', 'surya_supported'}
+        assert args[1]['surya_supported'] is True
+
+    def test_put_settings_emits_new_mode(self, client, r, emitted):
+        client.put('/api/v1/admin/ocr-settings', json={'mode': 'cpu_only'}, headers=AUTH)
+        (args, _), = emitted
+        assert args[0] == 'surya_state_update' and args[1]['ocr_mode'] == 'cpu_only'
+
+    def test_rejected_write_does_not_emit(self, client, r, emitted):
+        client.post('/api/v1/admin/surya', json={'action': 'load'}, headers=AUTH)  # unsupported -> 409
+        client.put('/api/v1/admin/ocr-settings', json={'mode': 'gpu'}, headers=AUTH)  # invalid -> 400
+        assert emitted == []
+
+    def test_emit_failure_does_not_break_request(self, client, r, monkeypatch):
+        def boom(*a, **kw):
+            raise RuntimeError('queue down')
+        monkeypatch.setattr(web_app.socketio, 'emit', boom)
+        assert client.post('/api/v1/admin/surya', json={'action': 'unload'}, headers=AUTH).status_code == 202

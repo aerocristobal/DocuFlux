@@ -1,6 +1,7 @@
 """Admin endpoints for the on-demand Surya VLM lifecycle (epic pfm)."""
 
 import hmac
+import logging
 
 from flask import Blueprint, request, jsonify
 
@@ -45,6 +46,16 @@ def _snapshot():
     }
 
 
+def _emit_state_update():
+    """Push the new state to open dashboards; never fails the request."""
+    try:
+        _app_mod.socketio.emit(
+            'surya_state_update',
+            surya_state.status_snapshot(_app_mod.redis_client, _app_mod.app_settings))
+    except Exception as e:
+        logging.warning(f"surya_state_update emit skipped: {e}")
+
+
 @admin_surya_bp.route('/api/v1/admin/surya', methods=['GET'])
 @_app_mod.csrf.exempt
 @_app_mod.limiter.limit("60 per minute")
@@ -78,6 +89,7 @@ def api_v1_surya_action():
     else:
         surya_state.set_desired(r, 'stopped')
         surya_state.set_pinned(r, False)
+    _emit_state_update()
     return jsonify(_snapshot()), 202
 
 
@@ -106,4 +118,5 @@ def api_v1_ocr_settings_put():
                                     idle_timeout_min=data.get('idle_timeout_min'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    _emit_state_update()
     return jsonify(surya_state.get_ocr_settings(r, _app_mod.app_settings))

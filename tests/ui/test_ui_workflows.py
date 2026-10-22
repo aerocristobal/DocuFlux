@@ -70,6 +70,15 @@ class TestIndexPage:
         resp = ui_client.get('/')
         assert b'gpu-status-chip' in resp.data
 
+    def test_index_contains_surya_controls_in_system_status_modal(self, ui_client):
+        """System Status modal has the Surya lifecycle controls (hidden until supported)."""
+        html = ui_client.get('/').data.decode()
+        for element_id in ('surya-section', 'modal-surya-state', 'surya-load-btn',
+                           'surya-unload-btn', 'ocr-mode-select', 'idle-timeout-input',
+                           'surya-unsupported-hint'):
+            assert f'id="{element_id}"' in html, element_id
+        assert 'at least 16 GB' in html
+
     def test_index_contains_job_list(self, ui_client):
         """Index page has job list container."""
         resp = ui_client.get('/')
@@ -406,6 +415,19 @@ class TestServiceStatus:
         data = resp.get_json()
         assert data.get('marker') == 'ready'
         assert data.get('gpu_status') == 'available'
+
+    def test_service_status_includes_surya_lifecycle_fields(self, ui_client, mock_redis):
+        """The dashboard reads Surya state/mode/timeout/support from the status endpoint."""
+        mock_redis.get.return_value = None
+        mock_redis.hgetall.return_value = {}
+
+        with patch('web.app.check_disk_space', return_value=True):
+            data = ui_client.get('/api/status/services').get_json()
+
+        assert data['surya_state'] in ('stopped', 'starting', 'running', 'stopping', 'error')
+        assert data['ocr_mode'] in ('cpu_only', 'on_demand')
+        assert isinstance(data['idle_timeout_min'], int)
+        assert isinstance(data['surya_supported'], bool)
 
     def test_service_status_not_rate_limited(self, ui_client, mock_redis):
         """Regression: /api/status/services is polled every 10s, must not be rate-limited."""

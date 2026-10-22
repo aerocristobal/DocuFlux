@@ -32,3 +32,4 @@ from tests.features.steps.api_v1_steps import *  # noqa: F401,F403
 from tests.features.steps.auth_steps import *  # noqa: F401,F403
 from tests.features.steps.security_steps import *  # noqa: F401,F403
 from tests.features.steps.reliability_steps import *  # noqa: F401,F403
+from tests.features.steps.ocr_lifecycle_steps import *  # noqa: F401,F403

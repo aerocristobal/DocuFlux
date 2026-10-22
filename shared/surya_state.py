@@ -122,3 +122,15 @@ def surya_supported(r):
         return float(r.hget(GPU_INFO_KEY, "vram_total")) >= MIN_VRAM_GB
     except (TypeError, ValueError):
         return False
+
+
+def status_snapshot(r, app_settings=None):
+    """Dashboard-facing view of the lifecycle: the payload of /api/status/services
+    and of the surya_state_update socket event."""
+    settings = get_ocr_settings(r, app_settings)
+    return {
+        "surya_state": get_state(r),
+        "ocr_mode": settings["mode"],
+        "idle_timeout_min": settings["idle_timeout_min"],
+        "surya_supported": surya_supported(r),
+    }
