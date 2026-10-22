@@ -82,6 +82,24 @@ def start_health_server():
     logging.info("Starting health check server on port 8080")
     httpd.serve_forever()
 
+def _publish_gpu_info(gpu_info):
+    """Publish GPU info to the key shared by worker, worker-light and beat.
+
+    Every service runs this probe, but only the GPU worker can see the GPU
+    (worker-light has no torch, beat has no device attached). 'available'
+    always wins; 'unavailable' is only recorded if nothing is published yet,
+    so a CPU-only service cannot overwrite the GPU worker's result."""
+    if gpu_info["status"] == "available":
+        pipe = r.pipeline()
+        pipe.delete("marker:gpu_info")
+        pipe.hset("marker:gpu_info", mapping=gpu_info)
+        pipe.set("marker:gpu_status", "available")
+        pipe.execute()
+    elif r.set("marker:gpu_status", gpu_info["status"], nx=True):
+        r.delete("marker:gpu_info")
+        r.hset("marker:gpu_info", mapping=gpu_info)
+
+
 def check_gpu_availability():
     """
     Detect GPU availability and store detailed info in Redis.
@@ -138,9 +156,7 @@ def check_gpu_availability():
 
             logging.info(f"GPU detected: {gpu_info['model']} with {gpu_info['vram_total']} GB VRAM")
 
-        # Store in Redis
-        r.hset("marker:gpu_info", mapping=gpu_info)
-        r.set("marker:gpu_status", gpu_info["status"])
+        _publish_gpu_info(gpu_info)
 
         # Emit WebSocket event so frontend updates immediately without waiting for poll
         try:
@@ -161,8 +177,7 @@ def check_gpu_availability():
         logging.error(f"GPU detection failed: {e}")
         # Fallback to unavailable
         gpu_info = {"status": "unavailable", "error": str(e)}
-        r.hset("marker:gpu_info", mapping=gpu_info)
-        r.set("marker:gpu_status", "unavailable")
+        _publish_gpu_info(gpu_info)
         return gpu_info
 
 def surya_intentionally_stopped():
@@ -202,7 +217,8 @@ def check_inference_server():
         status = "idle"
     else:
         try:
-            resp = requests.get(f"{url.rstrip('/')}/health", timeout=2)
+            import surya_state
+            resp = requests.get(surya_state.health_url(url), timeout=2)
             status = "reachable" if resp.status_code == 200 else "unreachable"
         except Exception as e:
             logging.warning(f"Inference server probe failed ({url}): {e}")

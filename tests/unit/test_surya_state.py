@@ -167,3 +167,13 @@ def test_surya_supported(r, status, vram, expected):
 
 def test_surya_supported_without_gpu_keys(r):
     assert surya_state.surya_supported(r) is False
+
+
+@pytest.mark.parametrize("url", [
+    "http://surya-vlm:8000/v1",
+    "http://surya-vlm:8000/v1/",
+    "http://surya-vlm:8000",
+    "http://surya-vlm:8000/",
+])
+def test_health_url_probes_server_root(url):
+    assert surya_state.health_url(url) == "http://surya-vlm:8000/health"

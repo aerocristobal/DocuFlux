@@ -6,7 +6,7 @@ import logging
 from flask import Blueprint, request, jsonify
 
 import web.app as _app_mod
-from shared import surya_state
+import surya_state
 
 admin_surya_bp = Blueprint('admin_surya', __name__)
 

@@ -19,7 +19,7 @@ from pandoc_options import validate_pandoc_options
 from web.captures import GLOBAL_INDEX_KEY, capture_owners, read_owner_indexes, render_capture_jobs
 from web.validation import require_valid_uuid, validate_file_content_type
 from job_metadata import build_job_metadata
-from shared import surya_state
+import surya_state
 
 # Default-closed allowlist: only these keys may reach PdfConverter config.
 # use_llm is intentionally excluded to prevent outbound LLM calls in self-hosted deployments.

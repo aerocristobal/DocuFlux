@@ -114,6 +114,13 @@ def inflight_count(r):
     return sum(1 for _ in r.scan_iter(match=f"{INFLIGHT_PREFIX}*"))
 
 
+def health_url(inference_url):
+    """vLLM serves /health at the server root; SURYA_INFERENCE_URL carries the
+    OpenAI-style /v1 suffix (needed by surya), which must not be probed."""
+    base = inference_url.rstrip("/")
+    return f"{base.removesuffix('/v1')}/health"
+
+
 def surya_supported(r):
     """True when a GPU is present with at least MIN_VRAM_GB of total memory."""
     if r.get(GPU_STATUS_KEY) != "available":

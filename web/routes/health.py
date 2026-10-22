@@ -7,7 +7,7 @@ import logging
 from flask import Blueprint, jsonify
 
 import web.app as _app_mod
-from shared import surya_state
+import surya_state
 
 health_bp = Blueprint('health', __name__)
 

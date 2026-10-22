@@ -27,7 +27,7 @@ class InferenceServerTimeout(RuntimeError):
 
 def _healthy(url):
     try:
-        return requests.get(f"{url.rstrip('/')}/health", timeout=2).status_code == 200
+        return requests.get(surya_state.health_url(url), timeout=2).status_code == 200
     except Exception:
         return False
 
