@@ -19,6 +19,7 @@ from pandoc_options import validate_pandoc_options
 from web.captures import GLOBAL_INDEX_KEY, capture_owners, read_owner_indexes, render_capture_jobs
 from web.validation import require_valid_uuid, validate_file_content_type
 from job_metadata import build_job_metadata
+from shared import surya_state
 
 # Default-closed allowlist: only these keys may reach PdfConverter config.
 # use_llm is intentionally excluded to prevent outbound LLM calls in self-hosted deployments.
@@ -133,6 +134,29 @@ def _validate_marker_options(form):
     return (options, None)
 
 
+_OCR_AI_FORMATS = ('pdf_marker', 'pdf_hybrid', 'pdf_marker_slm')
+
+
+def ensure_ocr_allowed(from_format):
+    """Enforce the OCR mode for Surya-backed (AI) conversions.
+
+    Returns None when the request may proceed, else a (response, 409) tuple.
+    In on_demand mode, flags the Surya VLM as desired so the controller loads it.
+    Call before saving uploads or creating job metadata so a rejection leaves
+    no orphaned files or jobs.
+    """
+    if from_format not in _OCR_AI_FORMATS:
+        return None
+    mode = surya_state.get_ocr_settings(
+        _app_mod.redis_client, _app_mod.app_settings)['mode']
+    if mode == 'cpu_only':
+        return jsonify({'error': 'AI engine disabled (OCR mode is cpu_only); '
+                                 'use the OCR engine instead'}), 409
+    if mode == 'on_demand':
+        surya_state.set_desired(_app_mod.redis_client, 'running')
+    return None
+
+
 def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     """Save an uploaded file, record job metadata, and dispatch its Celery task.
 
@@ -142,6 +166,10 @@ def _enqueue_convert_job(file, from_format, to_format, to_info, form):
     (response, status_code) tuple for the caller to return as-is, and job_id is
     None.
     """
+    ocr_error = ensure_ocr_allowed(from_format)
+    if ocr_error:
+        return ocr_error, None
+
     job_id = str(uuid.uuid4())
     _app_mod.storage.makedirs(job_id, folder='upload')
     input_filename = secure_filename(file.filename) or f"file_{job_id}"
@@ -361,6 +389,10 @@ def retry_job(job_id):
     input_filename = job_data.get('filename')
     if not _app_mod.storage.file_exists(job_id, input_filename, folder='upload'):
         return jsonify({'error': 'Cleaned up'}), 400
+
+    ocr_error = ensure_ocr_allowed(job_data.get('from'))
+    if ocr_error:
+        return ocr_error
 
     new_job_id = str(uuid.uuid4())
     _app_mod.storage.makedirs(new_job_id, folder='upload')
@@ -616,6 +648,10 @@ def _enqueue_v1_convert_job(file, internal_from_format, to_format, engine,
     Returns (error_response, job_id). error_response is None on success (a
     422 from content-type validation on failure).
     """
+    ocr_error = ensure_ocr_allowed(internal_from_format)
+    if ocr_error:
+        return ocr_error, None
+
     job_id = str(uuid.uuid4())
 
     _app_mod.storage.makedirs(job_id, folder='upload')
