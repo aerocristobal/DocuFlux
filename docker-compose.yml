@@ -361,6 +361,103 @@ services:
     restart: unless-stopped
     # This service doesn't strictly depend on Redis, but worker will depend on it
 
+  # On-demand Surya lifecycle (epic pfm). The ONLY component that touches the
+  # Docker API. web/worker/beat never do; they write desired state to Redis.
+  # docker-socket-proxy cannot scope to a single container (CONTAINERS=1 +
+  # POST=1 permits start/stop/etc. on any container), so the controller filters
+  # by label com.docker.compose.service=surya-vlm and the proxy is reachable
+  # only from the isolated `control` network. Everything else is denied.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    environment:
+      - CONTAINERS=1
+      - POST=1
+      # Explicitly denied (default-deny, stated for auditability).
+      - IMAGES=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - EXEC=0
+      - SERVICES=0
+      - SWARM=0
+      - SECRETS=0
+      - CONFIGS=0
+      - BUILD=0
+      - COMMIT=0
+      - AUTH=0
+      - INFO=0
+      - EVENTS=0
+      - PLUGINS=0
+      - SYSTEM=0
+      - TASKS=0
+      - NODES=0
+      - DISTRIBUTION=0
+      - SESSION=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - control
+    expose:
+      - "2375"  # control network only; never published to the host
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # No read_only here: the image entrypoint renders /usr/local/etc/haproxy/
+    # haproxy.cfg from a template in the same directory at start (verified: a
+    # read-only rootfs, with or without a tmpfs over that dir, fails to boot).
+    # The socket mount is :ro and the process has no capabilities.
+    tmpfs:
+      - /run:noexec,nosuid,nodev,size=8m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null --spider http://localhost:2375/_ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  surya-controller:
+    build:
+      context: .
+      dockerfile: surya-controller/Dockerfile
+    environment:
+      - REDIS_METADATA_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
+      - DOCKER_HOST_URL=http://docker-socket-proxy:2375
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_healthy
+    # default = redis; control = socket proxy (shared with nothing else)
+    networks:
+      - default
+      - control
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=16m
+    healthcheck:
+      test: ["CMD", "python", "main.py", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
 # Epic 21.7: Docker Swarm Secrets (optional)
 # To use Docker secrets instead of environment variables:
 # 1. Create secrets:
@@ -382,3 +479,8 @@ services:
 volumes:
   redis-data:
   beat-data:
+
+# Internal-only: docker-socket-proxy <-> surya-controller. No other service joins.
+networks:
+  control:
+    internal: true
