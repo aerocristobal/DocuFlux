@@ -44,6 +44,8 @@ services:
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - CELERY_SIGNING_KEY=${CELERY_SIGNING_KEY:-}
       - ADMIN_API_SECRET=${ADMIN_API_SECRET:-}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
       - BEHIND_PROXY=${BEHIND_PROXY:-false}
@@ -101,6 +103,8 @@ services:
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - CELERY_SIGNING_KEY=${CELERY_SIGNING_KEY:-}
       - MCP_SECRET=${MCP_SECRET}
       # Marker v2: the worker is a thin client that sends OCR/layout work to the
       # shared Surya VLM inference server (surya-vlm service below). AUTOSTART=false
@@ -252,6 +256,8 @@ services:
       - REDIS_METADATA_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - CELERY_SIGNING_KEY=${CELERY_SIGNING_KEY:-}
       - MCP_SECRET=${MCP_SECRET}
       - BUILD_GPU=false
       - MARKER_ENABLED=false
@@ -312,6 +318,8 @@ services:
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - CELERY_SIGNING_KEY=${CELERY_SIGNING_KEY:-}
     depends_on:
       redis:
         condition: service_healthy
