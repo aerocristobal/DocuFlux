@@ -12,6 +12,7 @@ import json
 from werkzeug.utils import secure_filename
 
 import tasks as _pkg
+from tasks import surya_lifecycle as _surya
 from pandoc_options import build_pandoc_cmd
 from quality import score_markdown
 from table_postprocess import normalize_tables
@@ -541,7 +542,8 @@ def convert_with_marker(self, job_id, input_filename, output_filename, from_form
         converter = rendered = text = images = None
         try:
             _pkg.update_job_metadata(job_id, {'progress': '15', 'stage': 'Converting PDF with AI'})
-            converter, rendered = _pkg._run_marker(input_path, options or {})
+            with _surya.inference_session(job_id, job_id):
+                converter, rendered = _pkg._run_marker(input_path, options or {})
 
             _pkg.update_job_metadata(job_id, {'progress': '80', 'stage': 'Saving extracted content'})
             text, images, _, file_count = _pkg._save_marker_output(
@@ -651,7 +653,8 @@ def convert_with_marker_slm(self, job_id, input_filename, output_filename,
         converter = rendered = text = images = None
         try:
             _pkg.update_job_metadata(job_id, {'progress': '15', 'stage': 'Converting PDF with AI'})
-            converter, rendered = _pkg._run_marker(input_path, options or {})
+            with _surya.inference_session(job_id, job_id):
+                converter, rendered = _pkg._run_marker(input_path, options or {})
 
             _pkg.update_job_metadata(job_id, {'progress': '50', 'stage': 'Saving AI conversion output'})
             text, images, _, file_count = _pkg._save_marker_output(
@@ -837,7 +840,8 @@ def convert_with_hybrid(self, job_id, input_filename, output_filename, from_form
         _pkg.update_job_metadata(job_id, {'progress': '50', 'hybrid_engine_used': 'marker', 'stage': 'Converting PDF with AI'})
         converter = rendered = text = images = None
         try:
-            converter, rendered = _pkg._run_marker(input_path, options or {})
+            with _surya.inference_session(job_id, job_id):
+                converter, rendered = _pkg._run_marker(input_path, options or {})
             _pkg.update_job_metadata(job_id, {'progress': '85', 'stage': 'Saving extracted content'})
             text, images, _, file_count = _pkg._save_marker_output(
                 rendered, output_path, images_dir,
