@@ -21,6 +21,13 @@ TARGET_SERVICE = "surya-vlm"
 HEARTBEAT_FILE = os.environ.get("CONTROLLER_HEARTBEAT_FILE", "/tmp/controller.heartbeat")
 HEARTBEAT_MAX_AGE = 30.0
 
+GPU_QUEUE = "gpu"
+
+try:  # repo layout (tests, local) vs. flat copy inside the controller image
+    from shared import surya_state
+except ImportError:
+    import surya_state
+
 log = logging.getLogger("surya-controller")
 
 
@@ -112,16 +119,83 @@ def heartbeat_ok(path=None, max_age=HEARTBEAT_MAX_AGE, now=None):
         return False
 
 
-def reconcile_once(docker, redis_client):
-    """Hook for bead pfm.4: read desired/pinned/mode + idle state from Redis
-    (surya_state), compare with docker.state(), then docker.start()/stop() and
-    surya_state.set_state(). Intentionally a no-op in this scaffold."""
+def reconcile_once(docker, redis_client, broker_client=None, now=None):
+    """One reconcile tick: converge the docker container to Redis desired state
+    and apply the idle-unload policy. DockerError is recorded as state=error."""
+    now = time.time() if now is None else now
+    r = redis_client
+    settings = surya_state.get_ocr_settings(r, _env_settings())
+    try:
+        ds = docker.state()
+    except DockerError:
+        log.exception("docker state lookup failed")
+        surya_state.set_state(r, "error")
+        return
+
+    if settings["mode"] == "cpu_only":
+        surya_state.set_desired(r, "stopped")
+        surya_state.set_pinned(r, False)
+    elif (surya_state.get_desired(r) == "running" and not surya_state.is_pinned(r)
+          and _idle_expired(r, broker_client, settings["idle_timeout_min"], now)):
+        log.info("surya idle for >%s min with no work; unloading", settings["idle_timeout_min"])
+        surya_state.set_desired(r, "stopped")
+
+    desired = surya_state.get_desired(r)
+    try:
+        if desired == "running" and ds != "running":
+            docker.start()
+            # Fresh start: reset the idle clock so it is not stopped on stale last_used.
+            surya_state.touch_last_used(r, now)
+            surya_state.set_state(r, "starting")
+        elif desired == "stopped" and ds == "running":
+            docker.stop()
+            surya_state.set_state(r, "stopping")
+        else:
+            surya_state.set_state(r, "running" if ds == "running" else "stopped")
+    except DockerError:
+        log.exception("docker action failed")
+        surya_state.set_state(r, "error")
 
 
-def run(docker, redis_client, interval=5.0):
+def _env_settings():
+    """Config defaults for get_ocr_settings (the controller has no config module)."""
+    from types import SimpleNamespace
+    try:
+        idle = max(1, int(os.environ.get("SURYA_IDLE_TIMEOUT_MINUTES", "15")))
+    except ValueError:
+        idle = 15
+    mode = os.environ.get("OCR_MODE", "on_demand")
+    return SimpleNamespace(
+        ocr_mode=mode if mode in surya_state.OCR_MODES else "on_demand",
+        surya_idle_timeout_minutes=idle,
+    )
+
+
+def _idle_expired(r, broker_client, idle_min, now):
+    """True when Surya has been unused past the timeout with no work pending."""
+    last = surya_state.get_last_used(r)
+    if last is None:
+        # Never used: start the clock now rather than stopping immediately.
+        surya_state.touch_last_used(r, now)
+        return False
+    if now - last <= idle_min * 60:
+        return False
+    if surya_state.inflight_count(r) > 0:
+        return False
+    if broker_client is not None:
+        try:
+            if broker_client.llen(GPU_QUEUE) > 0:
+                return False
+        except Exception:
+            log.exception("broker LLEN failed; assuming queue is non-empty")
+            return False
+    return True
+
+
+def run(docker, redis_client, interval=5.0, broker_client=None):
     while True:
         try:
-            reconcile_once(docker, redis_client)
+            reconcile_once(docker, redis_client, broker_client)
             touch_heartbeat()
         except Exception:
             log.exception("reconcile failed")
@@ -140,8 +214,11 @@ def main(argv=None):
         project=os.environ.get("COMPOSE_PROJECT_NAME") or None,
     )
     r = redis.Redis.from_url(os.environ["REDIS_METADATA_URL"], decode_responses=True)
+    broker = None
+    if os.environ.get("CELERY_BROKER_URL"):
+        broker = redis.Redis.from_url(os.environ["CELERY_BROKER_URL"], decode_responses=True)
     touch_heartbeat()
-    run(docker, r, float(os.environ.get("RECONCILE_INTERVAL_SECONDS", "5")))
+    run(docker, r, float(os.environ.get("RECONCILE_INTERVAL_SECONDS", "5")), broker)
     return 0
 
 
