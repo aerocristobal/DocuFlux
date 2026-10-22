@@ -165,6 +165,20 @@ def check_gpu_availability():
         r.set("marker:gpu_status", "unavailable")
         return gpu_info
 
+def surya_intentionally_stopped():
+    """True when Surya is deliberately off: cpu_only mode, or the lifecycle
+    controller has it stopped and nobody wants it running. Any Redis/import
+    problem returns False so callers keep the pre-lifecycle behavior."""
+    try:
+        import surya_state
+        if surya_state.get_ocr_settings(r)["mode"] == "cpu_only":
+            return True
+        return (surya_state.get_state(r) == "stopped"
+                and surya_state.get_desired(r) == "stopped")
+    except Exception:
+        return False
+
+
 def check_inference_server():
     """Probe the shared Surya inference server (marker 2 topology).
 
@@ -182,6 +196,10 @@ def check_inference_server():
     url = os.environ.get("SURYA_INFERENCE_URL")
     if not url:
         status = "not_configured"
+    elif surya_intentionally_stopped():
+        # Intentionally off (cpu_only / on-demand idle): not a fault, so skip
+        # the probe and its recurring warning.
+        status = "idle"
     else:
         try:
             resp = requests.get(f"{url.rstrip('/')}/health", timeout=2)

@@ -206,6 +206,15 @@ def _eager_marker_warmup():
     if not app_settings.eager_marker_warmup:
         return
     try:
+        import surya_state
+        if (surya_state.get_ocr_settings(redis_client, app_settings)["mode"] == "cpu_only"
+                or (surya_state.get_state(redis_client) == "stopped"
+                    and surya_state.get_desired(redis_client) == "stopped")):
+            logging.info("Eager Marker warmup skipped: Surya is intentionally stopped.")
+            return
+    except Exception:
+        pass  # Redis/state unavailable — keep the previous behavior
+    try:
         logging.info("Story 6.2: eager Marker warmup starting...")
         conversion.get_model_dict()
         redis_client.set('marker:model_warm', 'true')
