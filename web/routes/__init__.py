@@ -13,9 +13,11 @@ def register_blueprints(app):
     from web.routes.auth import auth_bp
     from web.routes.capture import capture_bp
     from web.routes.webhooks import webhooks_bp
+    from web.routes.admin_surya import admin_surya_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(conversion_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(capture_bp)
     app.register_blueprint(webhooks_bp)
+    app.register_blueprint(admin_surya_bp)
