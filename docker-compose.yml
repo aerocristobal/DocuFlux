@@ -192,6 +192,14 @@ services:
   # restart it periodically (`docker compose restart surya-vlm`, or a
   # cron/systemd timer), and the restart policy below brings it back on crash.
   # See "Inference server recycling" in docs/ARCHITECTURE.md.
+  #
+  # On-demand lifecycle (epic pfm): with OCR_MODE=on_demand this container is
+  # started and stopped by surya-controller (below), so an `exited` surya-vlm is
+  # the NORMAL idle state, not a failure. `restart: unless-stopped` is
+  # compatible: the controller's `docker stop` is an explicit stop, which the
+  # restart policy respects; it still recovers crashes while the controller
+  # wants the server running. Idle unload (SURYA_IDLE_TIMEOUT_MINUTES, default
+  # 15) doubles as a recycle.
   surya-vlm:
     image: vllm/vllm-openai:v0.20.1
     environment:
@@ -363,37 +371,22 @@ services:
 
   # On-demand Surya lifecycle (epic pfm). The ONLY component that touches the
   # Docker API. web/worker/beat never do; they write desired state to Redis.
-  # docker-socket-proxy cannot scope to a single container (CONTAINERS=1 +
-  # POST=1 permits start/stop/etc. on any container), so the controller filters
-  # by label com.docker.compose.service=surya-vlm and the proxy is reachable
-  # only from the isolated `control` network. Everything else is denied.
+  # docker-socket-proxy runs a custom HAProxy allowlist (bead DocuFlux-6b5):
+  # only GET /_ping, GET /containers/json and POST /containers/{id}/start|stop
+  # are forwarded; everything else (incl. POST /containers/create and exec) is
+  # 403. The stock CONTAINERS=1 + POST=1 ACL is a path-prefix match and let
+  # create/exec through, so the sections are no longer toggled by env vars.
+  # Verify with deploy/docker-socket-proxy/verify.sh.
+  # It still cannot scope start/stop to one container, so the controller
+  # filters by label com.docker.compose.service=surya-vlm and the proxy is
+  # reachable only from the isolated `control` network. Residual risk: a
+  # compromised controller could stop/start any container (availability only);
+  # see docs/ARCHITECTURE.md ADR-002a.
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:0.3.0
-    environment:
-      - CONTAINERS=1
-      - POST=1
-      # Explicitly denied (default-deny, stated for auditability).
-      - IMAGES=0
-      - NETWORKS=0
-      - VOLUMES=0
-      - EXEC=0
-      - SERVICES=0
-      - SWARM=0
-      - SECRETS=0
-      - CONFIGS=0
-      - BUILD=0
-      - COMMIT=0
-      - AUTH=0
-      - INFO=0
-      - EVENTS=0
-      - PLUGINS=0
-      - SYSTEM=0
-      - TASKS=0
-      - NODES=0
-      - DISTRIBUTION=0
-      - SESSION=0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/docker-socket-proxy/haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
     networks:
       - control
     expose:

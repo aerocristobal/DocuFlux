@@ -37,6 +37,17 @@ services:
     profiles:
       - never
 
+  # The on-demand lifecycle has nothing to manage without surya-vlm, so keep the
+  # controller and the Docker-socket proxy off CPU-only hosts entirely (no
+  # needless host Docker socket exposure). Use OCR_MODE=cpu_only there.
+  docker-socket-proxy:
+    profiles:
+      - never
+
+  surya-controller:
+    profiles:
+      - never
+
   beat:
     profiles:
       - cpu

@@ -245,9 +245,9 @@ States: `queued → in_progress → completed | failed`. Each `job:{uuid}` hash 
 
 | File | Purpose | Key differences |
 |------|---------|-----------------|
-| `docker-compose.yml` | Base | redis, web, worker, beat, mcp-server, **surya-vlm** (the base deployment is the GPU topology — the worker reserves an NVIDIA device, drains the `gpu` queue, and attaches to the inference server via `SURYA_INFERENCE_URL`); hardening defaults (non-root, cap_drop ALL, no-new-privileges, noexec tmpfs) |
+| `docker-compose.yml` | Base | redis, web, worker, beat, mcp-server, **surya-vlm** (the base deployment is the GPU topology — the worker reserves an NVIDIA device, drains the `gpu` queue, and attaches to the inference server via `SURYA_INFERENCE_URL`), **surya-controller** and **docker-socket-proxy** (on-demand lifecycle of `surya-vlm`, see §7.3); hardening defaults (non-root, cap_drop ALL, no-new-privileges, noexec tmpfs) |
 | `docker-compose.gpu.yml` | GPU overlay | worker 16–18 GB memory, NVIDIA device reservation, `MARKER_ENABLED=true`; same `surya-vlm` image/env/probes as base, gated behind the `gpu` profile |
-| `docker-compose.cpu.yml` | CPU overlay | worker 2 GB memory, Marker disabled; `surya-vlm` removed from the default service set (never-activated profile) so CPU-only hosts never allocate a GPU |
+| `docker-compose.cpu.yml` | CPU overlay | worker 2 GB memory, Marker disabled; `surya-vlm` removed from the default service set (never-activated profile) so CPU-only hosts never allocate a GPU; run with `OCR_MODE=cpu_only` (the controller and proxy stay idle — nothing to start) |
 | `docker-compose.tls.yml` | Redis TLS overlay | **currently inert** — certs not generated (Backlog 4.1) |
 | `docker-compose.cloudflare.yml` | Tunnel ingress | adds cloudflared container |
 
@@ -255,7 +255,7 @@ Build: `scripts/build.sh auto` detects GPU (`nvidia-smi`) and selects `BUILD_GPU
 
 ### 5.2 Kubernetes (`deploy/k8s/`)
 
-Namespace, registry secret, Redis StatefulSet, web Deployment (2 replicas + HPA 1–10), worker Deployments (CPU and GPU variants + HPA), NetworkPolicies restricting inter-pod traffic. Manifests are not validated in CI (Backlog 5.4 adjacent).
+Namespace, registry secret, Redis StatefulSet, web Deployment (2 replicas + HPA 1–10), worker Deployments (CPU and GPU variants + HPA), NetworkPolicies restricting inter-pod traffic. Manifests are not validated in CI (Backlog 5.4 adjacent). The on-demand `surya-vlm` lifecycle (§7.3) is **Compose-only**: Kubernetes keeps `surya-vlm` always-on (`replicas: 1`), with no controller or Docker socket; scale-to-zero on k8s is deferred.
 
 ### 5.3 Hardware capability matrix
 
@@ -263,7 +263,7 @@ Namespace, registry secret, Redis StatefulSet, web Deployment (2 replicas + HPA 
 |------------|-------------|-------------|
 | Pandoc conversion | ✅ | ✅ |
 | Marker PDF→Markdown | ✅ | ❌ |
-| Scanned PDF (OCR) | ✅ (Marker) | ❌ — no fallback (Backlog Epic 2) |
+| Scanned PDF (OCR) | ✅ (Marker; Surya loaded on demand) | Tesseract — the `cpu_only` path (`OCR_MODE=cpu_only`); Marker is not offered |
 | SLM metadata | ✅ (GPU layers) | ✅ (slower) |
 | Capture assembly (OCR path) | ✅ | ❌ degraded |
 
@@ -281,6 +281,11 @@ flowchart LR
         RED --- WRK[worker]
         WRK --- MCP[mcp-server :8080]
     end
+    subgraph control[Isolated control network — internal: true]
+        CTL[surya-controller] -->|start/stop, label-filtered| DSP[docker-socket-proxy :2375]
+    end
+    CTL --- RED
+    DSP -->|/var/run/docker.sock :ro| DOCKER[(Docker daemon)]
     WRK -->|webhooks only, SSRF-guarded| NET
 ```
 
@@ -311,7 +316,7 @@ UUID v4 validation, filename sanitization (path-traversal defense), magic-byte c
 
 ### 6.6 Container hardening
 
-Non-root users in web and worker images; `cap_drop: [ALL]`; `no-new-privileges`; `tmpfs /tmp noexec,nosuid,nodev`; Redis unexposed and password-protected. Base images are pinned by digest (Backlog 5.2, done) and the MCP container runs non-root with a healthcheck (Backlog 4.5, done).
+Non-root users in web and worker images; `cap_drop: [ALL]`; `no-new-privileges`; `tmpfs /tmp noexec,nosuid,nodev`; Redis unexposed and password-protected. `surya-controller` runs `read_only` with `cap_drop: [ALL]` and `no-new-privileges`; `docker-socket-proxy` drops all capabilities, runs a custom HAProxy allowlist (`deploy/docker-socket-proxy/haproxy.cfg.template`) that forwards only `GET /_ping`, `GET /containers/json` and `POST /containers/{id}/start|stop` (everything else, including `POST /containers/create` and exec, gets 403), drops all capabilities, and joins only the `internal: true` `control` network. **Residual risk:** the proxy still cannot scope start/stop to one container, so a compromised controller could stop or start any container on the host (availability impact); it can no longer create containers or exec, which closes the host-escape path found in DocuFlux-6b5 (see §7.3 and ADR-002a). `deploy/docker-socket-proxy/verify.sh` checks the allowlist against the real image. Base images are pinned by digest (Backlog 5.2, done) and the MCP container runs non-root with a healthcheck (Backlog 4.5, done).
 
 ### 6.7 OSCAL control mapping
 
@@ -339,11 +344,18 @@ Single Pydantic Settings class (`config.py`); precedence Docker secrets → envi
 
 #### Inference server recycling
 
-**Decision:** recycle the shared `surya-vlm` server on a bounded deployment schedule; never from the worker.
+**Decision:** recycle the shared `surya-vlm` server on a bounded deployment schedule and by idle unload; never from the worker.
 
 Workers already recycle their own process every 50 tasks (`max_tasks_per_child=50`), but that only bounds worker-process memory. The shared vLLM server is a separate long-lived process, and `benchmarks/marker_v2/REPORT.md` observed one silent degeneration (a 14× repetition loop) on the tenth document of a sequential batch — evidence of state accumulating in the shared server rather than in the client. Worker-driven teardown is the wrong tool: many thin workers share one server, and `tests/unit/test_worker.py` pins that a completed conversion must NOT stop it.
 
 **Mechanism:** Compose — `docker compose restart surya-vlm` on a schedule (e.g. daily cron/systemd timer); `restart: unless-stopped` recovers crashes. Kubernetes — `kubectl rollout restart deployment/surya-vlm -n docuflux` on a schedule; `restartPolicy: Always` recovers crashes. The output-quality bound (`excess_output` in `shared/quality.py`) is the first line of defense against a degenerate run, and periodic recycling bounds how long a silent degradation can persist. Rationale is pinned in-manifest in `docker-compose.yml` and `deploy/k8s/surya-vlm.yaml`.
+
+**On-demand lifecycle (Compose only):** `surya-controller` is the **sole owner of start/stop** for `surya-vlm`; it reconciles the container against desired state held in Redis (`shared/surya_state.py`) every few seconds. "Never from the worker" still holds: the worker (and the web routes) only write desired state to Redis — they never touch the Docker API. Behaviour is selected by `OCR_MODE`:
+
+- `on_demand` (default): a conversion that needs Marker requests a load; the worker waits up to `SURYA_COLD_START_TIMEOUT_SECONDS` (default 600) for the server to become healthy. After `SURYA_IDLE_TIMEOUT_MINUTES` (default 15) with no running or queued Marker work, the controller unloads it and VRAM is freed. An idle unload is also a recycle, so the server is restarted from a clean process on the next demand.
+- `cpu_only`: Surya is never started and the controller forces desired state to `stopped`; scanned PDFs use Tesseract and Marker formats are hidden from the UI.
+
+An admin can load or unload manually (`/api/v1/admin/surya`, `ADMIN_API_SECRET` bearer) and change mode and timeouts at runtime (`/api/v1/admin/ocr-settings`, stored in `settings:ocr` in Redis, seeded from the environment). A manual load **pins** the server so idle unload skips it until it is unloaded manually. Because the controller stops the container with `docker stop` and the service uses `restart: unless-stopped`, an `exited` `surya-vlm` is the normal idle state, not a failure.
 
 ---
 
@@ -362,7 +374,7 @@ Workers already recycle their own process every 50 tasks (`max_tasks_per_child=5
 ### ADR-002a: Shared Surya VLM inference server (marker 2)
 **Decision:** Marker 2 model weights live in a dedicated `surya-vlm` service (vLLM serving `datalab-to/surya-ocr-2`); workers attach via `SURYA_INFERENCE_URL=http://surya-vlm:8000` with `SURYA_INFERENCE_AUTOSTART=false`.
 **Rationale:** The VLM owns the GPU once, and many thin workers share it; workers hold no CUDA context for the VLM, so GPU worker concurrency can rise (2 in k8s) without multiplying VRAM.
-**Consequences:** The inference server is a new single point of failure — if it is down, every marker/hybrid job fails at attach time; the server must be healthy before workers can convert. Per-task `torch.cuda.empty_cache()` no longer applies (see §7.3).
+**Consequences:** The inference server is a single point of failure for Marker — but *down is no longer always a failure*: in `on_demand` mode it is stopped when idle and started by the controller on the first Marker job (cold start latency up to `SURYA_COLD_START_TIMEOUT_SECONDS`); a job fails only if the load does not complete in that window, and in `cpu_only` mode Marker is not attempted. Per-task `torch.cuda.empty_cache()` no longer applies (see §7.3). The lifecycle adds a **control-plane dependency**: `surya-controller` → `docker-socket-proxy` → the host Docker socket. The proxy runs a custom HAProxy allowlist (`deploy/docker-socket-proxy/haproxy.cfg.template`) forwarding only `GET /_ping`, `GET /containers/json` and `POST /containers/{id}/start|stop`; all else is 403. It still cannot scope start/stop to one container, so only the controller's `com.docker.compose.service=surya-vlm` label filter and the `internal: true` `control` network limit which container a compromised controller can start or stop. **Resolved (DocuFlux-6b5):** the stock image's `CONTAINERS` ACL is the prefix regex `^(/v[\d\.]+)?/containers`, so under `POST=1` it also forwarded `POST /containers/create` and `POST /containers/{id}/exec` (a host-escape path); the custom template anchors each allowed route and denies the rest, verified against `tecnativa/docker-socket-proxy` 0.3.0 with `deploy/docker-socket-proxy/verify.sh`. **Remaining risk:** a compromised controller can still stop or start any container (denial of service). Mitigations: no host port, isolated network, `cap_drop: ALL`, read-only rootfs on the controller. A rootless Docker daemon would remove the residual.
 
 ### ADR-003: Redis as the only datastore
 **Decision:** Job metadata, capture sessions, API keys, and rate limits all live in Redis; no RDBMS.

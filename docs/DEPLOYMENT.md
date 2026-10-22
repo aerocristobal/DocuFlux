@@ -34,6 +34,8 @@ Environment variables are managed via `docker-compose.yml`. For production, it i
 
 3.  **GPU Configuration (Optional but Recommended)**
     To enable fast PDF conversions with Marker, ensure NVIDIA drivers are installed and the container runtime is configured. Under Marker v2 the worker is a thin client: model weights live in the shared `surya-vlm` inference server, which owns the GPU. The worker attaches via `SURYA_INFERENCE_URL`. See [BUILD.md](../BUILD.md) for GPU vs CPU build profiles.
+
+    By default (`OCR_MODE=on_demand`) the `surya-controller` starts `surya-vlm` when a Marker job needs it and stops it after `SURYA_IDLE_TIMEOUT_MINUTES` (default 15) of inactivity, so an `exited` `surya-vlm` is normal. Set `OCR_MODE=cpu_only` to never load it, and set `ADMIN_API_SECRET` to use the manual load/unload admin API. See [CONFIGURATION.md](CONFIGURATION.md) and ARCHITECTURE §7.3. The lifecycle is Compose-only; Kubernetes keeps `surya-vlm` always-on.
     ```yaml
     # In docker-compose.gpu.yml — the surya-vlm service owns the GPU;
     # the worker also reserves a device for local PDF/SLM processing.

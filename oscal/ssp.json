@@ -1,9 +1,9 @@
 {
   "system-security-plan": {
-    "uuid": "8a73dab8-65ae-4b6f-8cb4-0ae8b22d2e58",
+    "uuid": "a3fcfb94-c677-4bd2-a712-b9e7e2da619d",
     "metadata": {
       "title": "DocuFlux System Security Plan",
-      "last-modified": "2026-07-10T00:00:00Z",
+      "last-modified": "2026-10-22T03:18:36Z",
       "version": "1.0.0",
       "oscal-version": "1.1.2",
       "roles": [
@@ -80,7 +80,7 @@
         "state": "operational"
       },
       "authorization-boundary": {
-        "description": "The DocuFlux system boundary encompasses five containerized services (web, worker, beat, redis, mcp-server) deployed within a single Docker Compose project or Kubernetes namespace (docuflux). External traffic enters through a Cloudflare Tunnel providing HTTPS termination. The boundary includes all persistent storage volumes, the Redis data store, and the internal container network."
+        "description": "The DocuFlux system boundary encompasses the containerized services web, worker (with the light-lane worker), beat, redis, mcp-server and surya-vlm (the shared Surya VLM inference server), plus, on Docker Compose, the surya-controller and docker-socket-proxy services that manage the on-demand lifecycle of surya-vlm. All run within a single Docker Compose project or Kubernetes namespace (docuflux); the controller and proxy are Compose-only. External traffic enters through a Cloudflare Tunnel providing HTTPS termination. The boundary includes all persistent storage volumes, the Redis data store, the internal container network and the internal-only control network that connects surya-controller to docker-socket-proxy. The host Docker daemon and its socket are outside the boundary but are reachable through the proxy."
       }
     },
     "system-implementation": {
@@ -136,6 +136,33 @@
           "type": "software",
           "title": "DocuFlux Beat Scheduler",
           "description": "Celery Beat scheduler triggering periodic maintenance tasks including file cleanup and retention enforcement.",
+          "status": {
+            "state": "operational"
+          }
+        },
+        {
+          "uuid": "c4b1c06d-7920-40f4-b470-16f53ad7ead3",
+          "type": "software",
+          "title": "DocuFlux Surya VLM Inference Server",
+          "description": "vLLM-based inference server (vllm/vllm-openai, datalab-to/surya-ocr-2) holding the Marker v2 OCR/layout model weights and the GPU. Loaded on demand and unloaded when idle under the control of the Surya Controller on Docker Compose; always-on on Kubernetes.",
+          "status": {
+            "state": "operational"
+          }
+        },
+        {
+          "uuid": "3cafcfa2-f856-452a-a964-2359532c30b9",
+          "type": "software",
+          "title": "DocuFlux Surya Controller",
+          "description": "Python reconcile service and sole owner of start/stop for the surya-vlm container. Converges the container to the desired state held in Redis, applies the idle-unload policy, and reaches the Docker API only through the Docker Socket Proxy, filtering by the compose service label.",
+          "status": {
+            "state": "operational"
+          }
+        },
+        {
+          "uuid": "a0538adb-aea7-427b-a0d6-76d38e911751",
+          "type": "software",
+          "title": "DocuFlux Docker Socket Proxy",
+          "description": "tecnativa/docker-socket-proxy 0.3.0 (HAProxy) exposing a filtered subset of the Docker Engine API to the Surya Controller. Mounts the host Docker socket read-only and is reachable only from the internal-only control network.",
           "status": {
             "state": "operational"
           }
@@ -299,6 +326,66 @@
               "component-uuid": "84a42ae4-18ae-49d9-a781-2f74aafb3379",
               "uuid": "54c55ba2-251e-4084-a099-ce243f233ee4",
               "description": "The web service implements comprehensive input validation through the validation module (web/validation.py): (1) sanitize_filename prevents path traversal attacks by removing ../ sequences, replacing dangerous characters, and limiting filename length. (2) validate_file_content_type verifies file content matches declared format using magic byte detection (PDF %PDF header, ZIP-based PK header for DOCX/ODT/EPUB, UTF-8/Latin-1 encoding for text formats). (3) require_valid_uuid decorator validates UUID format on all job ID parameters. (4) validate_webhook_url prevents SSRF by resolving hostnames and blocking private/reserved/loopback/link-local IP addresses, enforcing HTTPS, and supporting allowlist/blocklist filtering. (5) sanitize_string removes null bytes and enforces length limits on all text inputs. (6) Pandoc conversion options are validated against an allowed schema before execution.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "390ee80d-2cdf-4490-9176-df45754dee47",
+          "control-id": "ac-6",
+          "by-components": [
+            {
+              "component-uuid": "3cafcfa2-f856-452a-a964-2359532c30b9",
+              "uuid": "a175d76d-d630-4ec7-ba9d-0d2d3c063da9",
+              "description": "The Surya Controller is the sole component that starts or stops surya-vlm. It filters every Docker operation by the label com.docker.compose.service=surya-vlm, runs read_only with cap_drop ALL and no-new-privileges, and is reachable by no other service. The web, worker and beat services never access the Docker API; they only write desired state to Redis.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "a0538adb-aea7-427b-a0d6-76d38e911751",
+              "uuid": "6bd5e1f8-4ec5-46c4-ade3-32bfc7b10988",
+              "description": "The Docker socket is mounted read-only into the Docker Socket Proxy alone, which runs a custom HAProxy allowlist (deploy/docker-socket-proxy/haproxy.cfg.template) forwarding only GET /_ping, GET /containers/json and POST /containers/{id}/start|stop, denies everything else with 403, and drops all capabilities. The allowlist is verified against tecnativa/docker-socket-proxy 0.3.0 by deploy/docker-socket-proxy/verify.sh. RESIDUAL RISK: the proxy cannot scope start/stop to one container, so a compromised controller could stop or start any container on the host (availability impact). Container create and exec, previously forwarded by the stock CONTAINERS ACL (a host-escape path), are blocked (bead DocuFlux-6b5). Compensating controls are the label filter in the controller, the internal-only control network, dropped capabilities, and no exposure to the host or external network. A rootless Docker daemon would remove the remaining residual.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "c4b1c06d-7920-40f4-b470-16f53ad7ead3",
+              "uuid": "c358289b-8758-41ee-9ea7-c53f97381be4",
+              "description": "The inference server runs with cap_drop ALL and no-new-privileges and holds no Docker socket, so it cannot manage other containers.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "66a9b521-b526-4787-8ef2-be87f5de4fe0",
+          "control-id": "sc-7",
+          "by-components": [
+            {
+              "component-uuid": "a0538adb-aea7-427b-a0d6-76d38e911751",
+              "uuid": "d95ed55d-8cda-4c61-a74e-7d2e438fb335",
+              "description": "The Docker Socket Proxy listens on port 2375 only on the control network, which is declared internal: true, joined only by the proxy and surya-controller, and never published to the host.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "3cafcfa2-f856-452a-a964-2359532c30b9",
+              "uuid": "1f67408a-2134-4535-868d-19429b00f7fb",
+              "description": "The Surya Controller joins only the default network (to reach Redis) and the internal-only control network; it publishes no ports and exposes no listener.",
+              "implementation-status": {
+                "state": "implemented"
+              }
+            },
+            {
+              "component-uuid": "c4b1c06d-7920-40f4-b470-16f53ad7ead3",
+              "uuid": "e8ca697f-149c-46cd-80ac-065c82537816",
+              "description": "The Surya VLM inference server exposes port 8000 only on the internal Docker network with no host port binding; only workers attach to it. In Kubernetes, NetworkPolicy surya-vlm-policy restricts ingress to worker pods.",
               "implementation-status": {
                 "state": "implemented"
               }
