@@ -116,7 +116,8 @@ def api_v1_ocr_settings_put():
     try:
         surya_state.set_ocr_settings(r, mode=data.get('mode'),
                                     idle_timeout_min=data.get('idle_timeout_min'))
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+    except ValueError:
+        return jsonify({'error': "mode must be 'cpu_only' or 'on_demand'; "
+                                 "idle_timeout_min must be an integer >= 1"}), 400
     _emit_state_update()
     return jsonify(surya_state.get_ocr_settings(r, _app_mod.app_settings))

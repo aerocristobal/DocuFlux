@@ -58,6 +58,10 @@ def ensure_inference_server(task_id, job_id=None):
         mode = surya_state.get_ocr_settings(_pkg.redis_client, _pkg.app_settings)["mode"]
     except Exception:
         mode = None
+    if mode == "on_demand":
+        # Re-assert in case the controller's idle unload overwrote the web
+        # tier's request; harmless when it is already running.
+        _best_effort(surya_state.set_desired, "running")
     if mode == "cpu_only" or _healthy(url):
         return
 

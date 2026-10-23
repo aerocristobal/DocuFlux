@@ -119,6 +119,13 @@ class TestOnDemand:
         assert r.get(ss.DESIRED_KEY) == 'running'
         assert _sent_queues() == ['gpu']
 
+    def test_request_restarts_idle_clock(self, client, r, endpoint, fmt):
+        _set_mode(r, 'on_demand')
+        assert ss.get_last_used(r) is None
+        resp = _submit(client, r, endpoint, fmt)
+        assert resp.status_code in (200, 202), resp.get_data(as_text=True)
+        assert ss.get_last_used(r) is not None
+
 
 @pytest.mark.parametrize('endpoint', ENDPOINTS)
 class TestNonAiFormatsUnaffected:

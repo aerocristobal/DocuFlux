@@ -45,6 +45,18 @@ def test_timeout_raises_clear_error(env):
             sl.ensure_inference_server("t1", "j1")
 
 
+def test_on_demand_reasserts_desired_running_even_when_healthy(env):
+    env.healthy.return_value = True
+    sl.ensure_inference_server("t1", "j1")
+    env.state.set_desired.assert_called_once_with(env.pkg.redis_client, "running")
+
+
+def test_cpu_only_does_not_request_load(env):
+    env.state.get_ocr_settings.return_value = {"mode": "cpu_only", "idle_timeout_min": 15}
+    sl.ensure_inference_server("t1", "j1")
+    env.state.set_desired.assert_not_called()
+
+
 def test_cpu_only_does_not_wait(env):
     env.state.get_ocr_settings.return_value = {"mode": "cpu_only", "idle_timeout_min": 15}
     env.healthy.return_value = False

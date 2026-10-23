@@ -63,3 +63,42 @@ def test_unavailable_recorded_when_nothing_published():
     _publish(fr, UNAVAILABLE)
     assert fr.get("marker:gpu_status") == "unavailable"
     assert fr.hget("marker:gpu_info", "error") == "No module named 'torch'"
+
+
+def test_available_keys_carry_ttl():
+    fr = fakeredis.FakeRedis(decode_responses=True)
+    _publish(fr, AVAILABLE)
+    mod = _load_warmup()
+    assert 0 < fr.ttl("marker:gpu_status") <= mod.GPU_STATUS_TTL_SECONDS
+    assert 0 < fr.ttl("marker:gpu_info") <= mod.GPU_STATUS_TTL_SECONDS
+
+
+def test_refresh_extends_ttl_only_after_publishing_available():
+    mod = _load_warmup()
+    fr = fakeredis.FakeRedis(decode_responses=True)
+    fr.set("marker:gpu_status", "available", ex=5)
+    fr.hset("marker:gpu_info", mapping={"status": "available"})
+    fr.expire("marker:gpu_info", 5)
+    with patch.object(mod, "r", fr), patch.object(mod, "_gpu_published", False):
+        mod.refresh_gpu_status()
+    assert fr.ttl("marker:gpu_status") <= 5
+    with patch.object(mod, "r", fr), patch.object(mod, "_gpu_published", True):
+        mod.refresh_gpu_status()
+    assert fr.ttl("marker:gpu_status") > 5
+    assert fr.ttl("marker:gpu_info") > 5
+
+
+def test_status_expires_when_worker_stops_refreshing():
+    fr = fakeredis.FakeRedis(decode_responses=True)
+    _publish(fr, AVAILABLE)
+    fr.delete("marker:gpu_status")  # what TTL expiry does
+    _publish(fr, UNAVAILABLE)
+    assert fr.get("marker:gpu_status") == "unavailable"
+
+
+def test_refresh_swallows_redis_errors():
+    mod = _load_warmup()
+    broken = MagicMock()
+    broken.pipeline.side_effect = RuntimeError("redis down")
+    with patch.object(mod, "r", broken), patch.object(mod, "_gpu_published", True):
+        mod.refresh_gpu_status()

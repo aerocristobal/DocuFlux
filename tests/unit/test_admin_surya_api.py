@@ -126,6 +126,12 @@ class TestOcrSettings:
         assert client.put('/api/v1/admin/ocr-settings', json=body, headers=AUTH).status_code == 400
         assert r.h.get(ss.SETTINGS_KEY) is None
 
+    def test_put_invalid_error_is_fixed_text(self, client, r):
+        err = client.put('/api/v1/admin/ocr-settings', json={'mode': 'secret-leak-probe'},
+                         headers=AUTH).get_json()['error']
+        assert 'secret-leak-probe' not in err
+        assert 'cpu_only' in err and 'idle_timeout_min' in err
+
     def test_put_non_object_400(self, client, r):
         assert client.put('/api/v1/admin/ocr-settings', json=[1], headers=AUTH).status_code == 400
 

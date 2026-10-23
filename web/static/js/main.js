@@ -429,21 +429,23 @@ function updateSuryaStatus(d) {
     }
 }
 
-// Admin secret: prompted on first write, kept for the browser session, re-prompted on 401/403.
+// Admin secret: prompted on first write, held in memory only (never written to
+// storage, so XSS cannot read it back after a reload), re-prompted on 401/403.
+let adminSecret = null;
 async function suryaAdminRequest(method, url, body) {
     for (let attempt = 0; attempt < 2; attempt++) {
-        let secret = sessionStorage.getItem('adminSecret');
+        let secret = adminSecret;
         if (!secret) {
             secret = window.prompt('Admin secret:');
             if (!secret) return null;
-            sessionStorage.setItem('adminSecret', secret);
+            adminSecret = secret;
         }
         const r = await fetch(url, {
             method,
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${secret}` },
             body: JSON.stringify(body),
         });
-        if (r.status === 401 || r.status === 403) { sessionStorage.removeItem('adminSecret'); continue; }
+        if (r.status === 401 || r.status === 403) { adminSecret = null; continue; }
         return r;
     }
     showAlert('error', 'Admin secret rejected.');

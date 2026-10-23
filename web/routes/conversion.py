@@ -154,6 +154,9 @@ def ensure_ocr_allowed(from_format):
                                  'use the OCR engine instead'}), 409
     if mode == 'on_demand':
         surya_state.set_desired(_app_mod.redis_client, 'running')
+        # Restart the idle clock so a request arriving just before the idle
+        # timeout cannot be unloaded out from under the queued job.
+        surya_state.touch_last_used(_app_mod.redis_client)
     return None
 
 
