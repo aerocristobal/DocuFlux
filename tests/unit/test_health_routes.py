@@ -192,3 +192,54 @@ class TestServiceStatusGpuInfo:
         with patch('web.app.check_disk_space', return_value=False):
             body = client.get('/api/status/services').get_json()
         assert body['disk_space'] == 'low'
+
+
+class TestServiceStatusSurya:
+    """Surya lifecycle fields on /api/status/services (DocuFlux-pfm.9)."""
+
+    def _redis(self, mock_redis, *, state=None, gpu_status=None, vram=None, settings=None):
+        values = {'marker:gpu_status': gpu_status, 'surya:state': state}
+
+        def hgetall(key):
+            return (settings or {}) if key == 'settings:ocr' else {}
+
+        mock_redis.get.side_effect = lambda key: values.get(key)
+        mock_redis.hgetall.side_effect = hgetall
+        mock_redis.hget.side_effect = lambda key, field: vram
+
+    def test_defaults_when_nothing_is_stored(self, client, mock_redis):
+        self._redis(mock_redis)
+        body = client.get('/api/status/services').get_json()
+        assert body['surya_state'] == 'stopped'
+        assert body['ocr_mode'] == 'on_demand'
+        assert body['idle_timeout_min'] == 15
+        assert body['surya_supported'] is False
+
+    def test_reports_stored_state_and_settings(self, client, mock_redis):
+        self._redis(mock_redis, state='running', gpu_status='available', vram='24',
+                    settings={'mode': 'cpu_only', 'idle_timeout_min': '30'})
+        body = client.get('/api/status/services').get_json()
+        assert body['surya_state'] == 'running'
+        assert body['ocr_mode'] == 'cpu_only'
+        assert body['idle_timeout_min'] == 30
+
+    @pytest.mark.parametrize('vram,expected', [('24', True), ('16', True), ('8', False), (None, False)])
+    def test_surya_supported_follows_vram(self, client, mock_redis, vram, expected):
+        self._redis(mock_redis, gpu_status='available', vram=vram)
+        body = client.get('/api/status/services').get_json()
+        assert body['surya_supported'] is expected
+
+    def test_no_gpu_is_unsupported(self, client, mock_redis):
+        self._redis(mock_redis, gpu_status='unavailable', vram='24')
+        assert client.get('/api/status/services').get_json()['surya_supported'] is False
+
+    def test_redis_failure_falls_back_to_safe_defaults(self, client, mock_redis):
+        mock_redis.get.side_effect = ConnectionError('redis down')
+        mock_redis.hgetall.side_effect = ConnectionError('redis down')
+        response = client.get('/api/status/services')
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body['surya_state'] == 'stopped'
+        assert body['ocr_mode'] == 'on_demand'
+        assert body['idle_timeout_min'] == 15
+        assert body['surya_supported'] is False

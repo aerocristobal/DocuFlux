@@ -7,6 +7,7 @@ import logging
 from flask import Blueprint, jsonify
 
 import web.app as _app_mod
+import surya_state
 
 health_bp = Blueprint('health', __name__)
 
@@ -174,5 +175,12 @@ def service_status():
         logging.error(f"Error checking GPU status: {e}")
         status['gpu_status'] = 'unavailable'
         status['gpu_info'] = {"status": "unavailable", "error": "GPU status unavailable"}
+
+    try:
+        status.update(surya_state.status_snapshot(_app_mod.redis_client, _app_mod.app_settings))
+    except Exception as e:
+        logging.error(f"Error checking Surya status: {e}")
+        status.update({'surya_state': 'stopped', 'ocr_mode': 'on_demand',
+                       'idle_timeout_min': 15, 'surya_supported': False})
 
     return jsonify(status)

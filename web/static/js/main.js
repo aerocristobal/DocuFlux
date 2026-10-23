@@ -332,6 +332,7 @@ async function checkServices() {
 
         // GPU status — reuse same response, no second fetch
         updateGPUStatus(d);
+        updateSuryaStatus(d);
     } catch(e) { console.error('checkServices error:', e); }
 }
 setInterval(checkServices, 10000);
@@ -368,6 +369,7 @@ async function refreshGPUDetails() {
         const r = await fetch('/api/status/services');
         const data = await r.json();
         const gpu_info = data.gpu_info || {};
+        updateSuryaStatus(data);
 
         const statusEl = document.getElementById('modal-gpu-status');
         statusEl.textContent = gpu_info.status || 'unknown';
@@ -390,6 +392,90 @@ async function refreshGPUDetails() {
     } catch(e) { console.error('Error refreshing GPU details:', e); }
 }
 
+// --- Surya lifecycle (on-demand AI engine) ---
+const SURYA_MARKER_FORMATS = ['pdf_marker', 'pdf_hybrid', 'pdf_marker_slm'];
+const SURYA_BADGE = { running: 'available', error: 'unavailable' };
+let suryaBusy = false;
+
+function updateSuryaStatus(d) {
+    if (d.surya_state === undefined) return;
+    const section = document.getElementById('surya-section');
+    const hint = document.getElementById('surya-unsupported-hint');
+    if (!section || !hint) return;
+
+    section.classList.toggle('hidden', !d.surya_supported);
+    hint.classList.toggle('hidden', !!d.surya_supported);
+
+    const badge = document.getElementById('modal-surya-state');
+    badge.textContent = d.surya_state;
+    badge.className = 'status-badge status-' + (SURYA_BADGE[d.surya_state] || 'unknown');
+
+    const modeSel = document.getElementById('ocr-mode-select');
+    if (modeSel && modeSel.value !== d.ocr_mode) modeSel.value = d.ocr_mode;
+    const idleIn = document.getElementById('idle-timeout-input');
+    if (idleIn && document.activeElement !== idleIn) idleIn.value = d.idle_timeout_min;
+    const cpuOnly = d.ocr_mode === 'cpu_only';
+    document.getElementById('surya-load-btn').disabled = cpuOnly || suryaBusy || ['starting', 'running'].includes(d.surya_state);
+    document.getElementById('surya-unload-btn').disabled = suryaBusy || ['stopped', 'stopping'].includes(d.surya_state);
+
+    // cpu_only: AI formats are refused server-side, so don't offer them.
+    SURYA_MARKER_FORMATS.forEach(key => {
+        const opt = document.querySelector(`#from_format md-select-option[value="${key}"]`);
+        if (opt) opt.classList.toggle('hidden', cpuOnly);
+    });
+    if (cpuOnly && SURYA_MARKER_FORMATS.includes(fromSelect.value)) {
+        fromSelect.value = '';
+        updateToOptions('');
+    }
+}
+
+// Admin secret: prompted on first write, held in memory only (never written to
+// storage, so XSS cannot read it back after a reload), re-prompted on 401/403.
+let adminSecret = null;
+async function suryaAdminRequest(method, url, body) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        let secret = adminSecret;
+        if (!secret) {
+            secret = window.prompt('Admin secret:');
+            if (!secret) return null;
+            adminSecret = secret;
+        }
+        const r = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${secret}` },
+            body: JSON.stringify(body),
+        });
+        if (r.status === 401 || r.status === 403) { adminSecret = null; continue; }
+        return r;
+    }
+    showAlert('error', 'Admin secret rejected.');
+    return null;
+}
+
+async function suryaWrite(method, url, body) {
+    suryaBusy = true;
+    try {
+        const r = await suryaAdminRequest(method, url, body);
+        if (r && !r.ok) {
+            const err = await r.json().catch(() => ({}));
+            showAlert('error', err.error || `Request failed (${r.status})`);
+        }
+    } catch (e) { console.error('Surya admin request failed:', e); }
+    suryaBusy = false;
+    refreshGPUDetails();
+}
+
+document.getElementById('surya-load-btn')?.addEventListener('click',
+    () => suryaWrite('POST', '/api/v1/admin/surya', { action: 'load' }));
+document.getElementById('surya-unload-btn')?.addEventListener('click',
+    () => suryaWrite('POST', '/api/v1/admin/surya', { action: 'unload' }));
+document.getElementById('ocr-mode-select')?.addEventListener('change', (e) =>
+    suryaWrite('PUT', '/api/v1/admin/ocr-settings', { mode: e.target.value }));
+document.getElementById('idle-timeout-input')?.addEventListener('change', (e) => {
+    const minutes = parseInt(e.target.value, 10);
+    if (minutes >= 1) suryaWrite('PUT', '/api/v1/admin/ocr-settings', { idle_timeout_min: minutes });
+});
+
 // GPU chip click — open modal and refresh details
 const gpuChip = document.getElementById('gpu-status-chip');
 if (gpuChip) {
@@ -410,4 +496,9 @@ if (gpuModalCloseBtn) {
 // WebSocket listener for real-time GPU status updates from warmup
 socket.on('gpu_status_update', (data) => {
     updateGPUStatus(data);
+});
+
+// Surya lifecycle changes pushed by the admin API (controller-driven transitions arrive via the 10s poll)
+socket.on('surya_state_update', (data) => {
+    updateSuryaStatus(data);
 });

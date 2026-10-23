@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     -   The `env` argument (e.g., `env="UPLOAD_FOLDER"`) explicitly links the Python attribute to an environment variable name.
 -   `SecretStr` is used for sensitive fields (like `secret_key`) to prevent accidental logging or exposure.
 
+## On-Demand OCR Settings
+
+These settings control the Surya (Marker) lifecycle on Docker Compose (see [ARCHITECTURE.md](ARCHITECTURE.md) §7.3). They seed `settings:ocr` in Redis; an admin can override mode and timeouts at runtime via `PUT /api/v1/admin/ocr-settings`.
+
+| Setting (env var) | Default | Meaning |
+|---|---|---|
+| `ocr_mode` (`OCR_MODE`) | `on_demand` | `on_demand`: Surya is loaded when a Marker job needs it and unloaded when idle. `cpu_only`: Surya is never started; scanned PDFs use Tesseract. |
+| `surya_idle_timeout_minutes` (`SURYA_IDLE_TIMEOUT_MINUTES`) | `15` | Minutes with no Marker work before the controller unloads Surya (a manual load pins it and skips this). Minimum 1. |
+| `surya_cold_start_timeout_seconds` (`SURYA_COLD_START_TIMEOUT_SECONDS`) | `600` | How long a job waits for Surya to become healthy after a load request before failing. Minimum 1. |
+| `ADMIN_API_SECRET` | none | Bearer secret for `GET/POST /api/v1/admin/surya` (manual load/unload) and `/api/v1/admin/ocr-settings`, in addition to key management. |
+
 ## Overriding Settings
 
 You can override any setting by:

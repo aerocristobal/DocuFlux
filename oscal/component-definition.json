@@ -1,9 +1,9 @@
 {
   "component-definition": {
-    "uuid": "ac4bf039-2da6-458a-972c-bf8f999ec25a",
+    "uuid": "a4e18d80-386c-4016-b319-c1abfb78c361",
     "metadata": {
       "title": "DocuFlux Component Definition",
-      "last-modified": "2026-07-10T00:00:00Z",
+      "last-modified": "2026-10-22T03:18:36Z",
       "version": "1.0.0",
       "oscal-version": "1.1.2",
       "roles": [
@@ -200,6 +200,153 @@
                 "uuid": "14489921-66de-48d2-8d08-e20bb439ceff",
                 "control-id": "sc-8",
                 "description": "The MCP server operates exclusively on the internal Docker bridge network with no host port binding, ensuring all communication remains within the container network boundary. In Kubernetes deployments, NetworkPolicy rules restrict ingress to only the web and worker services within the docuflux namespace."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "uuid": "c4b1c06d-7920-40f4-b470-16f53ad7ead3",
+        "type": "software",
+        "title": "DocuFlux Surya VLM Inference Server",
+        "description": "vLLM-based inference server (vllm/vllm-openai, datalab-to/surya-ocr-2) holding the Marker v2 OCR/layout model weights and the GPU. Loaded on demand and unloaded when idle under the control of the Surya Controller on Docker Compose; always-on on Kubernetes.",
+        "purpose": "Provides GPU OCR/layout inference to Marker workers over an internal-only endpoint",
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": [
+              "72a08160-e279-4cc9-b49a-893847e22ff6"
+            ]
+          }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "dc324e03-ceb6-4b54-9fe2-80de805652b8",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json",
+            "description": "NIST SP 800-53 Rev 5 Moderate baseline control implementations for the DocuFlux Surya VLM Inference Server.",
+            "implemented-requirements": [
+              {
+                "uuid": "8845f2fa-fa8b-4501-af66-291ea88193b1",
+                "control-id": "ac-3",
+                "description": "The inference server exposes port 8000 only on the internal Docker network (expose, no host port binding), so only services on the compose project network can reach it. In Kubernetes a NetworkPolicy (surya-vlm-policy) limits ingress to worker pods."
+              },
+              {
+                "uuid": "594f91c1-b29c-4d50-bdd1-51bc8e75c9eb",
+                "control-id": "ac-6",
+                "description": "The container runs with cap_drop ALL and no-new-privileges, holds no Docker socket, and has no ability to start, stop or inspect other containers."
+              },
+              {
+                "uuid": "99682730-02c6-4c67-ad93-72c142abd007",
+                "control-id": "cm-7",
+                "description": "Only the vLLM OpenAI-compatible server is run, pinned to an image tag (vllm/vllm-openai:v0.20.1) with the model and memory budget set through explicit environment variables."
+              },
+              {
+                "uuid": "27522a56-d035-4c74-bfef-d4734a9ff54a",
+                "control-id": "sc-7",
+                "description": "Boundary protection is enforced by keeping the server on the internal network with no published port; only workers attach via SURYA_INFERENCE_URL."
+              },
+              {
+                "uuid": "1a6a6f21-fc39-4b70-99a7-15b3d329c9de",
+                "control-id": "sc-39",
+                "description": "The model weights and GPU context are isolated in a dedicated container process separate from the worker processes, which hold no CUDA context for the VLM; in on_demand mode the process is stopped when idle, releasing VRAM and discarding accumulated process state."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "uuid": "3cafcfa2-f856-452a-a964-2359532c30b9",
+        "type": "software",
+        "title": "DocuFlux Surya Controller",
+        "description": "Python reconcile service and sole owner of start/stop for the surya-vlm container. Converges the container to the desired state held in Redis, applies the idle-unload policy, and reaches the Docker API only through the Docker Socket Proxy, filtering by the compose service label.",
+        "purpose": "Manages the on-demand lifecycle of the Surya inference server",
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": [
+              "72a08160-e279-4cc9-b49a-893847e22ff6"
+            ]
+          }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "aba890f9-63d9-41ea-a909-1e85ceda1172",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json",
+            "description": "NIST SP 800-53 Rev 5 Moderate baseline control implementations for the DocuFlux Surya Controller.",
+            "implemented-requirements": [
+              {
+                "uuid": "f30cb899-0b60-46b0-a538-540e01b4de30",
+                "control-id": "ac-3",
+                "description": "The controller acts only on desired state written to Redis, which is changed solely through web admin endpoints protected by the ADMIN_API_SECRET bearer token and by the worker's demand signalling. It exposes no network listener."
+              },
+              {
+                "uuid": "56aa16bd-4b97-4c68-9a7a-d405a9a353a5",
+                "control-id": "ac-6",
+                "description": "Least privilege: the controller filters every Docker operation by the label com.docker.compose.service=surya-vlm, runs read_only with cap_drop ALL and no-new-privileges, and is the only component permitted to reach the Docker API. Residual risk: the socket proxy does not enforce this label filter, so a compromised controller could stop or start any container (availability impact only; container create and exec are blocked, see Docker Socket Proxy)."
+              },
+              {
+                "uuid": "a51f13fb-f0d6-4291-afc6-42db2f478852",
+                "control-id": "cm-7",
+                "description": "The controller image contains only the reconcile loop, the Docker API client and the Redis client; it has no shell-facing service and a read-only root filesystem with a noexec tmpfs."
+              },
+              {
+                "uuid": "995d69cc-1e0b-44e8-b580-05cca25d7ebb",
+                "control-id": "sc-7",
+                "description": "The controller joins only the default network (Redis) and the internal-only control network (socket proxy); it publishes no ports."
+              },
+              {
+                "uuid": "18d5f968-31ad-43db-a9d1-2def9ce83e10",
+                "control-id": "sc-39",
+                "description": "The controller is a separate process and container, so Docker API credentials and access never exist in the web, worker or beat processes, which only write desired state to Redis."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "uuid": "a0538adb-aea7-427b-a0d6-76d38e911751",
+        "type": "software",
+        "title": "DocuFlux Docker Socket Proxy",
+        "description": "tecnativa/docker-socket-proxy 0.3.0 (HAProxy) exposing a filtered subset of the Docker Engine API to the Surya Controller. Mounts the host Docker socket read-only and is reachable only from the internal-only control network.",
+        "purpose": "Restricts the controller's access to the Docker Engine API",
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": [
+              "72a08160-e279-4cc9-b49a-893847e22ff6"
+            ]
+          }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "397b2f3e-4767-46fb-b8cf-d0f6c47a71c6",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json",
+            "description": "NIST SP 800-53 Rev 5 Moderate baseline control implementations for the DocuFlux Docker Socket Proxy.",
+            "implemented-requirements": [
+              {
+                "uuid": "4704caa5-d4ae-43a6-9896-b93e393833c3",
+                "control-id": "ac-3",
+                "description": "The proxy runs a custom HAProxy allowlist (deploy/docker-socket-proxy/haproxy.cfg.template) that forwards only GET /_ping, GET /containers/json and POST /containers/{id}/start|stop; every other method and path, including POST /containers/create and exec, is denied with 403. The allowlist is verified against tecnativa/docker-socket-proxy 0.3.0 by deploy/docker-socket-proxy/verify.sh. Residual risk: start/stop cannot be scoped to one container (bead DocuFlux-6b5 closed the create/exec host-escape path)."
+              },
+              {
+                "uuid": "e7170ce8-c05a-427b-9a6b-c9e0ec498b10",
+                "control-id": "ac-6",
+                "description": "The proxy is the least-privilege mediator for the Docker socket, which is mounted read-only into the proxy alone; it cannot scope start/stop to a single container, so the label restriction is enforced only by the controller."
+              },
+              {
+                "uuid": "a46df3e3-633f-4687-8a24-6e7a6d4a155b",
+                "control-id": "cm-7",
+                "description": "The proxy runs with all capabilities dropped and no-new-privileges, a 64M memory limit, a noexec tmpfs and a healthcheck, with a pinned image tag (tecnativa/docker-socket-proxy:0.3.0) and every unneeded API section explicitly disabled."
+              },
+              {
+                "uuid": "4c6e5c7b-9dc1-46e1-8bcf-21408b4d78c1",
+                "control-id": "sc-7",
+                "description": "The proxy listens on port 2375 only on the internal-only control network, which no other service joins and which has no external connectivity; the port is never published to the host."
+              },
+              {
+                "uuid": "168df6fc-48ff-4ee8-a461-c6e69a8dd1ce",
+                "control-id": "sc-39",
+                "description": "Docker daemon access is isolated behind a dedicated proxy container so that the host socket is never mounted into the controller or any application container."
               }
             ]
           }

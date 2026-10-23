@@ -77,12 +77,19 @@ _DIR_MARKERS = {
 
 
 def pytest_collection_modifyitems(config, items):
-    """Tag every test with its tier marker based on the directory it lives in."""
+    """Tag every test with its tier marker based on the directory it lives in.
+
+    Items marked `pending` (Gherkin @pending) are strict-xfailed so a scenario that starts
+    passing forces removal of the tag.
+    """
     for item in items:
         parts = item.nodeid.split('/')
         for segment, marker in _DIR_MARKERS.items():
             if segment in parts:
                 item.add_marker(marker)
+        if item.get_closest_marker('pending'):
+            item.add_marker(pytest.mark.xfail(
+                strict=True, reason="steps land with a later pfm bead"))
 
 
 # Written next to coverage.json so scripts/check_coverage_floors.py can tell whether the

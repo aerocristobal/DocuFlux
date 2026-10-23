@@ -18,6 +18,9 @@ MODELS_READY_FILE = "/tmp/models_ready"
 STATUS_KEY = "service:marker:status"
 ETA_KEY = "service:marker:eta"
 VRAM_KEY = "service:marker:gpu_vram_free"
+# marker:gpu_* expire unless the GPU worker keeps refreshing them (loop: 10 s).
+GPU_STATUS_TTL_SECONDS = 120
+_gpu_published = False
 INFERENCE_SERVER_KEY = "marker:inference_server"
 
 slm_model = None
@@ -82,6 +85,43 @@ def start_health_server():
     logging.info("Starting health check server on port 8080")
     httpd.serve_forever()
 
+def _publish_gpu_info(gpu_info):
+    """Publish GPU info to the key shared by worker, worker-light and beat.
+
+    Every service runs this probe, but only the GPU worker can see the GPU
+    (worker-light has no torch, beat has no device attached). 'available'
+    always wins; 'unavailable' is only recorded if nothing is published yet,
+    so a CPU-only service cannot overwrite the GPU worker's result."""
+    global _gpu_published
+    if gpu_info["status"] == "available":
+        pipe = r.pipeline()
+        pipe.delete("marker:gpu_info")
+        pipe.hset("marker:gpu_info", mapping=gpu_info)
+        pipe.set("marker:gpu_status", "available", ex=GPU_STATUS_TTL_SECONDS)
+        pipe.expire("marker:gpu_info", GPU_STATUS_TTL_SECONDS)
+        pipe.execute()
+        _gpu_published = True
+    elif r.set("marker:gpu_status", gpu_info["status"], nx=True):
+        r.delete("marker:gpu_info")
+        r.hset("marker:gpu_info", mapping=gpu_info)
+
+
+def refresh_gpu_status():
+    """Keep this process's 'available' GPU result alive.
+
+    The keys carry a TTL so a dead GPU worker cannot leave surya_supported true
+    forever; only the process that published 'available' refreshes them."""
+    if not _gpu_published:
+        return
+    try:
+        pipe = r.pipeline()
+        pipe.expire("marker:gpu_status", GPU_STATUS_TTL_SECONDS)
+        pipe.expire("marker:gpu_info", GPU_STATUS_TTL_SECONDS)
+        pipe.execute()
+    except Exception as e:
+        logging.debug(f"GPU status refresh skipped: {e}")
+
+
 def check_gpu_availability():
     """
     Detect GPU availability and store detailed info in Redis.
@@ -138,9 +178,7 @@ def check_gpu_availability():
 
             logging.info(f"GPU detected: {gpu_info['model']} with {gpu_info['vram_total']} GB VRAM")
 
-        # Store in Redis
-        r.hset("marker:gpu_info", mapping=gpu_info)
-        r.set("marker:gpu_status", gpu_info["status"])
+        _publish_gpu_info(gpu_info)
 
         # Emit WebSocket event so frontend updates immediately without waiting for poll
         try:
@@ -161,9 +199,22 @@ def check_gpu_availability():
         logging.error(f"GPU detection failed: {e}")
         # Fallback to unavailable
         gpu_info = {"status": "unavailable", "error": str(e)}
-        r.hset("marker:gpu_info", mapping=gpu_info)
-        r.set("marker:gpu_status", "unavailable")
+        _publish_gpu_info(gpu_info)
         return gpu_info
+
+def surya_intentionally_stopped():
+    """True when Surya is deliberately off: cpu_only mode, or the lifecycle
+    controller has it stopped and nobody wants it running. Any Redis/import
+    problem returns False so callers keep the pre-lifecycle behavior."""
+    try:
+        import surya_state
+        if surya_state.get_ocr_settings(r)["mode"] == "cpu_only":
+            return True
+        return (surya_state.get_state(r) == "stopped"
+                and surya_state.get_desired(r) == "stopped")
+    except Exception:
+        return False
+
 
 def check_inference_server():
     """Probe the shared Surya inference server (marker 2 topology).
@@ -182,9 +233,14 @@ def check_inference_server():
     url = os.environ.get("SURYA_INFERENCE_URL")
     if not url:
         status = "not_configured"
+    elif surya_intentionally_stopped():
+        # Intentionally off (cpu_only / on-demand idle): not a fault, so skip
+        # the probe and its recurring warning.
+        status = "idle"
     else:
         try:
-            resp = requests.get(f"{url.rstrip('/')}/health", timeout=2)
+            import surya_state
+            resp = requests.get(surya_state.health_url(url), timeout=2)
             status = "reachable" if resp.status_code == 200 else "unreachable"
         except Exception as e:
             logging.warning(f"Inference server probe failed ({url}): {e}")
@@ -285,3 +341,4 @@ if __name__ == "__main__":
     while True:
         time.sleep(10)
         check_inference_server()
+        refresh_gpu_status()

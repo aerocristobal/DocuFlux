@@ -162,6 +162,33 @@
                     <td id="modal-gpu-util">N/A</td>
                 </tr>
             </table>
+            <div id="surya-section" class="hidden">
+                <div class="md-typescale-title-small">AI engine (Surya)</div>
+                <table id="surya-modal-table">
+                    <tr>
+                        <td>State</td>
+                        <td><span id="modal-surya-state" class="status-badge status-unknown">stopped</span></td>
+                    </tr>
+                    <tr>
+                        <td>OCR mode</td>
+                        <td>
+                            <md-outlined-select id="ocr-mode-select" aria-label="OCR mode">
+                                <md-select-option value="on_demand"><div slot="headline">On demand (GPU)</div></md-select-option>
+                                <md-select-option value="cpu_only"><div slot="headline">CPU only (Tesseract)</div></md-select-option>
+                            </md-outlined-select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Idle unload (min)</td>
+                        <td><md-outlined-text-field id="idle-timeout-input" type="number" min="1" aria-label="Idle minutes before unload"></md-outlined-text-field></td>
+                    </tr>
+                </table>
+                <div class="surya-actions">
+                    <md-filled-tonal-button id="surya-load-btn">Load</md-filled-tonal-button>
+                    <md-text-button id="surya-unload-btn">Unload</md-text-button>
+                </div>
+            </div>
+            <div id="surya-unsupported-hint" class="surya-hint hidden">The AI engine needs a GPU with at least 16 GB VRAM.</div>
         </div>
         <div slot="actions">
             <md-text-button id="gpu-modal-close-btn">Close</md-text-button>

@@ -2,6 +2,10 @@
 # Surya VLM Inference Server — dedicated out-of-process service
 # Workers attach via SURYA_INFERENCE_URL; no Docker socket needed (Epic 21.8-21.10)
 #
+# Always-on on Kubernetes: the on-demand load/unload lifecycle (surya-controller
+# + docker-socket-proxy, OCR_MODE/SURYA_IDLE_TIMEOUT_MINUTES) is Docker
+# Compose-only. Scale-to-zero on k8s is deferred (see docs/ARCHITECTURE.md §5.2).
+#
 # Recycling decision (benchmarks/marker_v2/REPORT.md): workers recycle their own
 # process every 50 tasks (max_tasks_per_child=50), but that does NOT recycle this
 # server. State can accumulate in the shared vLLM server over a long run (the

@@ -1,4 +1,7 @@
 ---
+# NOTE: surya-vlm is always-on on Kubernetes; the on-demand OCR lifecycle
+# (OCR_MODE, idle unload, surya-controller) is Compose-only, so these workers
+# never wait for a cold start. See docs/ARCHITECTURE.md §5.2.
 # CPU worker — scales horizontally for Pandoc jobs
 apiVersion: apps/v1
 kind: Deployment

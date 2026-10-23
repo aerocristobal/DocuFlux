@@ -13,6 +13,7 @@ tests/features/
 │   ├── auth_and_keys/
 │   ├── security/
 │   ├── reliability/
+│   ├── ocr_lifecycle/
 │   └── storage_retention/
 ├── steps/                 # step definitions (*_steps.py)
 └── epic5_supply_chain/    # retired kanban export — see "History" below
@@ -45,6 +46,13 @@ priority tag (`@p0`/`@p1`/`@p2`) per feature.
 
 Step definitions drive the Flask test client against mocked Redis and Celery. They verify
 what the app *does*, not that a real broker accepts it.
+
+### `@pending`
+
+A feature tagged `@pending` is a spec written ahead of its step definitions. `tests/conftest.py`
+marks those scenarios `xfail(strict=True)`, so they report as xfailed rather than failing with
+`StepDefinitionNotFound`. Strict means that once the steps exist and the scenario passes, the
+run fails until you remove `@pending` from it.
 
 ## History: the retired kanban export
 

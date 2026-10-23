@@ -1,4 +1,6 @@
 ---
+# NOTE: no policy exists for surya-controller or docker-socket-proxy: they are
+# Compose-only (the on-demand Surya lifecycle is not deployed on Kubernetes).
 # Default deny all ingress and egress traffic in the namespace
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

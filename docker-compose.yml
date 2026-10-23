@@ -44,6 +44,8 @@ services:
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - CELERY_SIGNING_KEY=${CELERY_SIGNING_KEY:-}
       - ADMIN_API_SECRET=${ADMIN_API_SECRET:-}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
       - BEHIND_PROXY=${BEHIND_PROXY:-false}
@@ -101,6 +103,8 @@ services:
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - CELERY_SIGNING_KEY=${CELERY_SIGNING_KEY:-}
       - MCP_SECRET=${MCP_SECRET}
       # Marker v2: the worker is a thin client that sends OCR/layout work to the
       # shared Surya VLM inference server (surya-vlm service below). AUTOSTART=false
@@ -188,6 +192,14 @@ services:
   # restart it periodically (`docker compose restart surya-vlm`, or a
   # cron/systemd timer), and the restart policy below brings it back on crash.
   # See "Inference server recycling" in docs/ARCHITECTURE.md.
+  #
+  # On-demand lifecycle (epic pfm): with OCR_MODE=on_demand this container is
+  # started and stopped by surya-controller (below), so an `exited` surya-vlm is
+  # the NORMAL idle state, not a failure. `restart: unless-stopped` is
+  # compatible: the controller's `docker stop` is an explicit stop, which the
+  # restart policy respects; it still recovers crashes while the controller
+  # wants the server running. Idle unload (SURYA_IDLE_TIMEOUT_MINUTES, default
+  # 15) doubles as a recycle.
   surya-vlm:
     image: vllm/vllm-openai:v0.20.1
     environment:
@@ -252,6 +264,8 @@ services:
       - REDIS_METADATA_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - CELERY_SIGNING_KEY=${CELERY_SIGNING_KEY:-}
       - MCP_SECRET=${MCP_SECRET}
       - BUILD_GPU=false
       - MARKER_ENABLED=false
@@ -312,6 +326,8 @@ services:
       # - REDIS_TLS_KEYFILE=/certs/redis/redis.key
       - FLASK_ENV=${FLASK_ENV:-production}
       - SECRET_KEY=${SECRET_KEY}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY:-}
+      - CELERY_SIGNING_KEY=${CELERY_SIGNING_KEY:-}
     depends_on:
       redis:
         condition: service_healthy
@@ -353,6 +369,89 @@ services:
     restart: unless-stopped
     # This service doesn't strictly depend on Redis, but worker will depend on it
 
+  # On-demand Surya lifecycle (epic pfm). The ONLY component that touches the
+  # Docker API. web/worker/beat never do; they write desired state to Redis.
+  # docker-socket-proxy runs a custom HAProxy allowlist (bead DocuFlux-6b5):
+  # only GET /_ping, GET /containers/json and POST /containers/{id}/start|stop
+  # are forwarded; everything else (incl. POST /containers/create and exec) is
+  # 403. The stock CONTAINERS=1 + POST=1 ACL is a path-prefix match and let
+  # create/exec through, so the sections are no longer toggled by env vars.
+  # Verify with deploy/docker-socket-proxy/verify.sh.
+  # It still cannot scope start/stop to one container, so the controller
+  # filters by label com.docker.compose.service=surya-vlm and the proxy is
+  # reachable only from the isolated `control` network. Residual risk: a
+  # compromised controller could stop/start any container (availability only);
+  # see docs/ARCHITECTURE.md ADR-002a.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/docker-socket-proxy/haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
+    networks:
+      - control
+    expose:
+      - "2375"  # control network only; never published to the host
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # No read_only here: the image entrypoint renders /usr/local/etc/haproxy/
+    # haproxy.cfg from a template in the same directory at start (verified: a
+    # read-only rootfs, with or without a tmpfs over that dir, fails to boot).
+    # The socket mount is :ro and the process has no capabilities.
+    tmpfs:
+      - /run:noexec,nosuid,nodev,size=8m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null --spider http://localhost:2375/_ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  surya-controller:
+    build:
+      context: .
+      dockerfile: surya-controller/Dockerfile
+    environment:
+      - REDIS_METADATA_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
+      - DOCKER_HOST_URL=http://docker-socket-proxy:2375
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-}
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_healthy
+    # default = redis; control = socket proxy (shared with nothing else)
+    networks:
+      - default
+      - control
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=16m
+    healthcheck:
+      test: ["CMD", "python", "main.py", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
 # Epic 21.7: Docker Swarm Secrets (optional)
 # To use Docker secrets instead of environment variables:
 # 1. Create secrets:
@@ -374,3 +473,8 @@ services:
 volumes:
   redis-data:
   beat-data:
+
+# Internal-only: docker-socket-proxy <-> surya-controller. No other service joins.
+networks:
+  control:
+    internal: true
