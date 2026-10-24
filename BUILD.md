@@ -36,7 +36,9 @@ docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up
 ```
 - Uses worker:gpu image
 - Worker: 18GB memory (16GB VRAM + 2GB system, `docker-compose.gpu.yml`) + NVIDIA device reservation (local PDF/SLM processing)
-- Starts the shared **`surya-vlm`** inference server (vLLM image, 24GB memory, `VLLM_GPU_MEMORY_UTILIZATION=0.85`) that the worker attaches to via `SURYA_INFERENCE_URL=http://surya-vlm:8000`
+- Defines the shared **`surya-vlm`** inference server (vLLM image, 24GB memory, `VLLM_GPU_MEMORY_UTILIZATION=0.85`) that the worker attaches to via `SURYA_INFERENCE_URL=http://surya-vlm:8000/v1`
+- With the default `OCR_MODE=on_demand`, `surya-vlm` is started and stopped by **`surya-controller`** (idle unload after `SURYA_IDLE_TIMEOUT_MINUTES`, default 15), so an exited `surya-vlm` at idle is normal. The controller reaches the Docker API only through **`docker-socket-proxy`** (allowlist, isolated `control` network). See [ARCHITECTURE.md](docs/ARCHITECTURE.md) §7.3 / ADR-002a
+- Also runs `worker-light` (Pandoc/OCR/metadata/maintenance lane, no GPU)
 - Enables Marker AI PDF conversion
 - Requires GPU with CUDA support
 
@@ -47,6 +49,7 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
 - Uses worker:cpu image
 - Allocates 2GB memory
 - Disables Marker AI features
+- `surya-vlm`, `surya-controller` and `docker-socket-proxy` are disabled (profile `never`); use `OCR_MODE=cpu_only`
 - Runs on any host (no GPU needed)
 
 ## Architecture
@@ -86,10 +89,13 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
 │   ├── requirements-true.txt   # GPU dependencies (BUILD_GPU=true)
 │   ├── requirements-false.txt  # CPU-only dependencies (BUILD_GPU=false)
 │   ├── warmup.py             # GPU detection, SLM eager load, inference-server probe
-│   └── tasks.py              # Memory cleanup
+│   └── tasks/                # Celery task package (capture, conversion, maintenance, metadata, surya_lifecycle)
+├── surya-controller/         # On-demand start/stop controller for surya-vlm
+├── deploy/docker-socket-proxy/ # HAProxy allowlist for the controller's Docker access
 ├── docker-compose.yml        # Base configuration
 ├── docker-compose.gpu.yml    # GPU profile overrides
-└── docker-compose.cpu.yml    # CPU profile overrides
+├── docker-compose.cpu.yml    # CPU profile overrides
+└── docker-compose.tls.yml    # Redis TLS overlay
 ```
 
 ## Environment Variables
@@ -98,7 +104,10 @@ docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up
 |----------|-------------|-------------|-------------|
 | `BUILD_GPU` | `true` | `false` | Controls build-time dependencies |
 | `MARKER_ENABLED` | `true` | `false` | Runtime feature flag |
-| `SURYA_INFERENCE_URL` | `http://surya-vlm:8000` | — (unset) | Shared Surya VLM inference server the worker attaches to |
+| `SURYA_INFERENCE_URL` | `http://surya-vlm:8000/v1` | — (unset) | Shared Surya VLM inference server the worker attaches to. The `/v1` suffix is required: without it `/health` still answers but every inference POST 404s and Marker emits empty output |
+| `OCR_MODE` | `on_demand` | `cpu_only` | `on_demand` loads Surya when needed and unloads it when idle; `cpu_only` never starts it |
+| `SURYA_IDLE_TIMEOUT_MINUTES` | `15` | — | Idle minutes before the controller unloads Surya |
+| `SURYA_COLD_START_TIMEOUT_SECONDS` | `600` | — | Max wait for Surya to become healthy after a load request |
 | `SURYA_INFERENCE_AUTOSTART` | `false` | — | Deployment owns the server; the worker never spawns its own |
 
 GPU-side sizing knobs live on the `surya-vlm` service itself: `SURYA_MODEL` (default `datalab-to/surya-ocr-2`) and `VLLM_GPU_MEMORY_UTILIZATION` (default `0.85`).
@@ -109,6 +118,9 @@ GPU-side sizing knobs live on the `surya-vlm` service itself: `SURYA_MODEL` (def
 |---------|-------------|-------------|
 | Worker | 18GB | 2GB |
 | surya-vlm | 24GB | n/a (not deployed) |
+| worker-light | 2GB | n/a (not deployed) |
+| surya-controller | 128MB | n/a (not deployed) |
+| docker-socket-proxy | 64MB | n/a (not deployed) |
 | Web | 512MB | 512MB |
 | Redis | 300MB | 300MB |
 | Beat | 256MB | 256MB |
@@ -146,6 +158,8 @@ docker-compose logs worker | grep "cleanup"
 # (port 8000 is internal-only, so query it from inside the Docker network):
 docker compose exec worker python -c "import urllib.request; print(urllib.request.urlopen('http://surya-vlm:8000/health', timeout=5).status)"
 # 503 while the surya-ocr-2 model loads, 200 when ready
+# (with OCR_MODE=on_demand the container may simply be stopped while idle; check
+#  `docker compose ps surya-vlm` and `docker compose logs surya-controller`)
 ```
 
 ## Performance Comparison

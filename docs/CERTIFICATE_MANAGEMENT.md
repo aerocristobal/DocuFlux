@@ -1,8 +1,8 @@
 # Certificate Management Guide
 
-**Epic 24.4: Certificate Management for Redis TLS**
-
 This guide covers TLS certificate management for DocuFlux, including generation, renewal, and distribution.
+
+**Status:** Redis TLS is an opt-in overlay (`docker-compose.tls.yml`), not part of the default deployment. It currently covers `web`, `worker` and `beat` only; `worker-light` and `surya-controller` are not yet switched to `rediss://` (see [TLS Enforcement](#tls-enforcement-story-41a41b)).
 
 ## Table of Contents
 
@@ -19,8 +19,8 @@ This guide covers TLS certificate management for DocuFlux, including generation,
 ## Overview
 
 DocuFlux uses TLS certificates for:
-- **Redis**: Encrypts inter-service communication (web ↔ Redis ↔ worker)
-- **HTTPS**: Public-facing web traffic (via Cloudflare Tunnel)
+- **Redis** (optional overlay): Encrypts inter-service communication (web ↔ Redis ↔ worker/beat)
+- **HTTPS**: Public-facing web traffic is terminated outside Compose (reverse proxy or an operator-run Cloudflare Tunnel; the `docker-compose.cloudflare.yml` overlay was removed)
 
 ### Certificate Types
 
@@ -34,8 +34,22 @@ DocuFlux uses TLS certificates for:
 Under the `docker-compose.tls.yml` overlay, Redis is TLS-only, not
 TLS-optional: the server is started with `--port 0 --tls-port 6380`, which
 disables the plaintext listener entirely rather than accepting both. A
-client that connects without a `rediss://` URL and valid client
-certificate cannot reach Redis at all under this profile.
+client that does not connect with a `rediss://` URL and trust the CA
+(`REDIS_TLS_CA_CERTS=/certs/redis/ca.crt`) cannot reach Redis at all under
+this profile. The overlay sets `--tls-auth-clients no`, so client
+certificates are not required (server authentication only); the client
+cert/key settings (`REDIS_TLS_CERTFILE`/`REDIS_TLS_KEYFILE`) are optional.
+
+**Overlay coverage.** `docker-compose.tls.yml` rewrites the Redis URLs and
+sets the CA only for `web`, `worker` and `beat`. `worker-light` and
+`surya-controller` keep `redis://…:6379`, which no longer exists once the
+plaintext port is disabled, so running the overlay as shipped leaves those
+two services unable to reach Redis. Until the overlay is extended, add the
+same `rediss://…:6380` URLs and `REDIS_TLS_CA_CERTS` to them in a local
+override. The controller also builds its Redis clients with
+`redis.Redis.from_url` directly rather than through
+`shared/redis_client.py`, so it needs the CA to be trusted by the system
+store or the client code changed.
 
 On the client side, every Redis-connecting code path — `web/app.py`,
 `worker/tasks/__init__.py`, and `worker/warmup.py` — constructs its client
@@ -73,7 +87,7 @@ ls -la deploy/certs/redis/
 **CA Certificate (`ca.crt`)**
 - **Subject**: `/C=US/ST=California/L=San Francisco/O=DocuFlux/OU=Development/CN=DocuFlux CA`
 - **Purpose**: Root certificate for internal PKI
-- **Distribution**: Mounted to all services at `/certs/redis/ca.crt`
+- **Distribution**: Mounted (`./deploy/certs:/certs:ro`) into `web`, `worker`, `worker-light` and `beat` at `/certs/redis/ca.crt`; not mounted into `surya-controller`
 
 **Redis Server Certificate (`redis.crt`)**
 - **Subject**: `/C=US/ST=California/L=San Francisco/O=DocuFlux/OU=Development/CN=redis`
@@ -100,7 +114,7 @@ openssl x509 -in deploy/certs/redis/redis.crt -noout -dates
 
 ## Production Certificates
 
-> **Note:** HTTPS in production is handled automatically by Cloudflare Tunnel. No Let's Encrypt or Certbot setup is needed.
+> **Note:** Public HTTPS is terminated outside Compose (reverse proxy, or a Cloudflare Tunnel you run yourself; see `deploy/cloudflare/` and the deprecated [archive/CLOUDFLARE_TUNNEL_SETUP.md](archive/CLOUDFLARE_TUNNEL_SETUP.md)). No Let's Encrypt or Certbot setup is bundled.
 
 ### Commercial CA (for Redis TLS or non-Cloudflare deployments)
 
@@ -359,4 +373,4 @@ chmod 444 deploy/certs/redis/*.crt
 - **Certificate Generation**: `scripts/generate-redis-certs.sh`
 - **Certificate Renewal**: `scripts/renew-redis-certs.sh`
 - **Redis TLS**: `deploy/certs/README.md`
-- **Epic 24**: Encryption in Transit with Redis TLS
+- **Redis TLS overlay**: `docker-compose.tls.yml`

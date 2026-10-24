@@ -12,8 +12,11 @@ Environment variables are managed via `docker-compose.yml`. For production, it i
 ### Core Variables
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SECRET_KEY` | Flask session secret (Change this for prod!) | `dev-secret-key` |
-| `MAX_CONTENT_LENGTH` | Max file upload size (Bytes) | 100MB (Hardcoded in app.py config, but good to know) |
+| `SECRET_KEY` | Flask session secret. **Required**: the web app refuses to start without it, and in production the placeholders `change-me-in-production`, `insecure-default` and `dev-only` are rejected | none |
+| `MASTER_ENCRYPTION_KEY`, `CELERY_SIGNING_KEY` | Encryption-at-rest and Celery signing keys. Required when `FLASK_ENV=production` (the default); ephemeral keys are generated otherwise | none |
+| `REDIS_PASSWORD`, `MCP_SECRET` | Redis `requirepass` and MCP bearer token, consumed by `docker-compose.yml` | none (set in `.env`) |
+| `MAX_CONTENT_LENGTH` | Max file upload size (Bytes), from `config.py` | `209715200` (200 MB) |
+| `OCR_MODE` | `on_demand` or `cpu_only` (see step 3) | `on_demand` |
 | `REDIS_METADATA_URL` | Redis DB for job tracking | `redis://redis:6379/1` |
 | `CELERY_BROKER_URL` | Redis DB for task queue | `redis://redis:6379/0` |
 
@@ -26,7 +29,7 @@ Environment variables are managed via `docker-compose.yml`. For production, it i
     ```
 
 2.  **Set Secure Secrets**
-    Update the `web` service in `docker-compose.yml` or use a `.env` file:
+    Copy `.env.example` to `.env` and set real values (do not leave the `change-me-*` placeholders). Alternatively, edit the `web` service in `docker-compose.yml`:
     ```yaml
     environment:
       - SECRET_KEY=your-super-secure-random-string
@@ -52,6 +55,11 @@ Environment variables are managed via `docker-compose.yml`. For production, it i
     ```bash
     docker-compose up -d --build
     ```
+    The base file is the GPU topology: it starts `redis`, `web`, `worker` (heavy lane, `gpu` queue), `worker-light` (Pandoc, OCR, metadata, maintenance), `beat`, `mcp-server`, `surya-vlm`, and the Surya lifecycle services `surya-controller` and `docker-socket-proxy`. On a CPU-only host add the CPU overlay and set `OCR_MODE=cpu_only`:
+    ```bash
+    docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
+    ```
+    The CPU overlay moves `surya-vlm`, `surya-controller` and `docker-socket-proxy` to a never-activated profile, so nothing on a CPU host touches the Docker socket or a GPU.
 
 5.  **Scaling Workers**
     To handle more concurrent jobs, you can scale the worker container:
@@ -61,12 +69,14 @@ Environment variables are managed via `docker-compose.yml`. For production, it i
     *Note: each scaled worker is a thin Marker client, so worker memory stays modest — but all workers share the single `surya-vlm` inference server, so inference throughput and VRAM are the bottleneck for concurrent AI jobs. Stick to 1 GPU worker for AI tasks or size the server accordingly.*
 
 ## Security Considerations
-- **Network**: The service listens on port `5000` by default. It is recommended to put this behind a reverse proxy (Nginx/Caddy) with SSL termination.
+- **Network**: The service listens on port `5000` by default. It is recommended to put this behind a reverse proxy (Nginx/Caddy) with SSL termination. The `docker-compose.cloudflare.yml` tunnel overlay was removed; if you use Cloudflare Tunnel, run `cloudflared` yourself (see `deploy/cloudflare/` and the deprecated [archive/CLOUDFLARE_TUNNEL_SETUP.md](archive/CLOUDFLARE_TUNNEL_SETUP.md)). Set `SESSION_COOKIE_SECURE=true` and `BEHIND_PROXY=true` behind HTTPS.
+- **Redis transport**: Redis is on the internal Docker network only, password-protected, plaintext by default. For TLS use the opt-in `docker-compose.tls.yml` overlay (see [CERTIFICATE_MANAGEMENT.md](CERTIFICATE_MANAGEMENT.md)); note it currently covers `web`, `worker` and `beat` but not `worker-light` or `surya-controller`.
+- **Docker socket**: only `docker-socket-proxy` mounts `/var/run/docker.sock` (read-only), on an isolated `internal: true` network shared with `surya-controller`. Its HAProxy allowlist forwards only list and start/stop calls; check it with `deploy/docker-socket-proxy/verify.sh`. It cannot be scoped to a single container, so treat a compromised controller as able to stop or start any container on the host.
 - **Data Retention**: Files are automatically cleaned up.
     - Success (Not Downloaded): 1 hour
     - Success (Downloaded): 10 minutes
     - Failure: 5 minutes
-- **Isolation**: The worker Dockerfile uses a non-root `appuser`. The web container should also run as non-root in production.
+- **Isolation**: The web and worker images run as a non-root `appuser`, the MCP server as `pwuser` and the controller as UID 10001; services drop all capabilities and set `no-new-privileges`.
 
 ## OSCAL Compliance
 

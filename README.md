@@ -15,9 +15,10 @@ Containerized document conversion service combining **Pandoc** (universal conver
 - **Agentic Page Turning**: Autonomous multi-page extraction from web readers via generated navigation scripts.
 - **API Key Authentication**: `dk_`-prefixed keys managed via `/api/v1/auth/keys`. Pass as `X-API-Key` header.
 - **Webhook Callbacks**: Register a POST URL per job — fired on completion or failure.
-- **End-to-End Security**: AES-256-GCM encryption at rest for files and metadata; Redis TLS in transit; Cloudflare Tunnel for zero-touch HTTPS.
+- **End-to-End Security**: AES-256-GCM encryption at rest for files and metadata; Redis TLS in transit; optional Cloudflare Tunnel helper (`deploy/cloudflare/setup.sh`) for HTTPS.
+- **On-Demand GPU OCR**: With `OCR_MODE=on_demand` (default), the Surya VLM is started when a Marker job needs it and unloaded after an idle timeout, freeing VRAM. `cpu_only` mode never starts it (Tesseract OCR instead).
 - **Observability**: Prometheus metrics endpoint, Grafana dashboard, structured JSON logging with X-Request-ID correlation.
-- **Kubernetes-Ready**: Five manifests (`deploy/k8s/`) with HPA scaling 1–10 replicas.
+- **Kubernetes-Ready**: Seven manifests (`deploy/k8s/`) with HPA scaling 1–10 replicas.
 
 ## Supported Formats
 
@@ -47,23 +48,25 @@ Containerized document conversion service combining **Pandoc** (universal conver
 ## Tech Stack
 
 - **Frontend**: Flask, HTML5, [Material Web Components](https://github.com/material-components/material-web), Socket.IO
-- **Task Queue**: Celery with Redis broker (11 task types)
+- **Task Queue**: Celery with Redis broker (15 task types)
 - **Conversion Engines**: [Pandoc](https://pandoc.org/), [Marker](https://github.com/VikParuchuri/marker), [llama-cpp-python](https://github.com/abetlen/llama-cpp-python), [Playwright](https://playwright.dev/)
 - **Observability**: Prometheus, Grafana, structured JSON logging
-- **Infrastructure**: Docker Compose (5 variants), Kubernetes, NVIDIA Container Toolkit, [Cloudflare Tunnel](https://www.cloudflare.com/products/tunnel/)
+- **Infrastructure**: Docker Compose (base + cpu/gpu/tls overlays), Kubernetes, NVIDIA Container Toolkit, optional [Cloudflare Tunnel](https://www.cloudflare.com/products/tunnel/)
 - **Configuration**: Pydantic Settings — type-safe, hierarchical (env vars → `.env` → Docker secrets)
 
 ## Architecture
 
 | Service | Description |
 |---------|-------------|
-| **`web`** | Flask frontend: uploads, UI, REST API, WebSocket server |
-| **`worker`** | Celery worker: Pandoc, Marker AI (thin client), SLM, capture assembly (11 tasks) |
-| **`surya-vlm`** | Shared Surya VLM inference server (vLLM, port 8000 internal) — hosts the model weights Marker uses |
-| **`mcp-server`** | Playwright server for vision-based and agentic extraction |
+| **`web`** | Flask frontend: uploads, UI, REST API, WebSocket server (port 5000) |
+| **`worker`** | Heavy-lane Celery worker (`-Q gpu`, concurrency 1): Marker AI (thin client), hybrid, SLM-assisted conversion |
+| **`worker-light`** | Light-lane Celery worker (`-Q high_priority,default`, no GPU): Pandoc, OCR, metadata, capture assembly, maintenance — never blocked by long Marker jobs (15 task types total across both lanes) |
+| **`surya-vlm`** | Shared Surya VLM inference server (vLLM, port 8000 internal) — hosts the model weights Marker uses; started/stopped on demand by `surya-controller` |
+| **`surya-controller`** | Owns start/stop of `surya-vlm`: reconciles the container against desired state in Redis (idle unload, manual load/unload, `OCR_MODE`) |
+| **`docker-socket-proxy`** | Allowlist-only Docker API proxy (port 2375, isolated `control` network) — the only path from `surya-controller` to the host Docker socket |
+| **`mcp-server`** | Playwright server for vision-based and agentic extraction (port 8080 internal) |
 | **`redis`** | Celery broker + job metadata store |
 | **`beat`** | Celery Beat scheduler for cleanup and metrics tasks |
-| **`cloudflare-tunnel`** | Optional zero-touch HTTPS (add `-f docker-compose.cloudflare.yml`) |
 
 ```
 Browser → Flask (5000) → Redis → Celery Worker
@@ -92,14 +95,22 @@ docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 ./scripts/build.sh cpu
 docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
 
-# With Cloudflare Tunnel (HTTPS)
-docker-compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.cloudflare.yml up -d
-
 # With Redis TLS
 docker-compose -f docker-compose.yml -f docker-compose.tls.yml up -d
 ```
 
-Open `http://localhost:5000`. On GPU deployments the `surya-vlm` inference server pulls and loads the Surya OCR weights at startup (allow a few minutes on first boot); the worker attaches to it automatically.
+Open `http://localhost:5000`. For HTTPS via Cloudflare Tunnel, run `deploy/cloudflare/setup.sh` (the former `docker-compose.cloudflare.yml` overlay was removed; see the [archived setup guide](docs/archive/CLOUDFLARE_TUNNEL_SETUP.md), deprecated).
+
+With the default `OCR_MODE=on_demand`, `surya-vlm` is **not** running at idle (an `exited` container is normal): `surya-controller` starts it when a Marker job needs it (allow a few minutes of cold start while the Surya OCR weights load) and stops it after an idle timeout.
+
+## On-Demand OCR (Surya)
+
+`OCR_MODE` selects how the GPU OCR engine is managed (Compose only; Kubernetes runs `surya-vlm` as a standing Deployment):
+
+- `on_demand` (default): a conversion needing Marker asks `surya-controller` to load `surya-vlm`; the worker waits up to `SURYA_COLD_START_TIMEOUT_SECONDS` (600). After `SURYA_IDLE_TIMEOUT_MINUTES` (15) with no running or queued Marker work it is unloaded and VRAM is freed.
+- `cpu_only`: Surya is never started; scanned PDFs use Tesseract and Marker formats are hidden from the UI. Use this on hosts without a suitable GPU (the CPU overlay disables `surya-vlm`, `surya-controller` and `docker-socket-proxy`).
+
+The dashboard GPU modal ("AI engine (Surya)") shows the live state and lets an admin switch OCR mode, set the idle timeout, and Load/Unload manually (a manual load pins the server until unloaded). The same controls are available over the API (`ADMIN_API_SECRET` bearer for changes): `GET/POST /api/v1/admin/surya` and `GET/PUT /api/v1/admin/ocr-settings`. Details: [ARCHITECTURE.md §7.3](docs/ARCHITECTURE.md#73-model-lifecycle) and ADR-002a, [CONFIGURATION.md](docs/CONFIGURATION.md#on-demand-ocr-settings).
 
 ## REST API
 
@@ -171,6 +182,11 @@ curl -OJ http://localhost:5000/api/v1/download/550e8400-e29b-41d4-a716-446655440
 | `/api/v1/auth/keys` | POST | Admin | Create API key |
 | `/api/v1/auth/keys/{key}` | DELETE | Admin | Revoke API key |
 | `/api/v1/admin/dlq` | GET | Admin | Dead letter queue contents |
+| `/api/v1/admin/captures` | GET | Admin | Full capture index |
+| `/api/v1/admin/surya` | GET | — | Surya lifecycle state (state, desired, pinned, mode) |
+| `/api/v1/admin/surya` | POST | Admin | Manual Surya `{"action": "load"\|"unload"}` |
+| `/api/v1/admin/ocr-settings` | GET | — | OCR mode and idle timeout |
+| `/api/v1/admin/ocr-settings` | PUT | Admin | Update OCR mode and/or idle timeout |
 | `/api/v1/webhooks` | POST | Key | Register webhook for a job |
 | `/api/v1/webhooks/{job_id}` | GET | Key | Get webhook registration |
 | `/api/v1/capture/sessions` | POST | — | Create browser capture session |
@@ -222,11 +238,12 @@ curl -X POST http://localhost:5000/api/v1/capture/sessions/$SESSION/finish
 
 ## Kubernetes
 
-Seven manifests are provided under `deploy/k8s/`, including `surya-vlm.yaml` for the shared inference server. The web deployment uses an HPA (1–10 replicas).
+Seven manifests are provided under `deploy/k8s/` (`namespace`, `secrets`, `network-policies`, `redis`, `web`, `worker`, `surya-vlm`), including `surya-vlm.yaml` for the shared inference server. The on-demand lifecycle (`OCR_MODE`, `surya-controller`) is Compose-only. The web deployment uses an HPA (1–10 replicas).
 
 ```bash
 kubectl apply -f deploy/k8s/namespace.yaml
 kubectl apply -f deploy/k8s/secrets.yaml
+kubectl apply -f deploy/k8s/network-policies.yaml
 kubectl apply -f deploy/k8s/redis.yaml
 kubectl apply -f deploy/k8s/web.yaml    # 2 initial replicas + HPA
 kubectl apply -f deploy/k8s/worker.yaml # CPU + GPU worker deployments
@@ -282,7 +299,10 @@ Key environment variables (full list in [docs/CONFIGURATION.md](docs/CONFIGURATI
 | `MAX_CAPTURE_PAGES` | `500` | Max pages per capture session |
 | `SESSION_COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
 | `BEHIND_PROXY` | `false` | Enable ProxyFix for Cloudflare/nginx |
-| `CLOUDFLARE_TUNNEL_TOKEN` | *(none)* | Cloudflare Tunnel credential |
+| `ADMIN_API_SECRET` | *(none)* | Bearer secret for admin endpoints (API keys, DLQ, Surya/OCR controls); admin API is disabled if unset |
+| `OCR_MODE` | `on_demand` | `on_demand` (Surya loaded when needed, unloaded when idle) or `cpu_only` |
+| `SURYA_IDLE_TIMEOUT_MINUTES` | `15` | Idle minutes before Surya is unloaded |
+| `SURYA_COLD_START_TIMEOUT_SECONDS` | `600` | Max wait for Surya to become healthy after a load request |
 
 ## Data Retention
 
@@ -302,31 +322,33 @@ Cleanup runs every 5 minutes via Celery Beat (`tasks.cleanup_old_files`).
 docuflux/
 ├── web/
 │   ├── app.py              # Flask app, middleware, auth
-│   ├── routes/             # 5 route blueprints (auth, capture, conversion, health, webhooks)
+│   ├── routes/             # 6 route blueprints (admin_surya, auth, capture, conversion, health, webhooks)
 │   ├── validation.py       # Input validation (MIME, UUID, SSRF, filename)
 │   ├── templates/          # Material Design 3 UI
 │   └── Dockerfile
 ├── worker/
-│   ├── tasks/              # Celery tasks (capture, conversion, maintenance, metadata)
+│   ├── tasks/              # Celery tasks (capture, conversion, maintenance, metadata, surya_lifecycle)
 │   ├── warmup.py           # GPU detection + SLM eager load
 │   ├── metrics.py          # Prometheus metrics definitions
 │   └── Dockerfile          # Multi-stage GPU/CPU build
-├── shared/                 # Shared modules (encryption, storage, formats, config, keys, secrets)
+├── shared/                 # Shared modules (encryption, storage, formats, config, keys, secrets, surya_state)
+├── surya-controller/       # On-demand start/stop controller for surya-vlm
 ├── extension-src/          # Chrome/Firefox browser extension source
 ├── mcp_server/             # Playwright MCP server for vision extraction
 ├── oscal/                  # NIST SP 800-53 component definition + SSP
 ├── deploy/
 │   ├── cloudflare/         # Cloudflare Tunnel config + setup
 │   ├── certs/              # TLS certificates
+│   ├── docker-socket-proxy/ # HAProxy allowlist for the controller's Docker access
 │   ├── monitoring/         # Prometheus alert rules
-│   └── k8s/                # Kubernetes manifests (namespace, secrets, redis, web, worker)
+│   └── k8s/                # Kubernetes manifests (namespace, secrets, network-policies, redis, web, worker, surya-vlm)
 ├── scripts/build.sh        # Build wrapper (auto/gpu/cpu)
 ├── tests/
-│   ├── unit/               # Pytest unit tests (399 tests)
+│   ├── unit/               # Pytest unit tests (~1000 tests; ~1360 across the full suite)
 │   ├── integration/        # E2E + encryption pipeline tests
 │   └── load/locustfile.py  # Locust load tests
-├── docs/                   # 13 markdown docs + OpenAPI spec + Grafana dashboard
-└── docker-compose*.yml     # 5 Compose variants (base/gpu/cpu/tls/cloudflare)
+├── docs/                   # 12 markdown docs + OpenAPI spec + Grafana dashboard (historical docs in docs/archive/)
+└── docker-compose*.yml     # 4 Compose files (base + gpu/cpu/tls overlays)
 ```
 
 ### Testing
@@ -343,9 +365,6 @@ pytest tests/unit/test_web.py -v
 
 # Integration tests (requires running services)
 pytest tests/integration/ -v
-
-# API integration smoke test
-./tests/test_api_v1_integration.sh
 ```
 
 ### Code Validation
@@ -369,12 +388,12 @@ python3 -m py_compile web/app.py worker/tasks/conversion.py worker/warmup.py
 | [Supported Formats](docs/FORMATS.md) | Format matrix and conversion rules |
 | [Deployment Guide](docs/DEPLOYMENT.md) | Production deployment instructions |
 | [AI Integration](docs/AI_INTEGRATION.md) | Marker, SLM, MCP details |
-| [Cloudflare Tunnel Setup](docs/CLOUDFLARE_TUNNEL_SETUP.md) | HTTPS via Cloudflare |
+| [Cloudflare Tunnel Setup](docs/archive/CLOUDFLARE_TUNNEL_SETUP.md) | Deprecated/archived; use `deploy/cloudflare/setup.sh` |
 | [Certificate Management](docs/CERTIFICATE_MANAGEMENT.md) | TLS certificate setup |
 | [Alerting](docs/ALERTING.md) | Prometheus alerting rules |
-| [Security Fixes](docs/SECURITY_FIXES.md) | Historical security remediation stories |
+| [Security Fixes](docs/archive/SECURITY_FIXES.md) | Historical security remediation stories |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
-| [CJK Implementation](docs/IMPLEMENTATION_SUMMARY_CJK.md) | CJK/Unicode support implementation record |
+| [CJK Implementation](docs/archive/IMPLEMENTATION_SUMMARY_CJK.md) | CJK/Unicode support implementation record |
 
 ## Contributing
 

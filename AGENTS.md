@@ -27,19 +27,19 @@ bd dolt push          # Push beads data to remote
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
 
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+Shell commands like `cp` and `mv` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
 
 **Use these forms instead:**
 ```bash
 # Force overwrite without prompting
 cp -f source dest           # NOT: cp source dest
 mv -f source dest           # NOT: mv source dest
-rm -f file                  # NOT: rm file
 
 # For recursive operations
-rm -rf directory            # NOT: rm -r directory
 cp -rf source dest          # NOT: cp -r source dest
 ```
+
+**Never use `rm` / `rm -rf`.** Delete with `trashy` (`trashy file`, `trashy -r directory/`), which recovers from the trash and never prompts.
 
 **Other commands that may prompt:**
 - `scp` - use `-o BatchMode=yes` for non-interactive

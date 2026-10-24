@@ -1,3 +1,5 @@
+DEPRECATED 2026-10-22 — one-off v1-vs-v2 Marker benchmark raw output (companion to marker_v2_REPORT.md). Superseded by re-running benchmarks/marker_v2/run.sh, which writes to $MARKER_BENCH_WORK/results/. Kept for history.
+
 model load: v1 72.18s  v2 0.82s
 
 category       doc              score           chars      tables           sec          pg/s

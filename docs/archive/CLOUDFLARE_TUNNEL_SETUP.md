@@ -1,3 +1,5 @@
+> **DEPRECATED 2026-10-22** — the Cloudflare Tunnel compose overlay/profile was removed in #97 (docker-compose.yml now only carries a commented-out cloudflare_tunnel_token secret example), so the `--profile https` steps below no longer work. `deploy/cloudflare/setup.sh` still exists and still runs the cloudflared login/tunnel-create/DNS-route steps and writes CLOUDFLARE_TUNNEL_TOKEN, SESSION_COOKIE_SECURE=true and BEHIND_PROXY=true to .env, but its closing instruction (`docker-compose --profile https up`) is stale and nothing in compose consumes the token. Superseded by `deploy/cloudflare/setup.sh` for tunnel creation only (no current compose-based guide exists; see [docs/DEPLOYMENT.md](../DEPLOYMENT.md) for supported deployment topologies). Kept for history; do not follow as current guidance.
+
 # Cloudflare Tunnel Setup Guide
 
 This guide explains how to configure HTTPS support for DocuFlux using Cloudflare Tunnel (Epic 22).
@@ -47,7 +49,7 @@ cd deploy/cloudflare
 # - Save configuration to .env
 
 # 3. Start DocuFlux with Cloudflare Tunnel
-docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
+# REMOVED (overlay no longer exists): docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
 ```
 
 The setup script automatically:
@@ -121,9 +123,7 @@ echo "BEHIND_PROXY=true" >> .env
 
 ### Step 7: Start DocuFlux with Cloudflare Tunnel
 
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
-```
+~~`docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up`~~ *(overlay removed)*
 
 ### Step 8: Verify HTTPS Access
 
@@ -223,22 +223,16 @@ docker-compose up
 - Direct access on port 5000
 
 ### With Cloudflare Tunnel
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
-```
+~~`docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up`~~ *(overlay removed)*
 - HTTPS via Cloudflare Tunnel
 - Secure cookies enabled
 - ProxyFix middleware enabled
 
 ### GPU + Cloudflare Tunnel
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.cloudflare.yml up
-```
+~~`docker-compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.cloudflare.yml up`~~ *(overlay removed)*
 
 ### CPU + Cloudflare Tunnel
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.cpu.yml -f docker-compose.cloudflare.yml up
-```
+~~`docker-compose -f docker-compose.yml -f docker-compose.cpu.yml -f docker-compose.cloudflare.yml up`~~ *(overlay removed)*
 
 ## Troubleshooting
 

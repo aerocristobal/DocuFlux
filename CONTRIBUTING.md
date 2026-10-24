@@ -10,13 +10,17 @@ Browser → Flask (5000) → Redis → Celery Worker → Pandoc / Marker AI / SL
 
 | Service | Description |
 |---------|-------------|
-| **web** | Flask frontend: uploads, UI, REST API, WebSocket |
-| **worker** | Celery worker: Pandoc, Marker AI, SLM, capture assembly |
-| **mcp-server** | Playwright server for vision-based and agentic extraction |
+| **web** | Flask frontend: uploads, UI, REST API, WebSocket (port 5000) |
+| **worker** | Heavy-lane Celery worker (`-Q gpu`): Marker AI (thin client), hybrid, SLM-assisted conversion |
+| **worker-light** | Light-lane Celery worker (`-Q high_priority,default`): Pandoc, OCR, metadata, capture assembly, maintenance |
+| **surya-vlm** | Shared Surya VLM inference server (vLLM, port 8000 internal); started/stopped on demand |
+| **surya-controller** | Starts/stops `surya-vlm` from desired state in Redis (`OCR_MODE`, idle unload, admin load/unload) |
+| **docker-socket-proxy** | Allowlist-only Docker API proxy on the isolated `control` network, used only by `surya-controller` |
+| **mcp-server** | Playwright server for vision-based and agentic extraction (port 8080 internal) |
 | **redis** | Celery broker + job metadata store |
 | **beat** | Celery Beat scheduler for cleanup and metrics |
 
-Shared modules live in `shared/` (encryption, storage, key management, formats, secrets).
+Shared modules live in `shared/` (encryption, storage, key management, formats, secrets, Surya lifecycle state). Compose files: `docker-compose.yml` plus `cpu`, `gpu` and `tls` overlays. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (§7.3, ADR-002a) for the on-demand Surya lifecycle (`OCR_MODE`).
 
 ## Development Setup
 
@@ -117,20 +121,22 @@ that tells you which requirements file needs it.
 docuflux/
 ├── web/
 │   ├── app.py              # Flask app, middleware, auth
-│   ├── routes/             # 5 route blueprints (auth, capture, conversion, health, webhooks)
+│   ├── routes/             # 6 route blueprints (admin_surya, auth, capture, conversion, health, webhooks)
 │   ├── validation.py       # Input validation (MIME, UUID, SSRF, filename)
 │   └── templates/          # Material Design 3 UI
 ├── worker/
-│   ├── tasks/              # Celery tasks (capture, conversion, maintenance, metadata)
+│   ├── tasks/              # Celery tasks (capture, conversion, maintenance, metadata, surya_lifecycle)
 │   ├── warmup.py           # GPU detection + SLM eager load
 │   └── metrics.py          # Prometheus metrics
 ├── shared/                 # Shared modules (encryption, storage, formats, config, keys, secrets)
 ├── extension-src/          # Chrome/Firefox browser extension source
 ├── mcp_server/             # Playwright MCP server for vision extraction
+├── surya-controller/       # On-demand start/stop controller for surya-vlm
 ├── oscal/                  # NIST SP 800-53 compliance artifacts
 ├── deploy/                 # Infrastructure configs
 │   ├── cloudflare/         # Cloudflare Tunnel config + setup
 │   ├── certs/              # TLS certificates
+│   ├── docker-socket-proxy/ # HAProxy allowlist for the controller's Docker access
 │   ├── monitoring/         # Prometheus alert rules
 │   └── k8s/                # Kubernetes manifests
 ├── tests/
@@ -138,7 +144,7 @@ docuflux/
 │   ├── integration/        # E2E + encryption pipeline tests
 │   └── load/locustfile.py  # Locust load tests
 ├── scripts/build.sh        # Build wrapper (auto/gpu/cpu)
-└── docker-compose*.yml     # 5 Compose variants (base/gpu/cpu/tls/cloudflare)
+└── docker-compose*.yml     # 4 Compose files (base + gpu/cpu/tls overlays)
 ```
 
 ## Code Style

@@ -1,8 +1,8 @@
 # DocuFlux Alerting Guide
 
-**Epic 21.11: Alerting Rules and Failure Notifications**
+This document describes the 15 alerting rules configured for DocuFlux in `deploy/monitoring/alerts.yml` and provides runbook guidance for operators.
 
-This document describes the alerting rules configured for DocuFlux and provides runbook guidance for operators.
+**Queue note:** the metrics exporter publishes `docuflux_queue_depth` for the `celery`, `default`, `high_priority` and `gpu` queues, but `QueueBacklog` and `QueueStalled` only match `queue_name="celery"`. DocuFlux routes work to `default`, `high_priority` and `gpu`, so these two rules do not watch the queues actually in use until the rule expressions are widened.
 
 ## Alert Severity Levels
 
@@ -87,6 +87,17 @@ This document describes the alerting rules configured for DocuFlux and provides 
 
 ---
 
+#### SlowConversionTasks
+**Severity**: Warning
+**Trigger**: p95 conversion duration > 300 s for >10 minutes
+
+**Investigation Steps**:
+1. Check which formats are slow (`docuflux_conversion_duration_seconds` by format labels).
+2. A Marker job after an idle period includes the Surya cold start (about 3 minutes); check `GET /api/v1/admin/surya` for `state` and consider pinning with a manual load.
+3. Check queue depth and `surya-vlm` health.
+
+---
+
 #### CriticalTaskFailureRate
 **Severity**: Critical
 **Trigger**: >50% of tasks failing over 2 minutes
@@ -111,6 +122,17 @@ This document describes the alerting rules configured for DocuFlux and provides 
 ---
 
 ### Resource Usage Alerts
+
+#### HighMemoryUsage
+**Severity**: Warning
+**Trigger**: Worker container memory > 90% of its limit for >5 minutes (cAdvisor metrics)
+
+**Investigation Steps**:
+1. Check usage: `docker stats`
+2. Check for oversized inputs or a stuck task; workers recycle every 50 tasks (`max_tasks_per_child`).
+3. Raise the worker memory limit if usage is legitimate.
+
+---
 
 #### DiskSpaceWarning
 **Severity**: Warning
@@ -185,6 +207,27 @@ This document describes the alerting rules configured for DocuFlux and provides 
 
 ---
 
+#### GPUMemoryHigh
+**Severity**: Warning
+**Trigger**: GPU memory used / total > 95% for >2 minutes
+
+**Investigation Steps**:
+1. Check VRAM on the inference server: `docker exec docuflux-surya-vlm-1 nvidia-smi`
+2. Note vLLM pre-allocates a fixed share (`VLLM_GPU_MEMORY_UTILIZATION`, 0.85 in the base compose file), so sustained high usage is partly expected; look for other processes on the GPU.
+3. If jobs fail with CUDA out-of-memory, lower `VLLM_GPU_MEMORY_UTILIZATION` or restart `surya-vlm`.
+
+---
+
+#### GPUTemperatureHigh
+**Severity**: Warning
+**Trigger**: GPU temperature > 85 C for >5 minutes
+
+**Investigation Steps**:
+1. Check temperature and fan: `nvidia-smi --query-gpu=temperature.gpu,fan.speed --format=csv`
+2. Check airflow and workload; consider limiting concurrent Marker work.
+
+---
+
 ### Queue Health Alerts
 
 #### QueueBacklog
@@ -230,6 +273,32 @@ This document describes the alerting rules configured for DocuFlux and provides 
 - Celery pool crash
 - Task timeout without cleanup
 - Redis connection lost
+
+---
+
+### Worker Health Alerts
+
+#### NoActiveWorkers
+**Severity**: Critical
+**Trigger**: `docuflux_worker_tasks_active` is 0 with no change for 10 minutes (fires after 5 minutes)
+
+This also fires on an idle system with no traffic; correlate with queue depth before treating it as an outage.
+
+**Investigation Steps**:
+1. Check workers: `docker-compose ps worker worker-light`
+2. Check logs: `docker-compose logs worker worker-light --tail=50`
+3. Restart if unhealthy: `docker-compose restart worker worker-light`
+
+---
+
+#### WorkerTasksStuck
+**Severity**: Warning
+**Trigger**: `docuflux_worker_tasks_active` > 0 with no change for 30 minutes (fires after 15 minutes)
+
+**Investigation Steps**:
+1. List active tasks: `docker-compose exec worker celery -A tasks inspect active`
+2. Marker tasks are limited to 20 minutes (hard limit 1200 s; Marker+SLM is 25 minutes, 1500 s); a Marker job waiting on a Surya cold start is bounded by `SURYA_COLD_START_TIMEOUT_SECONDS`. Check `surya-vlm` and `surya-controller` logs.
+3. Restart the stuck worker if the task is past its limit.
 
 ---
 
@@ -371,7 +440,7 @@ Recommended Grafana dashboards for DocuFlux:
 
 - [Prometheus Metrics](../worker/metrics.py) - Metrics definitions
 - [Health Checks](../web/app.py) - Health endpoint implementation
-- [Cleanup Logic](../worker/tasks.py) - Data retention and cleanup
+- [Cleanup Logic](../worker/tasks/maintenance.py) - Data retention and cleanup (`worker/tasks/` package)
 - [GPU Monitoring](../worker/warmup.py) - GPU detection and monitoring
 
 ## Support

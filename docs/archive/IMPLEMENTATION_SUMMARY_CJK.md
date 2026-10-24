@@ -1,3 +1,5 @@
+> **DEPRECATED 2026-10-22** — dated implementation record with stale line references. Superseded by [docs/FORMATS.md](../FORMATS.md) for current CJK/Unicode support. Kept for history; do not follow as current guidance.
+
 # Implementation Summary: Chinese Character Support for PDF Conversions
 
 ## Date

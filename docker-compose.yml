@@ -181,7 +181,7 @@ services:
   # the GPU worker has no inference server to attach to. docker-compose.cpu.yml
   # gates it out of CPU-only deployments; the k8s twin is deploy/k8s/surya-vlm.yaml.
   #
-  # Recycling decision (benchmarks/marker_v2/REPORT.md): the worker recycles
+  # Recycling decision (docs/archive/marker_v2_REPORT.md): the worker recycles
   # itself every 50 tasks (max_tasks_per_child=50 in worker/tasks/__init__.py),
   # but that only bounds worker-process memory — this server is a separate
   # long-lived process, and state can accumulate in the shared vLLM server over

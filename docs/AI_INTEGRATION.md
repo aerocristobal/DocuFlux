@@ -5,9 +5,17 @@ This project integrates [Marker](https://github.com/VikParuchuri/marker), a high
 ## Architecture (Marker v2 — client/server)
 - **Integration**: `marker-pdf 2.0.0` thin client installed in the `worker` container
 - **Model weights**: Live in the shared **`surya-vlm`** inference service — a [vLLM](https://github.com/vllm-project/vllm) server (`vllm/vllm-openai` image) serving `datalab-to/surya-ocr-2` — not in the worker
-- **Communication**: The worker builds a `PdfConverter(artifact_dict=...)` and the Marker client sends OCR/layout inference requests over HTTP to `SURYA_INFERENCE_URL` (default `http://surya-vlm:8000`, internal port 8000 only)
+- **Communication**: The worker builds a `PdfConverter(artifact_dict=...)` and the Marker client sends OCR/layout inference requests over HTTP to `SURYA_INFERENCE_URL` (`http://surya-vlm:8000/v1` in the compose files and k8s manifests; the `/v1` suffix is required because surya uses the value verbatim as the OpenAI `base_url` and strips it for the health probe; internal port 8000 only)
 - **Worker attachment**: `SURYA_INFERENCE_AUTOSTART=false` — the deployment owns the server; the worker attaches to it lazily and never spawns or stops its own
-- **GPU**: Owned by the `surya-vlm` container (NVIDIA device reservation); VRAM share is sized server-side via `VLLM_GPU_MEMORY_UTILIZATION` (`0.85` in the base compose file)
+- **GPU**: Owned by the `surya-vlm` container (NVIDIA device reservation); VRAM share is sized server-side via `VLLM_GPU_MEMORY_UTILIZATION` (`0.85` in the base compose file). Surya requires a GPU with at least 16 GB of VRAM.
+
+## On-demand lifecycle (Docker Compose)
+With `OCR_MODE=on_demand` (the default) the `surya-vlm` container is not always running; it is started when a Marker job needs it and stopped when idle, so its VRAM is free for other work in between. Full design in [ARCHITECTURE.md §7.3](ARCHITECTURE.md#73-model-lifecycle).
+- **Load**: submitting a `pdf_marker`, `pdf_hybrid` or `pdf_marker_slm` job records desired state `running` in Redis. `surya-controller` (the only component that touches the Docker API, via the label-filtered, allowlisted `docker-socket-proxy`) starts `surya-vlm`. The worker shows the stage "Starting AI engine" and waits up to `SURYA_COLD_START_TIMEOUT_SECONDS` (default 600) for `/health`; a cold start takes about 3 minutes on an RTX 3090.
+- **Unload**: after `SURYA_IDLE_TIMEOUT_MINUTES` (default 15) with no running or queued Marker work the controller stops the container. An `exited` `surya-vlm` is therefore the normal idle state, and every idle unload also recycles the server.
+- **Modes**: `cpu_only` never starts Surya; Marker formats are rejected with `409` and scanned PDFs use Tesseract (`pdf_ocr`). Mode and idle timeout can be changed at runtime with `PUT /api/v1/admin/ocr-settings`.
+- **Manual control**: `POST /api/v1/admin/surya` with `{"action": "load"|"unload"}` (Bearer `ADMIN_API_SECRET`). A manual load pins the server against idle unload and returns `409` when no GPU with 16 GB+ VRAM is present or the mode is `cpu_only`. `GET /api/v1/admin/surya` shows `state`, `desired`, `pinned`, `mode`, `surya_supported`.
+- **Kubernetes**: not applicable; the lifecycle is Compose-only and `surya-vlm` stays always-on (`deploy/k8s/surya-vlm.yaml`).
 
 ## Usage
 When a user selects **"PDF (High Accuracy)"** (`pdf_marker`) as the input format:
@@ -22,7 +30,7 @@ Since AI inference is heavy and can fail:
 1. **Retry Logic**: Failed conversions are retried up to 3 times automatically.
 2. **Timeouts**: AI jobs have a higher timeout (20 minutes) compared to standard jobs (10 minutes).
 3. **Error Handling**: Errors are captured and reported to the user with detailed error messages.
-4. **Degeneration guard**: Output quality is scored after every conversion; a document exceeding the `excess_output` ceilings (2,000 words/page or 10,000 chars/page — see `shared/quality.py`) is flagged. This bounds the silent repetition-loop failure mode observed once during the v1→v2 benchmark (see `benchmarks/marker_v2/REPORT.md`).
+4. **Degeneration guard**: Output quality is scored after every conversion; a document exceeding the `excess_output` ceilings (2,000 words/page or 10,000 chars/page — see `shared/quality.py`) is flagged. This bounds the silent repetition-loop failure mode observed once during the v1→v2 benchmark (see [`docs/archive/marker_v2_REPORT.md`](archive/marker_v2_REPORT.md)).
 
 ## Artifact Lifecycle (per worker process)
 - The artifact dict is created **lazily** by `get_model_dict()` on the first Marker conversion in each worker process and cached for that process's lifetime (`max_tasks_per_child=50` recycles the process, and with it the dict).
@@ -32,8 +40,8 @@ Since AI inference is heavy and can fail:
 
 ## Technical Details
 - **Server**: `surya-vlm` runs the `vllm/vllm-openai` image with `SURYA_MODEL=datalab-to/surya-ocr-2`, listens on internal port 8000, and exposes `/health` (503 until the model is loaded, then 200; the compose healthcheck allows a 300 s start period for the first load).
-- **Worker env**: `SURYA_INFERENCE_URL=http://surya-vlm:8000` and `SURYA_INFERENCE_AUTOSTART=false` in `docker-compose.yml`, `docker-compose.gpu.yml`, and `deploy/k8s/worker.yaml`.
-- **Warmup probe**: `worker/warmup.py` probes `{SURYA_INFERENCE_URL}/health` at startup and every 10 s thereafter, storing `reachable`/`unreachable` in Redis for the web tier's service status and the worker `/healthz` payload.
+- **Worker env**: `SURYA_INFERENCE_URL=http://surya-vlm:8000/v1` and `SURYA_INFERENCE_AUTOSTART=false` in `docker-compose.yml`, `docker-compose.gpu.yml`, and `deploy/k8s/worker.yaml`.
+- **Warmup probe**: `worker/warmup.py` probes the inference server's `/health` at startup and every 10 s thereafter, storing `reachable`/`unreachable` in Redis for the web tier's service status and the worker `/healthz` payload. The probe is skipped while Surya is intentionally off (`cpu_only`, or idle with desired state `stopped`); it logs `Inference server probe failed` warnings while an on-demand start is in progress (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)).
 - **Worker memory**: A high worker limit (16 GB) remains in `docker-compose.yml` for local PDF/image processing; GPU memory belongs to the `surya-vlm` service (24 GB baseline at `VLLM_GPU_MEMORY_UTILIZATION=0.85`).
 
 ## Troubleshooting
