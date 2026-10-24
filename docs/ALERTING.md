@@ -297,7 +297,7 @@ This also fires on an idle system with no traffic; correlate with queue depth be
 
 **Investigation Steps**:
 1. List active tasks: `docker-compose exec worker celery -A tasks inspect active`
-2. Marker tasks are limited to 20 minutes (hard limit 1200 s); a Marker job waiting on a Surya cold start is bounded by `SURYA_COLD_START_TIMEOUT_SECONDS`. Check `surya-vlm` and `surya-controller` logs.
+2. Marker tasks are limited to 20 minutes (hard limit 1200 s; Marker+SLM is 25 minutes, 1500 s); a Marker job waiting on a Surya cold start is bounded by `SURYA_COLD_START_TIMEOUT_SECONDS`. Check `surya-vlm` and `surya-controller` logs.
 3. Restart the stuck worker if the task is past its limit.
 
 ---

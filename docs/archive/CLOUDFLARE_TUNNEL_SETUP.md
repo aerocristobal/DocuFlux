@@ -49,7 +49,7 @@ cd deploy/cloudflare
 # - Save configuration to .env
 
 # 3. Start DocuFlux with Cloudflare Tunnel
-docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
+# REMOVED (overlay no longer exists): docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
 ```
 
 The setup script automatically:
@@ -123,9 +123,7 @@ echo "BEHIND_PROXY=true" >> .env
 
 ### Step 7: Start DocuFlux with Cloudflare Tunnel
 
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
-```
+~~`docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up`~~ *(overlay removed)*
 
 ### Step 8: Verify HTTPS Access
 
@@ -225,22 +223,16 @@ docker-compose up
 - Direct access on port 5000
 
 ### With Cloudflare Tunnel
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up
-```
+~~`docker-compose -f docker-compose.yml -f docker-compose.cloudflare.yml up`~~ *(overlay removed)*
 - HTTPS via Cloudflare Tunnel
 - Secure cookies enabled
 - ProxyFix middleware enabled
 
 ### GPU + Cloudflare Tunnel
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.cloudflare.yml up
-```
+~~`docker-compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.cloudflare.yml up`~~ *(overlay removed)*
 
 ### CPU + Cloudflare Tunnel
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.cpu.yml -f docker-compose.cloudflare.yml up
-```
+~~`docker-compose -f docker-compose.yml -f docker-compose.cpu.yml -f docker-compose.cloudflare.yml up`~~ *(overlay removed)*
 
 ## Troubleshooting
 

@@ -199,6 +199,8 @@ paths:
           description: Missing file or invalid format
         '413':
           description: File exceeds 100 MB
+        '409':
+          description: "OCR mode is cpu_only: AI (Marker) engine disabled"
         '507':
           description: Server disk full
 
@@ -285,6 +287,7 @@ paths:
                   new_job_id: {$ref: '#/components/schemas/JobId'}
         '400': {description: Input file expired or invalid ID}
         '404': {description: Job not found}
+        '409': {description: "OCR mode is cpu_only: AI (Marker) engine disabled"}
 
   /api/delete/{job_id}:
     post:
@@ -620,7 +623,7 @@ paths:
                     example: dk_abc123...
                   created_at: {type: string}
                   label: {type: string}
-        '401': {description: Missing admin authentication}
+        '401': {description: Missing admin authentication, or Authorization header not in 'Bearer <secret>' form}
         '403': {description: Invalid admin secret}
         '429': {description: Rate limit exceeded (10/hour)}
         '503': {description: Admin API disabled (ADMIN_API_SECRET not configured)}
@@ -647,7 +650,7 @@ paths:
                 type: object
                 properties:
                   revoked: {type: boolean, example: true}
-        '401': {description: Missing admin authentication}
+        '401': {description: Missing admin authentication, or Authorization header not in 'Bearer <secret>' form}
         '403': {description: Invalid admin secret}
         '404': {description: Key not found}
 
@@ -901,7 +904,7 @@ paths:
                   count: {type: integer}
                   total: {type: integer}
                   entries: {type: array, items: {type: object, additionalProperties: true}}
-        '401': {description: Missing admin authentication}
+        '401': {description: Missing admin authentication, or Authorization header not in 'Bearer <secret>' form}
         '403': {description: Invalid admin secret}
         '503': {description: Admin API disabled}
 
@@ -922,7 +925,7 @@ paths:
               schema:
                 type: array
                 items: {type: object, additionalProperties: true}
-        '401': {description: Missing admin authentication}
+        '401': {description: Missing admin authentication, or Authorization header not in 'Bearer <secret>' form}
         '403': {description: Invalid admin secret}
         '503': {description: Admin API disabled}
 
