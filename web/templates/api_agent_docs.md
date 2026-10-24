@@ -12,7 +12,7 @@ Base URL: `{{ base_url }}`
 
 ## Authentication
 
-Most endpoints are open (IP-rate-limited). Endpoints that require auth use the `X-API-Key` header.
+Conversion, download, webhook and metadata endpoints use the `X-API-Key` header; key management and admin writes use `Authorization: Bearer <ADMIN_API_SECRET>`. Status, formats, capture and health endpoints are open (IP-rate-limited).
 
 ```
 X-API-Key: dk_...
@@ -44,15 +44,33 @@ DELETE /api/v1/auth/keys/<key>
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/auth/keys` | No | Create API key |
-| DELETE | `/api/v1/auth/keys/<key>` | No | Revoke API key |
-| POST | `/api/v1/convert` | No | Submit conversion job |
+| POST | `/api/v1/auth/keys` | Admin | Create API key |
+| DELETE | `/api/v1/auth/keys/<key>` | Admin | Revoke API key |
+| POST | `/api/v1/convert` | API key | Submit conversion job |
 | GET | `/api/v1/status/<job_id>` | No | Poll job status |
-| GET | `/api/v1/download/<job_id>` | No | Download result |
+| GET | `/api/v1/download/<job_id>` | API key | Download result |
 | GET | `/api/v1/formats` | No | List supported formats |
-| POST | `/api/v1/webhooks` | No | Register webhook for job notifications |
-| GET | `/api/v1/webhooks/<job_id>` | No | Get registered webhook for a job |
-| POST | `/api/v1/jobs/<job_id>/extract-metadata` | Yes | Trigger SLM metadata extraction |
+| POST | `/api/v1/webhooks` | API key | Register webhook for job notifications |
+| GET | `/api/v1/webhooks/<job_id>` | API key | Get registered webhook for a job |
+| POST | `/api/v1/jobs/<job_id>/extract-metadata` | API key | Trigger SLM metadata extraction |
+| POST | `/api/v1/capture/sessions` | No | Create browser capture session |
+| POST | `/api/v1/capture/sessions/<id>/pages` | No | Submit captured pages |
+| POST | `/api/v1/capture/sessions/<id>/images` | No | Upload a capture image |
+| POST | `/api/v1/capture/sessions/<id>/finish` | No | Finish session, queue conversion |
+| GET | `/api/v1/capture/sessions/<id>/status` | No | Capture session status |
+| GET | `/api/v1/admin/dlq` | Admin | Dead letter queue contents |
+| GET | `/api/v1/admin/captures` | Admin | Global capture index |
+| GET | `/api/v1/admin/surya` | No | Surya VLM lifecycle state |
+| POST | `/api/v1/admin/surya` | Admin | Load (pin) or unload Surya: `{"action": "load"|"unload"}` |
+| GET | `/api/v1/admin/ocr-settings` | No | OCR mode and idle timeout |
+| PUT | `/api/v1/admin/ocr-settings` | Admin | Update `{"mode": "cpu_only"|"on_demand", "idle_timeout_min": int>=1}` |
+| GET | `/healthz`, `/readyz`, `/api/health`, `/api/status/services` | No | Health and service status |
+
+Admin = `Authorization: Bearer <ADMIN_API_SECRET>` (401 missing, 403 wrong, 503 if unset). API key = `X-API-Key`.
+
+### OCR mode and Surya
+
+Marker conversions (`engine=marker`) need the Surya VLM (GPU, >= 16 GB VRAM). In `cpu_only` mode they return `409` (`AI engine disabled (OCR mode is cpu_only); use the OCR engine instead`). In `on_demand` mode (default) they are accepted and request a Surya load; it is unloaded after `idle_timeout_min` of inactivity unless pinned by `POST /api/v1/admin/surya {"action":"load"}`. That call returns `202` with `{state, desired, pinned, surya_supported, mode, idle_timeout_min}`; `409` if the host lacks a supported GPU or the mode is `cpu_only`. State (`stopped|starting|running|stopping|error`) is also in `GET /api/status/services` as `surya_state` (plus `ocr_mode`, `idle_timeout_min`, `surya_supported`) and pushed on the `surya_state_update` Socket.IO event.
 
 ### POST /api/v1/convert
 
@@ -141,6 +159,7 @@ When the job completes (SUCCESS or FAILURE), DocuFlux POSTs a JSON payload to th
 - API key creation: **10/hour**
 - Key revocation: **30/hour**
 - Webhook registration: **60/hour**
+- Admin Surya/OCR-settings: reads **60/minute**, writes **30/minute**
 
 ## Curl Examples
 
@@ -214,4 +233,4 @@ All errors return JSON with an `error` field:
 {"error": "description of what went wrong"}
 ```
 
-Common HTTP status codes: 400 (bad request), 404 (not found), 410 (expired), 422 (unsupported format), 429 (rate limited), 507 (storage full).
+Common HTTP status codes: 400 (bad request), 404 (not found), 410 (expired), 409 (OCR mode cpu_only / state conflict), 422 (unsupported format), 429 (rate limited), 507 (storage full).

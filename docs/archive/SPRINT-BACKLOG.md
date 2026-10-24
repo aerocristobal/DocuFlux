@@ -1,9 +1,11 @@
+> **DEPRECATED 2026-10-22** — PR #108 follow-ups; PR #108 is merged and this proposed sprint scope was never maintained. Superseded by [beads](https://github.com/gastownhall/beads) (`bd list --all`) for tracking and [docs/user-stories/BACKLOG.md](../user-stories/BACKLOG.md) for epic status. Kept for history; do not follow as current guidance.
+
 # DocuFlux — Sprint Backlog: PR #108 Follow-ups
 
 **Status:** Proposed · **Last updated:** 2026-07-12
-**Related docs:** [BACKLOG.md](BACKLOG.md) · [PRD.md](../PRD.md) · [ARCHITECTURE.md](../ARCHITECTURE.md)
+**Related docs:** [BACKLOG.md](../user-stories/BACKLOG.md) · [PRD.md](../PRD.md) · [ARCHITECTURE.md](../ARCHITECTURE.md)
 
-Source: code review of PR #108 (`feat/p0-implementation`, the [BACKLOG.md](BACKLOG.md) P0/P1 wave). The review's correctness bugs and CI blockers were fixed directly on that PR; the items below are the cleanup, efficiency, and operational-risk findings that were deliberately left out of that PR to keep it from growing further, plus one API-contract change it introduced that needs a consumer audit. Stories use BDD framing per the project's BDD conventions.
+Source: code review of PR #108 (`feat/p0-implementation`, the [BACKLOG.md](../user-stories/BACKLOG.md) P0/P1 wave). The review's correctness bugs and CI blockers were fixed directly on that PR; the items below are the cleanup, efficiency, and operational-risk findings that were deliberately left out of that PR to keep it from growing further, plus one API-contract change it introduced that needs a consumer audit. Stories use BDD framing per the project's BDD conventions.
 
 **Suggested sprint scope:** S1–S4 (hot-path efficiency) and S10 (routing consolidation) are the highest-leverage items — S10 in particular already caused one bug in PR #108 (a missing `convert_with_ocr` queue-routing entry) and will cause another the next time an engine is added if left unfixed.
 

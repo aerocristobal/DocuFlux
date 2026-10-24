@@ -1,3 +1,5 @@
+> **DEPRECATED 2026-10-22** — historical CodeQL remediation record; its file/line references are stale. Superseded by the CI Bandit/CodeQL gates (.github/workflows/ci.yml) and the security section of [docs/ARCHITECTURE.md](../ARCHITECTURE.md). Kept for history; do not follow as current guidance.
+
 # Security Remediation Plan
 
 > **Historical:** This document records the security remediation stories from the original CodeQL scan (2026). All stories have been addressed. Kept for audit trail.

@@ -1,7 +1,7 @@
 # DocuFlux — Marker AI v1 → v2 Upgrade Epic
 
-**Status:** In progress (waves 1–2 merged; one follow-up open) · **Last updated:** 2026-08-30
-**Related docs:** [BACKLOG.md](BACKLOG.md) · [SPRINT-BACKLOG.md](SPRINT-BACKLOG.md) · [PRD.md](../PRD.md) · [ARCHITECTURE.md](../ARCHITECTURE.md) · [AI_INTEGRATION.md](../AI_INTEGRATION.md) · [benchmark report](../../benchmarks/marker_v2/REPORT.md)
+**Status:** In progress — M2.1–M2.5 and M2.7 merged; M2.6 still open (verified 2026-10-22: `deploy/k8s/surya-vlm.yaml` still sets `runAsUser: 1000` and mounts an `emptyDir` at `/root/.cache/huggingface`, and no bead or commit has addressed it) · **Last updated:** 2026-10-22
+**Related docs:** [BACKLOG.md](BACKLOG.md) · [SPRINT-BACKLOG.md (archived)](../archive/SPRINT-BACKLOG.md) · [PRD.md](../PRD.md) · [ARCHITECTURE.md](../ARCHITECTURE.md) · [AI_INTEGRATION.md](../AI_INTEGRATION.md) · [benchmark report (archived)](../archive/marker_v2_REPORT.md)
 
 Stories use BDD framing per the project's BDD conventions. Each story carries the acceptance criteria it was (or must be) validated against, the files it touches, and the tests that pin it. Stories M2.1–M2.5 and M2.7 are merged; M2.6 is an open follow-up for a future dispatch.
 
@@ -60,7 +60,7 @@ I want marker-pdf pinned to 2.0.0 and a dedicated vLLM service serving the Surya
 
 **Validated by**
 - `tests/unit/test_packaging.py` (requirements contract; CI `contracts` job).
-- The benchmark run (REPORT.md §Reproducing) attached a v2 worker to the compose `surya-vlm` service successfully.
+- The benchmark run (`docs/archive/marker_v2_REPORT.md` §Reproducing) attached a v2 worker to the compose `surya-vlm` service successfully.
 - Static audit: surya `settings.py` defines `SURYA_MODEL_CHECKPOINT = "datalab-to/surya-ocr-2"` and the `SURYA_INFERENCE_*` settings used here; `attach_or_spawn()` attaches to a reachable external URL and refuses to spawn when `SURYA_INFERENCE_AUTOSTART=false`.
 
 **Files:** `worker/requirements-true.txt`, `docker-compose.gpu.yml`, `deploy/k8s/surya-vlm.yaml`, `deploy/k8s/worker.yaml`, `deploy/k8s/network-policies.yaml`.
@@ -106,13 +106,13 @@ I want a reproducible v1-vs-v2 benchmark over a representative corpus
 
 **Acceptance criteria**
 - `benchmarks/marker_v2/` contains a reproducible runner (`run.sh`), corpus fetcher/deriver, and comparison script over 10 documents / 213 pages.
-- Results committed (`REPORT.md`, `report-raw.txt`, `v1.json`, `v2.json`) with a go/no-go recommendation.
+- Results committed (`v1.json`, `v2.json` in `benchmarks/marker_v2/`; `REPORT.md` and `report-raw.txt` now archived as `docs/archive/marker_v2_REPORT.md` and `docs/archive/marker_v2_report-raw.txt`) with a go/no-go recommendation.
 - The report quantifies: model load (v1 72.2 s vs v2 0.8 s), warmup-corrected throughput (+73%), CJK recovery (6/6 both), and any regressions found.
 
 **Validated by**
 - The committed report: no category lost extraction quality; CJK 6/6; `tables_unrepairable` 0; one silent v2 degeneration event (a repetition loop, 14× output) which did not reproduce in isolation and was not caught by the then-current scorer — handed to M2.4.
 
-**Files:** `benchmarks/marker_v2/` (run.sh, corpus.py, fetch_corpus.py, build_derived.py, run_bench.py, compare.py, REPORT.md, report-raw.txt, v1.json, v2.json).
+**Files:** `benchmarks/marker_v2/` (run.sh, corpus.py, fetch_corpus.py, build_derived.py, run_bench.py, compare.py, v1.json, v2.json).
 
 ---
 

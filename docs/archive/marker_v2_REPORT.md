@@ -1,3 +1,5 @@
+> **DEPRECATED 2026-10-22** — one-off v1-vs-v2 Marker benchmark snapshot; the rollout decision it informed is made and shipped (M2.3-M2.5). Superseded by [docs/ARCHITECTURE.md](../ARCHITECTURE.md#inference-server-recycling) and [docs/AI_INTEGRATION.md](../AI_INTEGRATION.md). Re-run the harness in benchmarks/marker_v2/ for fresh numbers. Kept for history; do not follow as current guidance.
+
 # Marker v1 → v2 benchmark (do-wqr.4)
 
 marker-pdf **1.10.2** vs **2.0.0**, 10 documents / 213 pages, RTX 3090 (24 GB),

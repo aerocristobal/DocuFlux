@@ -1,6 +1,6 @@
 # DocuFlux — Improvement Epic Backlog
 
-**Status:** Proposed · **Last updated:** 2026-06-11
+**Status:** Mostly shipped — see [Implementation status](#implementation-status) (verified against code at HEAD 92c3dae, 2026-10-22). The story bodies below are the original proposal text and are left unedited. · **Last updated:** 2026-10-22
 **Related docs:** [PRD.md](../PRD.md) · [ARCHITECTURE.md](../ARCHITECTURE.md)
 
 Six epics covering the four improvement themes: **capability** (Epic 2), **PDF→Markdown conversion quality** (Epic 1), **hardening** (Epics 4–5), and **code optimization** (Epics 3, 6). Stories use BDD framing per the project's BDD conventions; each names the files it touches.
@@ -8,6 +8,48 @@ Six epics covering the four improvement themes: **capability** (Epic 2), **PDF�
 **Cross-epic priority order:** E1 ≈ E4 > E2 ≈ E3 > E5 > E6 — but see [§ Execution Order](#execution-order) for the dependency-aware sequencing, and note Story 5.1 is a P0 prerequisite for parts of Epic 4.
 
 ---
+
+<a id="implementation-status"></a>
+## Implementation status (verified 2026-10-22)
+
+Checked by inspecting the code at HEAD 92c3dae; "Shipped" means the story's headline artifact exists in the tree. It does not mean every acceptance bullet was individually re-verified. No bead tracks these stories, so the evidence column points at code.
+
+| Story | Status | Evidence |
+|---|---|---|
+| 1.1 Quality scoring | Shipped | `shared/quality.py`, `tests/unit/test_quality.py` |
+| 1.2 Hybrid routing | Shipped | `_assess_pandoc_quality` in `worker/tasks/conversion.py` uses `app_settings.hybrid_quality_threshold` (the scorer), not 50 words/page |
+| 1.3 Quality in API | Shipped | `quality` object built in `api_v1_status` (`web/routes/conversion.py`) |
+| 1.4 Table post-processing | Shipped | `shared/table_postprocess.py`, `tests/unit/test_table_postprocess.py` |
+| 1.5 Inline images | Shipped | `_save_marker_output(..., include_images=...)` rewrites links to `images/` |
+| 1.6 Chunked SLM metadata | Shipped (head+tail sampling) | `_sample_for_slm_context` in `worker/tasks/metadata.py` |
+| 2.1 Tesseract OCR | Shipped | `convert_with_ocr` (pytesseract) in `worker/tasks/conversion.py`; Tesseract bindings in `worker/requirements-false.txt` |
+| 2.2 Scanned-PDF routing | Partial / unverified | `ocr` is an explicit engine (`web/routes/conversion.py`); automatic image-only detection not confirmed |
+| 2.3 Engine advertisement | Not found | `/api/v1/formats` returns a static engine list per format; no per-deployment ocr/marker availability found (GPU/Surya state is exposed via the admin Surya status endpoints instead) |
+| 2.4 SLM cleanup of OCR | Unverified | not checked |
+| 3.1 Empty Pandoc output | Shipped | `reason_code: 'empty_output'` in `worker/tasks/conversion.py` |
+| 3.2 Worker healthcheck | Shipped | `celery -A tasks inspect ping` healthcheck in `docker-compose.yml` |
+| 3.3 Temp cleanup + sweep | Shipped | `tasks.sweep_orphaned_temp_files` in `worker/tasks/maintenance.py` |
+| 3.4 SLM JSON parse failures | Shipped | `metadata_degraded` in `worker/tasks/metadata.py` |
+| 3.5 Structured worker logging | Shipped (as `shared/logging_config.py`, not `shared/logging.py`) | consumed by `web/app.py` and `worker/tasks/__init__.py` |
+| 4.1 Redis TLS | Shipped as opt-in overlay | TLS options in `shared/redis_client.py`; `docker-compose.tls.yml` sets `rediss://`; base `docker-compose.yml` still defaults to plaintext |
+| 4.2 Convert rate limit | Shipped | `CONVERT_RATE_LIMIT` referenced in `web/routes/conversion.py` |
+| 4.3 Key expiry + audit | Shipped (expiry confirmed; audit events unverified) | `_is_key_expired` in `web/app.py` |
+| 4.4 Deep upload validation | Shipped | PDF/ZIP polyglot rejection in `web/validation.py` |
+| 4.5 MCP non-root + healthcheck | Shipped | `USER pwuser`, `HEALTHCHECK` in `mcp_server/Dockerfile` |
+| 4.6 Remove CSP unsafe-inline | Shipped | `web/app.py` CSP comment; inline handlers moved to `web/static/js/main.js` |
+| 5.1 Crypto/validation coverage | Shipped | `.coveragerc` no longer omits those modules; `scripts/check_coverage_floors.py`; `test_encryption.py`, `test_key_secrets.py`, `test_validation.py` |
+| 5.2 Digest-pinned base images | Shipped | `@sha256:` in web, worker, mcp_server Dockerfiles; `.github/dependabot.yml` |
+| 5.3 Lint/type gates | Shipped | ruff/mypy in `pyproject.toml` and `ci.yml`; eslint gate for `extension-src/` and `mcp_server/` |
+| 5.4 SAST/scan/SBOM | Partial | Bandit and syft SBOM in `ci.yml`; no trivy/grype image scan found |
+| 5.5 OSCAL evidence wiring | Unverified | no SA-11/RA-5/SI-2 statements found in `oscal/` by grep |
+| 6.1 Perf baseline | Partial | `docuflux_conversion_duration_seconds` histogram in `worker/metrics.py`; RSS/GPU-memory recording not confirmed |
+| 6.2 Eager Marker warmup | Shipped | `marker:model_warm` handling in `worker/warmup.py` |
+| 6.3 Queue separation | Shipped | `worker-light` service (`-Q high_priority,default`) beside the `-Q gpu` worker in `docker-compose.yml` |
+| 6.4 Route refactor | Shipped (confirmed for routes and metadata builder) | `_enqueue_convert_job`/`_respond_*` helpers in `web/routes/conversion.py`; `build_job_metadata` in `shared/job_metadata.py` |
+| 6.5 Streaming zip/storage | Not shipped | `download_zip` still builds `io.BytesIO()` (`web/routes/conversion.py`) |
+| 6.6 Status-poll efficiency + GPU release | Not shipped / partly obsolete | no ETag/Cache-Control found; per-task `empty_cache` is intentionally gone under marker 2 (see `worker/tasks/conversion.py` comment, [MARKER_V2_UPGRADE.md](MARKER_V2_UPGRADE.md) M2.7) |
+
+Not fully superseded (Epics 2.2-2.4, 5.4-5.5, 6.1, 6.5, 6.6 remain open or unverified), so this file stays in place rather than being archived.
 
 <a id="epic-1"></a>
 ## Epic 1 — Trustworthy PDF→Markdown Output `@conversion-quality` — **P0**
@@ -163,7 +205,7 @@ Feature: OCR fallback for scanned documents
 ### Story 2.1 — Tesseract OCR engine integration
 
 **Acceptance criteria**
-- `tesseract-ocr` added to the CPU worker image (`worker/Dockerfile` CPU branch, `requirements-false.txt` path) with configurable language packs (CJK relevant per `docs/IMPLEMENTATION_SUMMARY_CJK.md`).
+- `tesseract-ocr` added to the CPU worker image (`worker/Dockerfile` CPU branch, `requirements-false.txt` path) with configurable language packs (CJK relevant per `docs/archive/IMPLEMENTATION_SUMMARY_CJK.md` (archived)).
 - New OCR conversion branch/task in `worker/tasks/conversion.py` producing Markdown from image-only PDFs.
 
 ```gherkin

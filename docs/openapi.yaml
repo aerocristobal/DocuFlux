@@ -12,11 +12,18 @@ info:
 
     Generate a key with `POST /api/v1/auth/keys`.
 
+    Admin endpoints (`/api/v1/auth/keys`, `/api/v1/admin/*` writes) use
+    `Authorization: Bearer <ADMIN_API_SECRET>` (`AdminAuth`).
+
+    ## OCR mode
+    Marker-backed conversions return `409` when the OCR mode is `cpu_only`;
+    in `on_demand` mode they request a Surya VLM load (see `/api/v1/admin/surya`).
+
     ## Rate limits
     - Conversion: 200 requests / hour
     - Key creation: 10 requests / hour
     - Global: 1000 / day, 200 / hour per IP
-  version: 1.1.0
+  version: 1.4.0
   contact:
     url: https://github.com/aerocristobal/DocuFlux
 
@@ -33,6 +40,27 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
+    AdminAuth:
+      type: http
+      scheme: bearer
+      description: ADMIN_API_SECRET
+
+  parameters:
+    JobIdPath:
+      in: path
+      name: job_id
+      required: true
+      schema:
+        $ref: '#/components/schemas/JobId'
+      description: UUID of the job
+    SessionIdPath:
+      in: path
+      name: session_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID of the capture session
 
   schemas:
     JobId:
@@ -97,6 +125,22 @@ components:
           type: array
           items:
             type: string
+
+    OcrSettings:
+      type: object
+      properties:
+        mode: {type: string, enum: [cpu_only, on_demand]}
+        idle_timeout_min: {type: integer, minimum: 1}
+
+    SuryaSnapshot:
+      type: object
+      properties:
+        state: {type: string, enum: [stopped, starting, running, stopping, error]}
+        desired: {type: string, enum: [running, stopped]}
+        pinned: {type: boolean, description: True after a manual load; exempt from idle unload}
+        surya_supported: {type: boolean, description: GPU with >= 16 GB VRAM present}
+        mode: {type: string, enum: [cpu_only, on_demand]}
+        idle_timeout_min: {type: integer}
 
     Error:
       type: object
@@ -401,6 +445,7 @@ paths:
                   created_at: {type: string, format: date-time}
         '400': {description: Missing file or to_format}
         '401': {description: Missing or invalid API key}
+        '409': {description: "OCR mode is cpu_only: AI (Marker) engine disabled"}
         '422': {description: Unsupported format or engine}
         '507': {description: Server disk full}
 
@@ -548,8 +593,9 @@ paths:
       summary: Create API key
       description: |
         Generates a new API key. The key is returned only once — store it securely.
-        No existing key is required to create the first key.
-      security: []
+        Requires the admin secret (`Authorization: Bearer <ADMIN_API_SECRET>`).
+      security:
+        - AdminAuth: []
       tags: [Authentication]
       requestBody:
         content:
@@ -574,12 +620,17 @@ paths:
                     example: dk_abc123...
                   created_at: {type: string}
                   label: {type: string}
+        '401': {description: Missing admin authentication}
+        '403': {description: Invalid admin secret}
         '429': {description: Rate limit exceeded (10/hour)}
+        '503': {description: Admin API disabled (ADMIN_API_SECRET not configured)}
 
   /api/v1/auth/keys/{key}:
     delete:
       summary: Revoke API key
-      security: []
+      description: Requires the admin secret. Rate limit 30/hour.
+      security:
+        - AdminAuth: []
       tags: [Authentication]
       parameters:
         - in: path
@@ -596,6 +647,8 @@ paths:
                 type: object
                 properties:
                   revoked: {type: boolean, example: true}
+        '401': {description: Missing admin authentication}
+        '403': {description: Invalid admin secret}
         '404': {description: Key not found}
 
   # ─── Webhooks ───────────────────────────────────────────
@@ -606,7 +659,7 @@ paths:
       description: |
         Register a URL to receive a POST notification when the job reaches
         `SUCCESS` or `FAILURE`. The payload mirrors the `/api/v1/status` response.
-      security: []
+        Rate limit 60/hour.
       tags: [Webhooks]
       requestBody:
         required: true
@@ -639,7 +692,6 @@ paths:
   /api/v1/webhooks/{job_id}:
     get:
       summary: Get registered webhook
-      security: []
       tags: [Webhooks]
       parameters:
         - {$ref: '#/components/parameters/JobIdPath'}
@@ -742,6 +794,39 @@ paths:
         '404': {description: Session not found or expired}
         '409': {description: Session already finished}
 
+  /api/v1/capture/sessions/{session_id}/images:
+    post:
+      summary: Upload capture image
+      description: Upload a large image separately from a page submission. Rate limit 2000/hour.
+      security: []
+      tags: [Capture]
+      parameters:
+        - {$ref: '#/components/parameters/SessionIdPath'}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image: {type: string, format: binary}
+                alt: {type: string}
+                is_screenshot: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Image stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  image_ref: {type: string, example: images/0123456789abcdef.png}
+                  status: {type: string, example: uploaded}
+        '400': {description: No image provided or invalid path}
+        '404': {description: Session not found or expired}
+        '409': {description: Session is not active}
+
   /api/v1/capture/sessions/{session_id}/finish:
     post:
       summary: Finish capture session
@@ -794,22 +879,142 @@ paths:
         '400': {description: Invalid session ID}
         '404': {description: Session not found}
 
-  parameters: {}
+  # ─── Admin (ADMIN_API_SECRET) ───────────────────────────
 
-components:
-  parameters:
-    JobIdPath:
-      in: path
-      name: job_id
-      required: true
-      schema:
-        $ref: '#/components/schemas/JobId'
-      description: UUID of the job
-    SessionIdPath:
-      in: path
-      name: session_id
-      required: true
-      schema:
-        type: string
-        format: uuid
-      description: UUID of the capture session
+  /api/v1/admin/dlq:
+    get:
+      summary: Dead letter queue contents
+      description: Requires the admin secret. Rate limit 30/hour.
+      security:
+        - AdminAuth: []
+      tags: [Admin]
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, default: 100, minimum: 1, maximum: 1000}}
+      responses:
+        '200':
+          description: DLQ entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: {type: integer}
+                  total: {type: integer}
+                  entries: {type: array, items: {type: object, additionalProperties: true}}
+        '401': {description: Missing admin authentication}
+        '403': {description: Invalid admin secret}
+        '503': {description: Admin API disabled}
+
+  /api/v1/admin/captures:
+    get:
+      summary: Global capture index (all clients)
+      description: Requires the admin secret. Rate limit 30/hour.
+      security:
+        - AdminAuth: []
+      tags: [Admin]
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, default: 50, minimum: 1, maximum: 1000}}
+      responses:
+        '200':
+          description: Capture jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {type: object, additionalProperties: true}
+        '401': {description: Missing admin authentication}
+        '403': {description: Invalid admin secret}
+        '503': {description: Admin API disabled}
+
+  /api/v1/admin/surya:
+    get:
+      summary: Surya VLM lifecycle state
+      description: Read-only; no admin secret required. Rate limit 60/minute.
+      security: []
+      tags: [Admin]
+      responses:
+        '200':
+          description: Current lifecycle snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuryaSnapshot'
+        '429': {description: Rate limit exceeded}
+    post:
+      summary: Load or unload the Surya VLM
+      description: |
+        `load` sets the desired state to `running` and pins Surya (a pinned
+        instance is exempt from idle unload). `unload` sets the desired state
+        to `stopped` and clears the pin. The lifecycle controller applies the
+        change asynchronously and a `surya_state_update` Socket.IO event is
+        emitted. Rate limit 30/minute.
+      security:
+        - AdminAuth: []
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: {type: string, enum: [load, unload]}
+      responses:
+        '202':
+          description: Change accepted; snapshot returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuryaSnapshot'
+        '400': {description: "action must be 'load' or 'unload'"}
+        '401': {description: Missing or malformed Authorization header}
+        '403': {description: Invalid admin secret}
+        '409': {description: "Load refused: no GPU with enough VRAM, or OCR mode is cpu_only"}
+        '429': {description: Rate limit exceeded}
+        '503': {description: Admin API disabled (ADMIN_API_SECRET not configured)}
+
+  /api/v1/admin/ocr-settings:
+    get:
+      summary: OCR settings
+      description: Read-only; no admin secret required. Rate limit 60/minute.
+      security: []
+      tags: [Admin]
+      responses:
+        '200':
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OcrSettings'
+        '429': {description: Rate limit exceeded}
+    put:
+      summary: Update OCR settings
+      description: |
+        Runtime override of `OCR_MODE` / `SURYA_IDLE_TIMEOUT_MINUTES` (stored in
+        Redis). Omitted fields are unchanged. Emits `surya_state_update`.
+        Rate limit 30/minute.
+      security:
+        - AdminAuth: []
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode: {type: string, enum: [cpu_only, on_demand]}
+                idle_timeout_min: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OcrSettings'
+        '400': {description: Body not a JSON object, invalid mode, or idle_timeout_min not an integer >= 1}
+        '401': {description: Missing or malformed Authorization header}
+        '403': {description: Invalid admin secret}
+        '429': {description: Rate limit exceeded}
+        '503': {description: Admin API disabled}

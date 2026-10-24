@@ -12,6 +12,7 @@ Comprehensive documentation for the DocuFlux REST API v1.
   - [API Key Management](#api-key-management)
   - [Webhooks](#webhooks)
   - [Browser Capture Sessions](#browser-capture-sessions)
+  - [Surya VLM Lifecycle](#surya-vlm-lifecycle)
   - [Health Checks](#health-checks)
   - [Pandoc Options](#pandoc-options)
 - [Error Handling](#error-handling)
@@ -32,7 +33,7 @@ The DocuFlux REST API v1 provides:
 
 **Base URL**: `http://localhost:5000` (or your deployment URL)
 
-**API Version**: v1
+**API Version**: v1 (spec 1.4.0)
 
 **Content Types**:
 - Request: `multipart/form-data` (file uploads) or `application/json`
@@ -68,6 +69,8 @@ These endpoints require no authentication:
 - `POST /api/v1/capture/sessions/{id}/images` — upload images
 - `POST /api/v1/capture/sessions/{id}/finish` — finalize session
 - `GET /api/v1/capture/sessions/{id}/status` — session status
+- `GET /api/v1/admin/surya` — read-only Surya lifecycle state
+- `GET /api/v1/admin/ocr-settings` — read-only OCR settings
 - `GET /healthz`, `GET /readyz`, `GET /api/health`, `GET /api/status/services`
 
 ## Rate Limiting
@@ -85,6 +88,11 @@ Endpoints have per-route rate limits enforced via Redis-backed Flask-Limiter:
 | `POST /api/v1/auth/keys` | 10/hour |
 | `DELETE /api/v1/auth/keys/{key}` | 30/hour |
 | `GET /api/v1/admin/dlq` | 30/hour |
+| `GET /api/v1/admin/captures` | 30/hour |
+| `GET /api/v1/admin/surya` | 60/minute |
+| `POST /api/v1/admin/surya` | 30/minute |
+| `GET /api/v1/admin/ocr-settings` | 60/minute |
+| `PUT /api/v1/admin/ocr-settings` | 30/minute |
 
 When the rate limit is exceeded:
 
@@ -124,7 +132,16 @@ Submit a document conversion job. Requires API key.
 }
 ```
 
-**Error Responses**: 400 (missing field), 422 (invalid format/engine), 507 (disk full)
+**Error Responses**: 400 (missing field), 401 (missing/invalid API key), 409 (OCR mode forbids the AI engine, see below), 422 (invalid format/engine), 507 (disk full)
+
+**OCR mode (`OCR_MODE`)**: Marker-backed conversions (`engine=marker`, i.e. internal formats `pdf_marker`, `pdf_hybrid`, `pdf_marker_slm`) depend on the Surya VLM, whose lifecycle is governed by the OCR mode (see [Surya VLM Lifecycle](#surya-vlm-lifecycle)). The check runs before the upload is saved, so a rejection leaves no job behind.
+
+| OCR mode | Marker conversion behavior |
+|----------|----------------------------|
+| `cpu_only` | Rejected with `409 {"error": "AI engine disabled (OCR mode is cpu_only); use the OCR engine instead"}` |
+| `on_demand` (default) | Accepted (202). The API flags Surya as desired and restarts its idle clock; the lifecycle controller starts it if stopped, and the queued job waits for it. Pandoc and plain OCR conversions are unaffected. |
+
+The same 409 applies to the Web UI endpoints `POST /convert` and `POST /api/retry/{job_id}`.
 
 **Example**:
 
@@ -272,9 +289,19 @@ Revoke an API key.
 
 ---
 
+#### GET /api/v1/admin/captures
+
+Global capture index across every client (operator view; `GET /api/captures` is scoped to the caller). Requires the admin secret.
+
+**Query Parameters**: `limit` (int, default 50, max 1000)
+
+**Error Responses**: 401, 403, 503 (admin secret not configured)
+
+---
+
 #### GET /api/v1/admin/dlq
 
-Retrieve dead letter queue contents.
+Retrieve dead letter queue contents. Requires the admin secret.
 
 **Query Parameters**: `limit` (int, default 100, max 1000)
 
@@ -436,6 +463,89 @@ Poll capture session status.
 
 ---
 
+### Surya VLM Lifecycle
+
+The Surya VLM (GPU AI engine behind Marker conversions) is started and stopped on demand by a lifecycle controller. State lives in Redis; these endpoints inspect and steer it. Reads are public; writes require `Authorization: Bearer $ADMIN_API_SECRET`.
+
+Lifecycle states: `stopped`, `starting`, `running`, `stopping`, `error`. Surya is *supported* only on hosts with a GPU reporting at least 16 GB total VRAM.
+
+#### GET /api/v1/admin/surya
+
+No authentication. Rate limit 60/minute.
+
+**Success Response (200 OK)**:
+
+```json
+{
+  "state": "stopped",
+  "desired": "stopped",
+  "pinned": false,
+  "surya_supported": true,
+  "mode": "on_demand",
+  "idle_timeout_min": 15
+}
+```
+
+`desired` is `running` or `stopped` (what the controller is driving toward); `pinned` is true after a manual load.
+
+---
+
+#### POST /api/v1/admin/surya
+
+Manually load or unload Surya. Admin Bearer auth. Rate limit 30/minute.
+
+**Request**: `application/json`
+
+```json
+{"action": "load"}
+```
+
+| `action` | Effect |
+|----------|--------|
+| `load` | Sets desired state to `running` and **pins** Surya: a pinned instance is not unloaded by the idle timeout |
+| `unload` | Sets desired state to `stopped` and clears the pin |
+
+**Success Response (202 Accepted)**: the snapshot shown above (the controller applies the change asynchronously; poll `GET /api/v1/admin/surya` or listen for the `surya_state_update` WebSocket event). A `surya_state_update` event is also emitted to connected dashboards.
+
+**Error Responses**: 400 (`action` not `load`/`unload`), 401 (missing/malformed Authorization header), 403 (invalid admin secret), 409 (`load` while the host has no GPU with enough VRAM, or while OCR mode is `cpu_only`), 429, 503 (`ADMIN_API_SECRET` not configured)
+
+---
+
+#### GET /api/v1/admin/ocr-settings
+
+No authentication. Rate limit 60/minute.
+
+**Success Response (200 OK)**: `{"mode": "on_demand", "idle_timeout_min": 15}`
+
+---
+
+#### PUT /api/v1/admin/ocr-settings
+
+Update either or both fields at runtime (stored in Redis, overriding `OCR_MODE` / `SURYA_IDLE_TIMEOUT_MINUTES`). Admin Bearer auth. Rate limit 30/minute.
+
+**Request**: `application/json`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | String | `cpu_only` (Marker formats rejected with 409, Surya never started) or `on_demand` |
+| `idle_timeout_min` | Integer | Minutes of inactivity before an unpinned Surya is unloaded; must be >= 1 |
+
+**Success Response (200 OK)**: the updated settings, `{"mode": ..., "idle_timeout_min": ...}`. Also emits `surya_state_update`.
+
+**Error Responses**: 400 (body not a JSON object, invalid `mode`, or `idle_timeout_min` not an integer >= 1), 401, 403, 429, 503
+
+---
+
+#### WebSocket event: `surya_state_update`
+
+Emitted over Socket.IO after a successful `POST /api/v1/admin/surya` or `PUT /api/v1/admin/ocr-settings`. Controller-driven transitions (e.g. `starting` to `running`) are not pushed; they are visible via polling `GET /api/status/services`. Payload:
+
+```json
+{"surya_state": "running", "ocr_mode": "on_demand", "idle_timeout_min": 15, "surya_supported": true}
+```
+
+---
+
 ### Health Checks
 
 No authentication required.
@@ -445,7 +555,9 @@ No authentication required.
 | `GET /healthz` | `OK` (200) — liveness probe |
 | `GET /readyz` | `{"status": "ready", "redis": "connected", "timestamp": ...}` (200) or 503 |
 | `GET /api/health` | `{"status": "healthy", "timestamp": ..., "components": {...}}` (200) with Redis, disk, GPU, Celery worker status |
-| `GET /api/status/services` | `{"disk_space": "ok", "marker": "ready", ...}` (200) |
+| `GET /api/status/services` | `{"disk_space": "ok", "marker": "ready", ...}` (200); includes Surya fields below |
+
+`GET /api/status/services` fields: `disk_space` (`ok`/`low`), `marker`, `marker_status`, `llm_download_eta`, `models_cached`, `gpu_status`, `gpu_info`, and the Surya lifecycle fields `surya_state` (`stopped`/`starting`/`running`/`stopping`/`error`), `ocr_mode` (`cpu_only`/`on_demand`), `idle_timeout_min` (int) and `surya_supported` (bool). `GET /api/health` reports the GPU under `components.gpu` (`status`, `info`) and does not include Surya fields.
 
 ---
 
@@ -508,11 +620,12 @@ Some 422 responses include additional detail:
 | 401 | Missing authentication |
 | 403 | Invalid API key or admin secret |
 | 404 | Resource not found |
-| 409 | State conflict (e.g., session already finished) |
+| 409 | State conflict (e.g., session already finished, OCR mode `cpu_only` rejecting an AI conversion, Surya load unsupported) |
 | 410 | Resource expired/deleted |
 | 413 | File exceeds max upload size (200 MB) |
 | 422 | Validation error (invalid format, engine, options) |
 | 429 | Rate limit exceeded |
+| 503 | Admin API disabled (`ADMIN_API_SECRET` not configured) |
 | 507 | Server disk full |
 
 ## Examples
@@ -586,6 +699,14 @@ if status["status"] == "success":
 - **OpenAPI Spec**: [openapi.yaml](openapi.yaml)
 
 ## Changelog
+
+### v1.4.0 (2026-10-22)
+
+- On-demand Surya VLM lifecycle: `GET`/`POST /api/v1/admin/surya`, `GET`/`PUT /api/v1/admin/ocr-settings`
+- `OCR_MODE`: Marker conversions return `409` in `cpu_only` mode; in `on_demand` mode they request a Surya load
+- `GET /api/status/services` adds `surya_state`, `ocr_mode`, `idle_timeout_min`, `surya_supported`
+- New `surya_state_update` Socket.IO event
+- Documented `GET /api/v1/admin/captures` and `POST /api/v1/capture/sessions/{id}/images` in the OpenAPI spec; OpenAPI version aligned with this changelog
 
 ### v1.3.0 (2026-03-21)
 

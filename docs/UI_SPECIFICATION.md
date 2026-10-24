@@ -60,6 +60,15 @@ All mutating actions send `X-CSRFToken` header. All trigger `fetchJobs()` after 
 - **GPU chip**: Updates status (available/unavailable/initializing), model name
   - Click opens GPU details modal with VRAM bar, CUDA version, driver, utilization
 - **WebSocket**: `gpu_status_update` events update GPU chip in real-time
+- **Surya (AI engine) section** inside the GPU details modal: driven by `updateSuryaStatus(d)` from the 10s `/api/status/services` poll and the `surya_state_update` event (ignored if `surya_state` is absent)
+  - `#surya-section` is visible only when `surya_supported` is true (GPU with >= 16 GB VRAM); otherwise `#surya-unsupported-hint` ("The AI engine needs a GPU with at least 16 GB VRAM.") is shown instead
+  - `#modal-surya-state` badge shows `surya_state` text (`stopped|starting|running|stopping|error`); badge class `status-available` for `running`, `status-unavailable` for `error`, `status-unknown` otherwise
+  - `#ocr-mode-select` (`on_demand` / `cpu_only`) syncs to `ocr_mode`; changing it sends `PUT /api/v1/admin/ocr-settings {mode}`
+  - `#idle-timeout-input` (number, min 1) syncs to `idle_timeout_min` unless focused; on change with a value >= 1 sends `PUT /api/v1/admin/ocr-settings {idle_timeout_min}`
+  - `#surya-load-btn` sends `POST /api/v1/admin/surya {action: 'load'}`; disabled when `ocr_mode === 'cpu_only'`, a request is in flight, or state is `starting`/`running`
+  - `#surya-unload-btn` sends `{action: 'unload'}`; disabled when a request is in flight or state is `stopped`/`stopping`
+  - Writes prompt once for the admin secret (`window.prompt`), held in memory only and sent as `Authorization: Bearer`; re-prompted on 401/403, and "Admin secret rejected." alert after a second failure. Non-OK responses show the server `error` in `#alert-area`. GPU details are refreshed after each write.
+  - In `cpu_only` mode the `pdf_marker`, `pdf_hybrid` and `pdf_marker_slm` options of `#from_format` get the `hidden` class and a currently selected one is cleared (the server returns 409 for these formats)
 
 ### 6. Theme Switching
 
@@ -207,6 +216,12 @@ PENDING → PROCESSING → SUCCESS
 - `#modal-gpu-cuda` — CUDA version
 - `#modal-gpu-driver` — Driver version
 - `#modal-gpu-util` — Utilization percentage
+- `#surya-section` — Surya controls container (hidden unless `surya_supported`)
+- `#modal-surya-state` — Surya state badge
+- `#ocr-mode-select` — OCR mode select (`on_demand`, `cpu_only`)
+- `#idle-timeout-input` — Idle unload minutes (number, min 1)
+- `#surya-load-btn` / `#surya-unload-btn` — Load (pin) / Unload buttons
+- `#surya-unsupported-hint` — Shown when GPU lacks 16 GB VRAM
 
 ## WebSocket Events
 
@@ -215,6 +230,7 @@ PENDING → PROCESSING → SUCCESS
 | `connect` | Server → Client | — | Triggers `fetchJobs()` |
 | `job_update` | Server → Client | Job object (partial) | Merges into `localJobs` or `captureJobs`, re-renders |
 | `gpu_status_update` | Server → Client | `{gpu_status, gpu_info}` | Updates GPU chip |
+| `surya_state_update` | Server → Client | `{surya_state, ocr_mode, idle_timeout_min, surya_supported}` | Updates Surya section in the GPU modal (emitted after admin Surya/OCR-settings writes) |
 
 ## Polling Intervals
 

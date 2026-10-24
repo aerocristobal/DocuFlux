@@ -1,6 +1,6 @@
 # DocuFlux — Product Requirements Document
 
-**Status:** Living document · **Last updated:** 2026-06-11
+**Status:** Living document · **Last updated:** 2026-10-22
 **Related docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [BACKLOG.md](user-stories/BACKLOG.md) · [API.md](API.md) · [FORMATS.md](FORMATS.md) · [CONFIGURATION.md](CONFIGURATION.md) · [AI_INTEGRATION.md](AI_INTEGRATION.md)
 
 ---
@@ -55,17 +55,17 @@ DocuFlux solves all three: documents never leave the deployment, AI conversion r
 
 ### 3.1 Self-Hoster "Sam"
 
-Runs DocuFlux on a homelab or small-org server via `docker-compose.gpu.yml` or `docker-compose.cpu.yml`.
+Runs DocuFlux on a homelab or small-org server via the base `docker-compose.yml` (GPU topology) with the `docker-compose.gpu.yml` or `docker-compose.cpu.yml` overlay.
 
 - **Cares about:** setup friction, hardware requirements, upgrade safety, TLS, resource limits.
-- **Pains (current):** Marker requires a GPU — scanned PDFs are effectively unsupported on CPU-only hardware; Redis TLS is disabled pending certificate generation; the Marker VLM server must be warm before the first conversion (marker 2's attach is ~1 s once the `surya-vlm` service is ready).
+- **Pains (current):** Marker requires a GPU with at least 16 GB VRAM (CPU-only hosts use Tesseract OCR via `pdf_ocr` and run with `OCR_MODE=cpu_only`); in the default `on_demand` mode the `surya-vlm` server is stopped when idle, so the first Marker job after an idle period waits about 3 minutes for a cold start; Redis TLS is an opt-in overlay that does not yet cover every service.
 
 ### 3.2 API Integrator "Ines"
 
 Calls `POST /api/v1/convert` from backend pipelines using `dk_`-prefixed API keys.
 
 - **Cares about:** predictable JSON contracts, webhook reliability, rate limits, error semantics, job latency.
-- **Pains (current):** no quality signal in responses — a degraded conversion looks identical to a good one; partial Pandoc output can complete "successfully"; API keys have no expiration or audit trail.
+- **Pains (current):** API keys have no per-key usage audit trail (keys do expire: 90 days by default, `API_KEY_DEFAULT_TTL_DAYS`); degraded conversions complete as `completed-with-warnings` with a quality grade and reason codes in the API response.
 
 ### 3.3 Extension User "Eva"
 
@@ -79,7 +79,7 @@ Uses the Chrome/Firefox extension (`extension-src/`) to capture authenticated we
 An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) and the REST API for autonomous document acquisition and conversion, often feeding downstream RAG pipelines.
 
 - **Cares about:** structured outputs, reliable tool contracts, metadata quality (title/summary/tags) for indexing.
-- **Pains (current):** SLM metadata is truncated at 2,000 tokens — long documents get poor titles/summaries; no machine-readable engine-capability discovery (the agent cannot ask "is OCR available here?").
+- **Pains (current):** SLM metadata is sampled to a 2,000-token window — long documents get poorer titles/summaries; engine availability depends on `OCR_MODE` and GPU VRAM (read-only `GET /api/v1/admin/surya` and `/api/v1/admin/ocr-settings` expose `mode` and `surya_supported`).
 
 ---
 
@@ -88,10 +88,10 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 ### 4.1 Sam: Install → First Conversion
 
 1. Clone repo, run `./scripts/build.sh auto` (GPU auto-detection).
-2. `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`.
+2. `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d` (starts `web`, `worker`, `worker-light`, `beat`, `redis`, `mcp-server`, and the Surya lifecycle services `surya-controller` and `docker-socket-proxy`; `surya-vlm` is started on demand).
 3. Open `http://localhost:5000`, upload a PDF, select "PDF (High Accuracy)".
 4. Watch real-time progress via WebSocket; download Markdown + extracted images as a zip.
-5. (Optional) Configure Cloudflare Tunnel or Redis TLS per [CLOUDFLARE_TUNNEL_SETUP.md](CLOUDFLARE_TUNNEL_SETUP.md) / [CERTIFICATE_MANAGEMENT.md](CERTIFICATE_MANAGEMENT.md).
+5. (Optional) Enable Redis TLS per [CERTIFICATE_MANAGEMENT.md](CERTIFICATE_MANAGEMENT.md). For HTTPS ingress, put a reverse proxy or a Cloudflare Tunnel in front (the Compose tunnel overlay was removed; the old guide is archived and deprecated at [archive/CLOUDFLARE_TUNNEL_SETUP.md](archive/CLOUDFLARE_TUNNEL_SETUP.md)).
 
 ### 4.2 Ines: Key → Convert → Webhook → Download
 
@@ -128,6 +128,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 
 ### 5.2 AI PDF→Markdown
 
+- **FR-2.0** `pdf_ocr`: CPU-only Tesseract OCR for scanned PDFs, size-routed like Pandoc (never the `gpu` queue). With `OCR_MODE=cpu_only` the Marker formats (`pdf_marker`, `pdf_hybrid`, `pdf_marker_slm`) are rejected with HTTP 409.
 - **FR-2.1** `pdf_marker`: Marker AI conversion with layout awareness, table detection, and image extraction. Page limit 600 (`MAX_MARKER_PAGES`); optional `force_ocr` and `use_llm` flags.
 - **FR-2.2** `pdf_hybrid`: try Pandoc first; if the Story 1.1 quality scorer rates the output below `HYBRID_QUALITY_THRESHOLD` (default 60), fall back to Marker.
 - **FR-2.3** `pdf_marker_slm`: Marker followed by SLM refinement of OCR artifacts in 600-word chunks.
@@ -137,7 +138,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 
 - **FR-3.1** After Marker/hybrid success, automatically extract title, summary, and tags via llama-cpp-python (TinyLlama-1.1B by default; configurable via `SLM_MODEL_PATH`).
 - **FR-3.2** Metadata is stored in job metadata and included in webhook payloads.
-- **Known limitation:** context truncated at 2,000 tokens (`MAX_SLM_CONTEXT`) — see Backlog Story 1.6.
+- **Known limitation:** context is sampled down to 2,000 tokens (`MAX_SLM_CONTEXT`).
 
 ### 5.4 Browser Capture Pipeline
 
@@ -162,6 +163,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 - **FR-7.1** API key management: create/revoke `dk_` keys via `/api/v1/auth/keys` (admin bearer auth); keys stored hashed (`shared/key_manager.py`).
 - **FR-7.2** Configuration via Pydantic Settings (`config.py`): env vars → `.env` → Docker secrets, with `SecretStr` for sensitive values.
 - **FR-7.3** Health endpoints: `/healthz` (liveness), `/readyz` (readiness), `/api/health` (detailed: Redis, disk, GPU, workers, model cache).
+- **FR-7.4** Surya lifecycle (Compose): `OCR_MODE=on_demand` (default) starts `surya-vlm` for Marker jobs and unloads it after `SURYA_IDLE_TIMEOUT_MINUTES` (default 15) idle; admins can load/unload manually (`POST /api/v1/admin/surya`, `ADMIN_API_SECRET` bearer) and change mode/timeout at runtime (`PUT /api/v1/admin/ocr-settings`). See [ARCHITECTURE.md](ARCHITECTURE.md) §7.3.
 
 ---
 
@@ -173,25 +175,26 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 |--------|--------|---------------|
 | Pandoc conversion (typical doc) | < 30 s | Met; 500 s subprocess timeout |
 | Marker PDF→Markdown | < 20 min hard limit | 1200 s task limit; throughput unmeasured (Backlog 6.1) |
-| Time-to-first-conversion (cold worker) | < 60 s | Met since marker 2: workers attach to the shared Surya VLM server in ~1 s (benchmark: 0.8 s vs 72 s model load on v1) |
+| Time-to-first-conversion (cold worker) | < 60 s | Met when `surya-vlm` is already running: workers attach in ~1 s (benchmark: 0.8 s vs 72 s model load on v1). After an idle unload (`on_demand`) the first Marker job pays a vLLM cold start of about 3 minutes (limit `SURYA_COLD_START_TIMEOUT_SECONDS`, default 600) |
 | Status endpoint latency | p95 < 200 ms | Per `tests/load/locustfile.py` SLA |
 | Conversion request handling | p95 < 2 s (enqueue) | Per locustfile SLA |
 | Error rate under load | < 1% | Per locustfile SLA |
-| Concurrency | 1 conversion at a time per worker | `pool=solo` — head-of-line blocking (Backlog 6.3) |
+| Concurrency | 1 conversion at a time per worker | `pool=solo`; Pandoc/OCR/maintenance run on `worker-light` so Marker no longer blocks them, but Marker jobs queue behind each other on the `gpu` lane |
 
 ### 6.2 Security & Privacy
 
 - AES-256-GCM encryption at rest for uploads, outputs, and Redis job metadata.
 - No outbound calls during conversion (model weights fetched at build/startup only).
 - Non-root containers, dropped capabilities, `no-new-privileges`, noexec tmpfs.
-- CSRF protection, rate limiting (1000/day, 200/hour defaults), SSRF guards on webhooks.
-- **Known gaps** (tracked in [BACKLOG.md](user-stories/BACKLOG.md) Epic 4): Redis TLS disabled, no API key expiration/audit, 8-byte magic validation, MCP container runs as root.
+- CSRF protection, rate limiting (1000/day, 200/hour defaults; `CONVERT_RATE_LIMIT` `200 per hour` on conversion endpoints), SSRF guards on webhooks.
+- The Docker socket is reachable only by `docker-socket-proxy`, which forwards a minimal allowlist (list containers, start/stop) on an isolated `control` network.
+- **Known gaps:** Redis TLS is an opt-in overlay that does not yet cover `worker-light` or `surya-controller`; no per-key API usage audit log; the socket proxy cannot scope start/stop to a single container (see [ARCHITECTURE.md](ARCHITECTURE.md) §9).
 
 ### 6.3 Deployability
 
-- Docker Compose profiles: base, `cpu` (≤3 GB image, no Marker), `gpu` (CUDA 11.8, ~15 GB), `tls`.
+- Docker Compose: base (GPU topology), `cpu` overlay (≤3 GB image, no Marker, no Surya services), `gpu` overlay (CUDA 12.2.2, ~15 GB), `tls` overlay (opt-in Redis TLS).
 - Kubernetes: namespace, Redis StatefulSet, web/worker Deployments with HPA (1–10 replicas), NetworkPolicies (`deploy/k8s/`).
-- Optional Cloudflare Tunnel ingress for zero-config HTTPS.
+- HTTPS ingress is operator-managed (reverse proxy or Cloudflare Tunnel run outside Compose; the Compose tunnel overlay was removed).
 
 ### 6.4 Compliance
 
@@ -200,7 +203,7 @@ An LLM agent using the MCP server (`mcp_server/server.js`, Playwright-backed) an
 ### 6.5 Observability
 
 - Prometheus metrics: conversion counts/durations/failures by format, GPU utilization, queue depth (`worker/metrics.py`); Grafana dashboard ([grafana-dashboard.json](grafana-dashboard.json)); alert rules ([ALERTING.md](ALERTING.md)).
-- Structured JSON logging with request-ID correlation in the web tier. **Gap:** worker logs are unstructured (Backlog 3.5).
+- Structured JSON logging in the web tier (with request-ID correlation) and the worker tier (`shared/logging_config.py`).
 
 ---
 
@@ -217,11 +220,11 @@ A conversion is *good* when the output preserves: readable body text (no garbage
 | Metric | Definition | Baseline | Target |
 |--------|-----------|----------|--------|
 | Conversion success rate | completed / (completed + failed) | Trackable via `docuflux_conversion_total` | > 98% |
-| Silent-degradation rate | jobs marked completed whose output scores "poor" | **Unmeasurable today** (needs Epic 1) | < 2% |
-| Scanned-PDF support on CPU | scanned PDFs producing readable output on CPU profile | ~0% (no OCR fallback) | > 90% (Epic 2) |
+| Silent-degradation rate | jobs marked completed whose output scores "poor" | Measurable since Epic 1 (quality grade in job metadata); baseline not yet recorded | < 2% |
+| Scanned-PDF support on CPU | scanned PDFs producing readable output on CPU profile | Tesseract `pdf_ocr` shipped; coverage not yet measured | > 90% |
 | p95 job latency by engine | enqueue → completed | Unmeasured (needs Backlog 6.1) | Establish, then improve |
 | Capture session success rate | sessions assembled without page loss | Untracked | > 99% |
-| Security gate coverage | CI gates: lint, SAST, container scan, SBOM | 0 of 4 | 4 of 4 (Epic 5) |
+| Security gate coverage | CI gates: lint, SAST, container scan, SBOM | CI runs Bandit (SAST) and generates an SBOM; lint/container-scan status not re-verified | 4 of 4 |
 
 ---
 
@@ -233,27 +236,31 @@ A conversion is *good* when the output preserves: readable body text (no garbage
 |------------|--------|
 | Pandoc conversion, 20+ formats | ✅ Shipped |
 | Marker AI PDF→Markdown (GPU) | ✅ Shipped |
-| Hybrid Pandoc→Marker routing | ✅ Shipped (crude heuristic) |
-| SLM metadata extraction | ✅ Shipped (2,000-token window) |
+| Hybrid Pandoc→Marker routing | ✅ Shipped (quality-score threshold, `HYBRID_QUALITY_THRESHOLD`) |
+| CPU OCR (Tesseract, `pdf_ocr`) and `OCR_MODE` | ✅ Shipped |
+| On-demand Surya lifecycle (Compose) | ✅ Shipped (`surya-controller` + hardened `docker-socket-proxy`) |
+| Light-lane worker (`worker-light`) | ✅ Shipped |
+| SLM metadata extraction | ✅ Shipped (sampled to a 2,000-token window) |
 | Browser extension capture | ✅ Shipped |
 | MCP server (Playwright) | ✅ Shipped |
 | API keys, webhooks, WebSocket progress | ✅ Shipped |
 | Encryption at rest | ✅ Shipped |
-| Prometheus/Grafana observability | ✅ Shipped (web tier structured; worker logs not) |
+| Prometheus/Grafana observability | ✅ Shipped (structured JSON logs in web and worker) |
 | K8s + Compose deployment | ✅ Shipped |
 
 ### 9.2 Known Limitations
 
-1. **No OCR on CPU-only deployments** — scanned PDFs are unsupported without a GPU.
-2. **No conversion quality signal** — silent degradation is invisible to clients.
-3. **Single-task worker** (`pool=solo`) — a long Marker job blocks all other work.
-4. **SLM metadata truncation** at 2,000 tokens.
-5. **Redis TLS disabled**; several security-critical modules excluded from test coverage.
-6. **Memory-bound I/O** — downloads and zip generation buffer whole files in RAM.
+1. **Marker needs a 16 GB+ NVIDIA GPU** — CPU-only deployments use Tesseract (`pdf_ocr`, `OCR_MODE=cpu_only`), which is lower fidelity than Marker.
+2. **Cold start** — in `on_demand` mode the first Marker job after an idle unload waits about 3 minutes for `surya-vlm`.
+3. **On-demand lifecycle is Compose-only** — Kubernetes keeps `surya-vlm` always-on.
+4. **Marker jobs are serialized** per GPU worker (`pool=solo`, concurrency 1).
+5. **SLM metadata sampled** to 2,000 tokens.
+6. **Redis TLS** is an opt-in overlay that does not yet cover `worker-light` or `surya-controller`.
+7. **Socket proxy scope** — `docker-socket-proxy` cannot restrict start/stop to one container (availability risk only; see [ARCHITECTURE.md](ARCHITECTURE.md) §9).
 
 ### 9.3 Roadmap
 
-The prioritized improvement backlog — 6 epics, 31 stories across conversion quality, OCR capability, reliability, hardening, supply-chain, and performance — lives in **[BACKLOG.md](user-stories/BACKLOG.md)**.
+The prioritized improvement backlog — 6 epics, 31 stories across conversion quality, OCR capability, reliability, hardening, supply-chain, and performance — lives in **[BACKLOG.md](user-stories/BACKLOG.md)** (many stories have since shipped; the document's own status header may lag). The on-demand Surya epic is documented in [ARCHITECTURE.md](ARCHITECTURE.md) §7.3.
 
 ---
 
@@ -261,7 +268,7 @@ The prioritized improvement backlog — 6 epics, 31 stories across conversion qu
 
 | # | Question / Risk | Impact |
 |---|-----------------|--------|
-| 1 | CUDA 11.8 approaching EOL — when to migrate the GPU image to CUDA 12.x? | Marker/PyTorch compatibility work |
+| 1 | The worker GPU image is on CUDA 12.2.2 (`worker/Dockerfile`); the `llama-cpp-python[cuda]` wheel variant must keep matching it on any CUDA bump. The PyTorch wheel index in the GPU build is still `cu118`. | SLM GPU acceleration compatibility |
 | 2 | Should TinyLlama be replaced by a stronger small model (e.g., Qwen/Phi class) for metadata? | Metadata quality vs CPU/VRAM budget |
 | 3 | Is the 600-page Marker limit right? Large books/manuals exceed it. | Capability ceiling for key use cases |
 | 4 | Marker license/upstream cadence — upgraded to 2.0.0 (v2 client/server model); upgrade policy undefined. | Supply-chain and quality drift |
